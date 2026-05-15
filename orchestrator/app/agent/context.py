@@ -75,10 +75,34 @@ class GroupContext:
     def touch(self) -> None:
         self.last_active = datetime.now(timezone.utc)
 
-    def add(self, role: str, content) -> None:
-        """Append a message, trim to MAX_TURNS pairs, and persist."""
+    def get_history(self, max_pairs: int | None = None, idle_minutes: int | None = None) -> list[dict]:
+        """Return the current message list, applying optional per-call overrides.
+
+        Args:
+            max_pairs: If provided, return only the last ``max_pairs`` user+assistant
+                pairs (i.e. ``max_pairs * 2`` messages).  Defaults to ``MAX_TURNS``.
+            idle_minutes: If provided, treat the context as stale (empty) when
+                inactivity exceeds this many minutes instead of the module default.
+        """
+        effective_idle = idle_minutes if idle_minutes is not None else IDLE_MINUTES
+        if datetime.now(timezone.utc) - self.last_active > timedelta(minutes=effective_idle):
+            return []
+        effective_pairs = max_pairs if max_pairs is not None else MAX_TURNS
+        max_messages = effective_pairs * 2
+        return self.messages[-max_messages:] if len(self.messages) > max_messages else list(self.messages)
+
+    def add(self, role: str, content, max_pairs: int | None = None) -> None:
+        """Append a message, trim to max_pairs pairs, and persist.
+
+        Args:
+            role: ``"user"`` or ``"assistant"``.
+            content: Message content (string or list of content blocks).
+            max_pairs: If provided, trim to this many user+assistant pairs instead of
+                the module-level ``MAX_TURNS`` default.
+        """
         self.messages.append({"role": role, "content": content})
-        max_messages = MAX_TURNS * 2
+        effective_pairs = max_pairs if max_pairs is not None else MAX_TURNS
+        max_messages = effective_pairs * 2
         if len(self.messages) > max_messages:
             self.messages = self.messages[-max_messages:]
         self.touch()

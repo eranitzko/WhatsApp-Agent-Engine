@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone, date as date_type
 
 from sqlalchemy import (
-    Boolean, Column, Date, DateTime, Float, Index, String, Text, Numeric, ForeignKey
+    Boolean, Column, Date, DateTime, Float, Index, Integer, String, Text, Numeric, ForeignKey
 )
 from sqlalchemy.orm import DeclarativeBase
 
@@ -88,3 +88,43 @@ class ConversationHistory(Base):
     messages_json  = Column(Text, nullable=False, default="[]")  # JSON array of {role, content}
     last_active    = Column(DateTime(timezone=True), nullable=False,
                             default=lambda: datetime.now(timezone.utc))
+
+
+import json as _json
+from datetime import datetime as _datetime
+
+
+class Blueprint(Base):
+    __tablename__ = "blueprints"
+
+    id = Column(String, primary_key=True)
+    display_name = Column(String, nullable=False)
+    system_prompt = Column(Text, nullable=False)
+    model = Column(String, nullable=False, default="claude-sonnet-4-6")
+    tools_enabled = Column(Text, nullable=False)  # JSON array string
+    max_tool_turns = Column(Integer, default=6)
+    context_window = Column(Integer, default=8)
+    context_idle_reset_minutes = Column(Integer, default=60)
+    created_at = Column(DateTime, default=_datetime.utcnow)
+
+    def tools_list(self) -> list:
+        return _json.loads(self.tools_enabled)
+
+
+class GroupRegistry(Base):
+    __tablename__ = "group_registry"
+
+    group_jid = Column(String, primary_key=True)
+    blueprint_id = Column(String, ForeignKey("blueprints.id"), nullable=False)
+    status = Column(String, nullable=False, default="active")       # active | paused
+    trigger_type = Column(String, nullable=False, default="always")  # always | mention | prefix
+    trigger_prefix = Column(String, nullable=True)
+    bound_at = Column(DateTime, default=_datetime.utcnow)
+
+
+class AdminNumbers(Base):
+    __tablename__ = "admin_numbers"
+
+    phone_number = Column(String, primary_key=True)
+    label = Column(String, nullable=True)
+    added_at = Column(DateTime, default=_datetime.utcnow)
