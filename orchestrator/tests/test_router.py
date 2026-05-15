@@ -91,3 +91,13 @@ def test_trigger_prefix_blocks_without_prefix(seeded_db):
     router = Router()
     _, entry = router.resolve(seeded_db, "123@g.us")
     assert router.check_trigger(entry, text="hello world", bot_phone="972501234567") is False
+
+
+def test_trigger_prefix_blocks_when_no_prefix_configured(seeded_db):
+    entry = seeded_db.query(GroupRegistry).filter_by(group_jid="123@g.us").first()
+    entry.trigger_type = "prefix"
+    entry.trigger_prefix = None  # misconfigured — no prefix set
+    seeded_db.commit()
+    router = Router()
+    _, entry = router.resolve(seeded_db, "123@g.us")
+    assert router.check_trigger(entry, text="hello world", bot_phone="972501234567") is False

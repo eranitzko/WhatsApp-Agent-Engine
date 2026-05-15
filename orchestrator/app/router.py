@@ -16,5 +16,8 @@ class Router:
         if entry.trigger_type == "mention":
             return f"@{bot_phone}" in (text or "")
         if entry.trigger_type == "prefix":
-            return (text or "").startswith(entry.trigger_prefix or "")
+            prefix = entry.trigger_prefix
+            if not prefix:
+                return False
+            return (text or "").startswith(prefix)
         return False
