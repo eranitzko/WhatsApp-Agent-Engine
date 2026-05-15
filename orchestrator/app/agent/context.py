@@ -147,6 +147,20 @@ class ContextStore:
             # Reset in DB even if not cached
             GroupContext(group_id).reset()
 
+    # ── Convenience delegation methods ────────────────────────────────────────
+
+    def get_history(self, group_id: str, max_pairs: int | None = None, idle_minutes: int | None = None) -> list:
+        return self.get(group_id).get_history(max_pairs=max_pairs, idle_minutes=idle_minutes)
+
+    def add(self, group_id: str, role: str, content, max_pairs: int | None = None) -> None:
+        self.get(group_id).add(role=role, content=content, max_pairs=max_pairs)
+
+    def clear(self, group_id: str) -> None:
+        ctx = self._cache.get(group_id)
+        if ctx:
+            ctx.reset()  # clears DB row
+            del self._cache[group_id]
+
 
 # Singleton used by the agent
 context_store = ContextStore()

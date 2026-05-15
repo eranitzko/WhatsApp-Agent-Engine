@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime, timezone, date as date_type
 
@@ -90,10 +91,6 @@ class ConversationHistory(Base):
                             default=lambda: datetime.now(timezone.utc))
 
 
-import json as _json
-from datetime import datetime as _datetime
-
-
 class Blueprint(Base):
     __tablename__ = "blueprints"
 
@@ -105,10 +102,10 @@ class Blueprint(Base):
     max_tool_turns = Column(Integer, default=6)
     context_window = Column(Integer, default=8)
     context_idle_reset_minutes = Column(Integer, default=60)
-    created_at = Column(DateTime, default=_datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
-    def tools_list(self) -> list:
-        return _json.loads(self.tools_enabled)
+    def tools_list(self) -> list[str]:
+        return json.loads(self.tools_enabled)
 
 
 class GroupRegistry(Base):
@@ -119,7 +116,7 @@ class GroupRegistry(Base):
     status = Column(String, nullable=False, default="active")       # active | paused
     trigger_type = Column(String, nullable=False, default="always")  # always | mention | prefix
     trigger_prefix = Column(String, nullable=True)
-    bound_at = Column(DateTime, default=_datetime.utcnow)
+    bound_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class AdminNumbers(Base):
@@ -127,4 +124,4 @@ class AdminNumbers(Base):
 
     phone_number = Column(String, primary_key=True)
     label = Column(String, nullable=True)
-    added_at = Column(DateTime, default=_datetime.utcnow)
+    added_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
