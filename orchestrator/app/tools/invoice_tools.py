@@ -28,195 +28,14 @@ from app.agent import tools as _orig
 
 logger = logging.getLogger(__name__)
 
-# ── Tool schemas (copied verbatim from agent/tools.py, without cache_control) ──
+# ── Tool schemas (imported from agent/tools.py, cache_control stripped) ──
 # cache_control is stripped here because the ToolRegistry / AgentRunner is
 # responsible for applying prompt-cache hints at the Claude call site.
 
-_RAW_SCHEMAS: list[dict] = [
-    {
-        "name": "get_status",
-        "description": (
-            "Get the current bot status, group configuration, and invoice statistics. "
-            "Available to all group members."
-        ),
-        "input_schema": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "name": "list_invoices",
-        "description": (
-            "List invoices recorded for a given month, with their IDs, dates, vendors, "
-            "amounts, and flag status. Defaults to the current month. Available to all members."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "month": {"type": "integer", "description": "Month number 1–12. Defaults to current month."},
-                "year":  {"type": "integer", "description": "4-digit year. Defaults to current year."},
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "get_preview",
-        "description": (
-            "Get a summary for a given month: invoice count, total in ILS, "
-            "number of flagged invoices. Defaults to current month. Available to all members."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "month": {"type": "integer", "description": "Month number 1–12. Defaults to current month."},
-                "year":  {"type": "integer", "description": "4-digit year. Defaults to current year."},
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "update_config",
-        "description": (
-            "Update a group configuration setting. Admin only. "
-            "Keys: 'header' (report title), 'author' (report author name), "
-            "'language' (en or he), 'dual-currency' (on or off)."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "key":   {"type": "string", "enum": ["header", "author", "language", "dual-currency"]},
-                "value": {"type": "string", "description": "New value for the setting."},
-            },
-            "required": ["key", "value"],
-        },
-    },
-    {
-        "name": "generate_report",
-        "description": (
-            "Generate a monthly invoice report and send it to the group. Admin only. "
-            "For email delivery, use request_confirmation first, then send_report_by_email."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "month":         {"type": "integer", "description": "Month 1–12. Defaults to current month. Ignored if start_date/end_date provided."},
-                "year":          {"type": "integer", "description": "4-digit year. Defaults to current year. Ignored if start_date/end_date provided."},
-                "start_date":    {"type": "string", "description": "Range start date YYYY-MM-DD (optional). Use instead of month/year for custom periods."},
-                "end_date":      {"type": "string", "description": "Range end date YYYY-MM-DD (optional, inclusive). Required when start_date is set."},
-                "format":        {"type": "string", "enum": ["pdf", "excel", "both"], "description": "Report format. Default: pdf."},
-                "attach_images": {"type": "boolean", "description": "Embed invoice images in PDF appendix. Default: false."},
-                "dual_currency": {"type": "boolean", "description": "Force dual currency columns. Null = auto-detect."},
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "flag_invoice",
-        "description": "Flag an invoice for manual review. Admin only.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "invoice_id": {"type": "string", "description": "Invoice ID to flag."},
-                "reason":     {"type": "string", "description": "Reason for flagging. Optional."},
-            },
-            "required": ["invoice_id"],
-        },
-    },
-    {
-        "name": "unflag_invoice",
-        "description": "Remove the review flag from an invoice. Admin only.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "invoice_id": {"type": "string", "description": "Invoice ID to unflag."},
-            },
-            "required": ["invoice_id"],
-        },
-    },
-    {
-        "name": "set_invoice_date",
-        "description": (
-            "Correct the date on an invoice. Admin only. Use when OCR extracted the wrong date "
-            "(e.g. day/month swapped). Also re-calculates the ILS amount if the currency is not ILS."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "invoice_id": {"type": "string", "description": "Invoice ID to update."},
-                "new_date":   {"type": "string", "description": "Correct date in YYYY-MM-DD format."},
-            },
-            "required": ["invoice_id", "new_date"],
-        },
-    },
-    {
-        "name": "set_invoice_amount",
-        "description": (
-            "Correct the original amount on an invoice. Admin only. "
-            "Re-calculates the ILS amount using the existing exchange rate for the invoice date. "
-            "Always call request_confirmation first — never call this directly."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "invoice_id": {"type": "string", "description": "Invoice ID to update."},
-                "new_amount":  {
-                    "type": "number",
-                    "description": "Correct amount in the invoice's original currency. Must be positive.",
-                },
-            },
-            "required": ["invoice_id", "new_amount"],
-        },
-    },
-    {
-        "name": "add_date_format",
-        "description": (
-            "Register an extra date format used globally when parsing invoice dates. "
-            "Adds to existing formats — does not replace them. Admin only. "
-            "Always call request_confirmation first — never call this directly."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "format_string": {
-                    "type": "string",
-                    "description": (
-                        "Date format using D (day), M (month), Y (year) and one separator "
-                        "(/, -, ., or space). Examples: MM/DD/YYYY, DD.MM.YY, YYYY-MM-DD"
-                    ),
-                },
-            },
-            "required": ["format_string"],
-        },
-    },
-    {
-        "name": "request_confirmation",
-        "description": (
-            "Request admin confirmation before executing a destructive or external action. "
-            "Use this before removing an invoice or sending a report by email. "
-            "After calling this tool, tell the user what will happen and ask them to reply 'yes' to confirm."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "action":      {"type": "string", "enum": ["remove_invoice", "send_email", "set_invoice_amount", "add_date_format"], "description": "Action to confirm."},
-                "params": {
-                    "type": "object",
-                    "description": (
-                        "Parameters for the action. "
-                        "For remove_invoice: {invoice_id}. "
-                        "For send_email: {to_email, month (optional), year (optional), "
-                        "start_date (optional YYYY-MM-DD), end_date (optional YYYY-MM-DD), "
-                        "format ('pdf'|'excel'|'both'), attach_images (bool), dual_currency (bool|null)}. "
-                        "For set_invoice_amount: {invoice_id, new_amount}. "
-                        "For add_date_format: {format_string}. "
-                    ),
-                },
-                "description": {"type": "string", "description": "Short label identifying what will be removed or sent (e.g. vendor, date, amount). No warnings or caveats."},
-            },
-            "required": ["action", "params", "description"],
-        },
-    },
-]
-
-# Index schemas by name for quick lookup
-_SCHEMA_BY_NAME: dict[str, dict] = {s["name"]: s for s in _RAW_SCHEMAS}
+_SCHEMA_BY_NAME: dict[str, dict] = {
+    s["name"]: {k: v for k, v in s.items() if k != "cache_control"}
+    for s in _orig.TOOL_SCHEMAS
+}
 
 
 # ── Adapter helpers ───────────────────────────────────────────────────────────
@@ -259,53 +78,32 @@ def _make_executor(orig_fn, tool_name: str):
     return executor
 
 
-# ── request_confirmation needs special handling ───────────────────────────────
-# The original exec_request_confirmation imports and uses the module-level
-# singleton `confirmation_store` from app.agent.confirmation.  For the new
-# ToolRegistry world the AgentRunner may inject a different ConfirmationStore
-# via ctx["confirmation_store"].  We honour that if provided, otherwise fall
-# back to the singleton so the legacy code path is unaffected.
+# ── request_confirmation — inline implementation ──────────────────────────────
+# Re-implemented inline rather than delegating to the original
+# exec_request_confirmation, which imports confirmation_store at module load
+# time and therefore cannot be patched at call time.  This also eliminates the
+# race condition that existed in the previous adapter.
 
-async def _exec_request_confirmation_adapted(params: dict, **ctx) -> str:
+async def _exec_request_confirmation(params: dict, **ctx) -> str:
+    confirmation_store = ctx.get("confirmation_store")
+    if not confirmation_store:
+        return "Error: confirmation store not available."
     group_jid = ctx.get("group_jid", "")
-    is_admin = ctx.get("is_admin", False)
-
-    # If the AgentRunner injects a store, patch it into the module so the
-    # original function uses it; otherwise the original singleton is used.
-    injected_store = ctx.get("confirmation_store")
-
-    if injected_store is not None:
-        import app.agent.confirmation as _conf_mod
-        _original_store = _conf_mod.confirmation_store
-        _conf_mod.confirmation_store = injected_store
-        try:
-            result = await _orig.exec_request_confirmation(
-                group_id=group_jid,
-                is_admin=is_admin,
-                **params,
-            )
-        except Exception as exc:
-            logger.exception("invoice tool request_confirmation raised: %s", exc)
-            return json.dumps({"error": f"Tool execution failed: {exc}"})
-        finally:
-            _conf_mod.confirmation_store = _original_store
-    else:
-        try:
-            result = await _orig.exec_request_confirmation(
-                group_id=group_jid,
-                is_admin=is_admin,
-                **params,
-            )
-        except Exception as exc:
-            logger.exception("invoice tool request_confirmation raised: %s", exc)
-            return json.dumps({"error": f"Tool execution failed: {exc}"})
-
-    return _result_to_str(result)
+    action = params.get("action", "")
+    action_params = params.get("params", {})
+    description = params.get("description", action)
+    try:
+        # ConfirmationStore.set(group_id, action, params, description)
+        confirmation_store.set(group_jid, action, action_params, description)
+        return f"Confirmation requested: {description}. Reply 'yes' to confirm or 'no' to cancel."
+    except Exception as exc:
+        logger.exception("invoice tool request_confirmation raised: %s", exc)
+        return f"Error requesting confirmation: {str(exc)}"
 
 
 # ── Public factory ────────────────────────────────────────────────────────────
 
-def get_invoice_tools() -> dict[str, dict]:
+def get_invoice_tools(db_session_factory=None, **kwargs) -> dict[str, dict]:
     """Return all 11 invoice tools in ToolRegistry format.
 
     Returns:
@@ -343,10 +141,10 @@ def get_invoice_tools() -> dict[str, dict]:
             "executor": _make_executor(orig_fn, name),
         }
 
-    # request_confirmation gets its own adapter (confirmation_store injection)
+    # request_confirmation uses inline implementation (avoids import-time singleton issue)
     registry["request_confirmation"] = {
         "schema":   _SCHEMA_BY_NAME["request_confirmation"],
-        "executor": _exec_request_confirmation_adapted,
+        "executor": _exec_request_confirmation,
     }
 
     return registry

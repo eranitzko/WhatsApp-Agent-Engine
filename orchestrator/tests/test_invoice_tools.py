@@ -1,0 +1,52 @@
+import pytest
+from app.tools.invoice_tools import get_invoice_tools
+
+EXPECTED_TOOLS = [
+    "get_status", "list_invoices", "get_preview", "update_config",
+    "generate_report", "flag_invoice", "unflag_invoice", "set_invoice_date",
+    "set_invoice_amount", "add_date_format", "request_confirmation",
+]
+
+def test_get_invoice_tools_returns_all_11_tools():
+    tools = get_invoice_tools()
+    assert set(tools.keys()) == set(EXPECTED_TOOLS)
+
+def test_each_tool_has_schema_and_executor():
+    tools = get_invoice_tools()
+    for name, entry in tools.items():
+        assert "schema" in entry, f"{name} missing schema"
+        assert "executor" in entry, f"{name} missing executor"
+        assert entry["schema"]["name"] == name
+
+def test_get_invoice_tools_accepts_db_session_factory():
+    # Should not raise TypeError
+    tools = get_invoice_tools(db_session_factory=None)
+    assert len(tools) == 11
+
+@pytest.mark.asyncio
+async def test_request_confirmation_without_store_returns_error():
+    tools = get_invoice_tools()
+    result = await tools["request_confirmation"]["executor"](
+        {"action": "remove_invoice", "params": {}, "description": "Remove invoice"},
+        group_jid="123@g.us",
+        confirmation_store=None,
+    )
+    assert "Error" in result or "not available" in result
+
+from unittest.mock import MagicMock
+
+@pytest.mark.asyncio
+async def test_request_confirmation_calls_store():
+    mock_store = MagicMock()
+    tools = get_invoice_tools()
+    result = await tools["request_confirmation"]["executor"](
+        {"action": "remove_invoice", "params": {"invoice_id": "abc"}, "description": "Remove invoice abc"},
+        group_jid="123@g.us",
+        confirmation_store=mock_store,
+    )
+    mock_store.set.assert_called_once()
+    assert "yes" in result.lower() or "confirm" in result.lower()
+
+def test_system_prompt_is_substantial():
+    from app.prompts.invoice_curator import INVOICE_CURATOR_SYSTEM_PROMPT
+    assert len(INVOICE_CURATOR_SYSTEM_PROMPT) > 500
