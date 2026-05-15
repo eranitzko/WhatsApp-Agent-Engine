@@ -1,1 +1,28 @@
+# env
+.env
+.env.local
+
+# data
+data/auth/
+data/db/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+.venv/
+venv/
+
+# node
+node_modules/
+*.log
+
+# editors
+.DS_Store
+.vscode/
+
+# worktrees
 .worktrees/
