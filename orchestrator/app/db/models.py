@@ -145,7 +145,7 @@ class LedgerEntry(Base):
 
     @property
     def remaining_ils(self) -> Decimal:
-        return self.amount_ils - self.amount_settled_ils
+        return self.amount_ils - (self.amount_settled_ils or Decimal("0"))
 
 
 class LedgerSettlement(Base):
