@@ -52,5 +52,11 @@ class Settings(BaseSettings):
     # Example: '{"Eran": "972501234567", "Dana": "972509876543"}'
     family_members_json: str = ""
 
+    # Comma-separated names of members who share a single household account
+    # (e.g. both parents). Debts between them are not tracked; their balances
+    # are aggregated when reporting what others owe "the parents".
+    # Example: "Eran,Dana"
+    family_household_members: str = ""
+
 
 settings = Settings()

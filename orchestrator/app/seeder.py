@@ -33,6 +33,13 @@ def _family_members() -> dict[str, str]:
         return {}
 
 
+def _household_members() -> list[str]:
+    """Parse FAMILY_HOUSEHOLD_MEMBERS (comma-separated names). Returns empty list on error."""
+    if not settings.family_household_members:
+        return []
+    return [n.strip() for n in settings.family_household_members.split(",") if n.strip()]
+
+
 DEFAULT_BLUEPRINTS = [
     {
         "id": "invoice_curator",
@@ -68,7 +75,7 @@ def seed(db: Session, admin_phone: str, legacy_group_jid: str | None = None) -> 
         db.add(Blueprint(
             id="family_accounting",
             display_name="Family Accounting",
-            system_prompt=build_family_accounting_prompt(_family_members()),
+            system_prompt=build_family_accounting_prompt(_family_members(), _household_members()),
             model="claude-sonnet-4-6",
             tools_enabled=json.dumps(FAMILY_ACCOUNTING_TOOLS),
             max_tool_turns=5,
