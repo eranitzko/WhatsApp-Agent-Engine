@@ -94,6 +94,22 @@ app.get('/groups', async (_req, res) => {
   }
 })
 
+// Manual test:
+// curl http://localhost:3000/group-meta/120363...@g.us
+// → { description: "..." }
+// # GET /group-meta/120363...@g.us → { description: "..." }
+app.get('/group-meta/:jid', async (req, res) => {
+  const sock = getSocket()
+  if (!sock) return res.status(503).json({ error: 'WhatsApp not connected' })
+  try {
+    const meta = await sock.groupMetadata(req.params.jid)
+    res.json({ description: meta.desc || '' })
+  } catch (err) {
+    console.error('Failed to fetch group metadata:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 export function startServer() {
   app.listen(PORT, () => {
     console.log(`Bridge server listening on port ${PORT}`)
