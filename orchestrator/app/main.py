@@ -1,7 +1,8 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel
 import anthropic
 import httpx
@@ -18,10 +19,25 @@ from app.agent.confirmation import confirmation_store
 from app.tools.invoice_tools import get_invoice_tools
 from app.tools.notion_tools import get_notion_tools
 from app.pipeline.pipeline import process_image_event
+from app.utils.rate_limiter import rate_limiter
 from app.logging_config import configure_logging
 
-configure_logging()
+configure_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
+
+_WEBHOOK_SECRET: str = os.environ.get("WEBHOOK_SECRET", "")
+if not _WEBHOOK_SECRET:
+    logger.warning("WEBHOOK_SECRET is not configured — /webhook accepts unauthenticated requests")
+
+
+def _verify_webhook_auth(request: Request) -> None:
+    if not _WEBHOOK_SECRET:
+        return
+    auth = request.headers.get("Authorization", "")
+    token = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
+    if token != _WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
 
 # --- Globals (initialized at startup) ---
 router = Router()
@@ -44,7 +60,7 @@ class WebhookPayload(BaseModel):
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     global agent_runner
 
     db = SessionLocal()
@@ -76,7 +92,8 @@ async def health():
 
 
 @app.post("/webhook")
-async def webhook(payload: WebhookPayload, background_tasks: BackgroundTasks):
+async def webhook(request: Request, payload: WebhookPayload, background_tasks: BackgroundTasks):
+    _verify_webhook_auth(request)
     background_tasks.add_task(_process, payload)
     return {"status": "ok"}
 
@@ -84,18 +101,30 @@ async def webhook(payload: WebhookPayload, background_tasks: BackgroundTasks):
 async def _process(payload: WebhookPayload) -> None:
     db = SessionLocal()
     try:
-        blueprint, entry = router.resolve(db, payload.jid)
-        if blueprint is None:
-            return
-
+        logger.debug("Processing event: type=%s jid=%s", payload.type, payload.jid)
         text = payload.text or payload.caption or ""
 
+        # Commands are checked before blueprint lookup so /bind works on unregistered groups
         if command_handler.is_command(text):
             sender_phone = payload.sender.split("@")[0].split(":")[0]
             reply = await command_handler.handle(db, payload.jid, sender_phone, text)
             if reply:
                 await _send(payload.jid, reply)
             return
+
+        blueprint, entry = router.resolve(db, payload.jid)
+        if blueprint is None:
+            return
+
+        # Rate limiting
+        if payload.type == "image":
+            if not rate_limiter.allow_image(payload.jid):
+                logger.warning("Rate limit hit for group %s (image)", payload.jid)
+                return
+        else:
+            if not rate_limiter.allow_text(payload.jid):
+                logger.warning("Rate limit hit for group %s (text)", payload.jid)
+                return
 
         if not router.check_trigger(entry, text=text, bot_phone=settings.bot_phone_number):
             return
@@ -115,6 +144,9 @@ async def _process(payload: WebhookPayload) -> None:
                 return
             agent_message = _pipeline_result_to_message(pipeline_result)
 
+        if not agent_message.strip():
+            return
+
         reply = await agent_runner.run(
             blueprint=blueprint,
             group_jid=payload.jid,
@@ -132,7 +164,6 @@ async def _process(payload: WebhookPayload) -> None:
 
 
 def _pipeline_result_to_message(result: dict) -> str:
-    """Convert pipeline result dict to a human-readable agent_message string."""
     if result.get("duplicate"):
         return f"Duplicate invoice detected: {result.get('vendor', '')} {result.get('invoice_number', '')}."
     parts = []
@@ -146,7 +177,7 @@ def _pipeline_result_to_message(result: dict) -> str:
     if inv_num := result.get("invoice_number"):
         parts.append(f"Invoice #: {inv_num}")
     if result.get("flagged"):
-        parts.append(f"⚠️ Flagged: {result.get('flag_reason', '')}")
+        parts.append(f"Flagged: {result.get('flag_reason', '')}")
     return "New invoice received. " + " | ".join(parts) if parts else "New invoice received."
 
 
