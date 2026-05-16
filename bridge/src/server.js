@@ -82,7 +82,7 @@ app.post('/send-file', requireBridgeAuth, async (req, res) => {
   }
 })
 
-app.get('/groups', async (_req, res) => {
+app.get('/groups', requireBridgeAuth, async (_req, res) => {
   const sock = getSocket()
   if (!sock) return res.status(503).json({ error: 'WhatsApp not connected' })
   try {
