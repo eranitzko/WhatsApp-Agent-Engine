@@ -39,5 +39,14 @@ class Settings(BaseSettings):
     image_jpeg_quality: int = 85
     confidence_flag_threshold: float = 0.6  # flag invoices below this score
 
+    # WhatsApp platform
+    bot_phone_number: str = ""
+    admin_phone_number: str = ""
+    legacy_group_jid: str = ""
+
+    # Notion
+    notion_api_key: str = ""
+    notion_tasks_database_id: str = ""
+
 
 settings = Settings()
