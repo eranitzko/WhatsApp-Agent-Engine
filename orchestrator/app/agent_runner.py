@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import anthropic
 from app.db.models import Blueprint
 from app.tool_registry import ToolRegistry
@@ -25,8 +25,7 @@ class AgentRunner:
         # Check pending confirmation
         pending = confirmation_store.get(group_jid)
         if pending and not pending.is_expired():
-            normalized = message.strip().lower()
-            if normalized in ("yes", "כן", "confirm", "אישור"):
+            if confirmation_store.is_confirm(message):
                 result = await self.registry.execute(
                     pending.action, pending.params,
                     group_jid=group_jid, sender=sender, is_admin=is_admin,
@@ -35,7 +34,7 @@ class AgentRunner:
                 context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
                 context.add(group_jid, "assistant", str(result), max_pairs=blueprint.context_window)
                 return str(result)
-            elif normalized in ("no", "לא", "cancel"):
+            elif confirmation_store.is_cancel(message):
                 confirmation_store.clear(group_jid)
                 reply = "Action cancelled."
                 context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
@@ -56,7 +55,7 @@ class AgentRunner:
             },
             {
                 "type": "text",
-                "text": f"Today's date: {datetime.utcnow().date()}. Sender is_admin: {is_admin}.",
+                "text": f"Today's date: {datetime.now(timezone.utc).date()}. Sender is_admin: {is_admin}.",
             },
         ]
         tool_schemas = self.registry.get_schemas(allowed_tools)
