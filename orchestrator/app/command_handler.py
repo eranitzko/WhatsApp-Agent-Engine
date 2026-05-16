@@ -1,7 +1,7 @@
-import httpx
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from app.db.models import Blueprint, GroupRegistry, AdminNumbers, ConversationHistory
+from app.bridge_client import fetch_group_description
 
 _VALID_TRIGGERS = {"always", "mention", "prefix"}
 
@@ -10,7 +10,7 @@ class CommandHandler:
     COMMANDS = {"/bind", "/unbind", "/pause", "/resume", "/blueprints", "/sync"}
 
     def __init__(self, bridge_url: str = ""):
-        self._bridge_url = bridge_url
+        self._bridge_url = bridge_url  # retained for the "not configured" guard
 
     def is_command(self, text: str) -> bool:
         if not text:
@@ -103,10 +103,7 @@ class CommandHandler:
             if not self._bridge_url:
                 return "Bridge URL not configured — cannot fetch group description."
             try:
-                async with httpx.AsyncClient(timeout=10) as client:
-                    resp = await client.get(f"{self._bridge_url}/group-meta/{group_jid}")
-                    resp.raise_for_status()
-                    description = resp.json().get("description", "").strip()
+                description = await fetch_group_description(group_jid)
             except Exception as exc:
                 return f"Failed to fetch group description: {exc}"
             entry.custom_instructions = description or None

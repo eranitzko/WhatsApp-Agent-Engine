@@ -19,18 +19,8 @@ def _seed(db):
 @pytest.mark.asyncio
 async def test_sync_stores_description(db):
     _seed(db)
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"description": "Work invoices only. USD."}
-    mock_resp.raise_for_status = MagicMock()
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
     handler = CommandHandler(bridge_url="http://bridge:3000")
-    with patch("app.command_handler.httpx.AsyncClient", return_value=mock_client):
+    with patch("app.command_handler.fetch_group_description", new=AsyncMock(return_value="Work invoices only. USD.")):
         reply = await handler.handle(db, "123@g.us", "972500000001", "/sync")
 
     assert "synced" in reply.lower()
@@ -45,18 +35,8 @@ async def test_sync_clears_instructions_when_description_empty(db):
     db.get(GroupRegistry, "123@g.us").custom_instructions = "old value"
     db.commit()
 
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"description": ""}
-    mock_resp.raise_for_status = MagicMock()
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
     handler = CommandHandler(bridge_url="http://bridge:3000")
-    with patch("app.command_handler.httpx.AsyncClient", return_value=mock_client):
+    with patch("app.command_handler.fetch_group_description", new=AsyncMock(return_value="")):
         await handler.handle(db, "123@g.us", "972500000001", "/sync")
 
     db.expire_all()
@@ -125,13 +105,8 @@ async def test_sync_bridge_http_error(db):
     db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="invoice_curator"))
     db.commit()
 
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(side_effect=Exception("connection refused"))
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-
     handler = CommandHandler(bridge_url="http://bridge:3000")
-    with patch("app.command_handler.httpx.AsyncClient", return_value=mock_client):
+    with patch("app.command_handler.fetch_group_description", new=AsyncMock(side_effect=Exception("connection refused"))):
         reply = await handler.handle(db, "123@g.us", "972500000001", "/sync")
 
     assert "failed" in reply.lower() or "connection" in reply.lower()
