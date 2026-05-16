@@ -118,6 +118,7 @@ class GroupRegistry(Base):
     trigger_type = Column(String, nullable=False, default="always")  # always | mention | prefix
     trigger_prefix = Column(String, nullable=True)
     bound_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    custom_instructions = Column(Text, nullable=True)
 
 
 class AdminNumbers(Base):
