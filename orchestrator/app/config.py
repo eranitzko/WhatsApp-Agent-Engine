@@ -48,5 +48,9 @@ class Settings(BaseSettings):
     notion_api_key: str = ""
     notion_tasks_database_id: str = ""
 
+    # Family accounting: JSON object mapping display name → phone
+    # Example: '{"Eran": "972501234567", "Dana": "972509876543"}'
+    family_members_json: str = ""
+
 
 settings = Settings()
