@@ -3,13 +3,6 @@ import pytest
 from app.db.models import Blueprint, GroupRegistry, AdminNumbers, ConversationHistory
 from app.command_handler import CommandHandler
 
-BLUEPRINT_ROW = Blueprint(
-    id="notion_assistant",
-    display_name="Notion Assistant",
-    system_prompt="You are a Notion assistant.",
-    model="claude-sonnet-4-6",
-    tools_enabled=json.dumps(["search_pages"]),
-)
 
 def _fresh_blueprint():
     return Blueprint(
@@ -19,6 +12,7 @@ def _fresh_blueprint():
         model="claude-sonnet-4-6",
         tools_enabled=json.dumps(["search_pages"]),
     )
+
 
 @pytest.fixture
 def seeded_db(db):
@@ -63,6 +57,25 @@ async def test_bind_unknown_blueprint_returns_error(seeded_db):
     handler = CommandHandler()
     result = await handler.handle(seeded_db, "123@g.us", "972501234567", "/bind nonexistent")
     assert "not found" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_bind_invalid_trigger_returns_error(seeded_db):
+    handler = CommandHandler()
+    result = await handler.handle(seeded_db, "123@g.us", "972501234567", "/bind notion_assistant --trigger badvalue")
+    assert "invalid trigger" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_bind_rebinds_existing_group(seeded_db):
+    seeded_db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="notion_assistant",
+                                status="paused", trigger_type="mention"))
+    seeded_db.commit()
+    handler = CommandHandler()
+    await handler.handle(seeded_db, "123@g.us", "972501234567", "/bind notion_assistant")
+    entry = seeded_db.query(GroupRegistry).filter_by(group_jid="123@g.us").first()
+    assert entry.status == "active"
+    assert entry.trigger_type == "always"
 
 
 @pytest.mark.asyncio
@@ -119,3 +132,4 @@ def test_is_command_recognizes_slash_commands():
     assert handler.is_command("/blueprints") is True
     assert handler.is_command("hello world") is False
     assert handler.is_command("") is False
+    assert handler.is_command("/binding a shelf") is False

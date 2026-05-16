@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from app.db.models import Blueprint, GroupRegistry, AdminNumbers, ConversationHistory
 
+_VALID_TRIGGERS = {"always", "mention", "prefix"}
+
 
 class CommandHandler:
     COMMANDS = {"/bind", "/unbind", "/pause", "/resume", "/blueprints"}
@@ -9,7 +11,8 @@ class CommandHandler:
     def is_command(self, text: str) -> bool:
         if not text:
             return False
-        return any(text.strip().startswith(cmd) for cmd in self.COMMANDS)
+        first_word = text.strip().split()[0].lower()
+        return first_word in self.COMMANDS
 
     async def handle(self, db: Session, group_jid: str, sender_phone: str, text: str) -> str | None:
         if not self._is_admin(db, sender_phone):
@@ -40,6 +43,8 @@ class CommandHandler:
                 idx = parts.index("--trigger")
                 if idx + 1 < len(parts):
                     trigger_type = parts[idx + 1]
+            if trigger_type not in _VALID_TRIGGERS:
+                return f"Invalid trigger type '{trigger_type}'. Must be one of: always, mention, prefix."
             if "--prefix" in parts:
                 idx = parts.index("--prefix")
                 if idx + 1 < len(parts):
@@ -67,25 +72,27 @@ class CommandHandler:
             return f"Bound '{blueprint.display_name}' to this group (trigger: {trigger_type})."
 
         if cmd == "/unbind":
-            db.query(GroupRegistry).filter_by(group_jid=group_jid).delete()
+            deleted = db.query(GroupRegistry).filter_by(group_jid=group_jid).delete()
             db.commit()
-            return "Agent unbound from this group."
+            return "Agent unbound from this group." if deleted else "No agent was bound to this group."
 
         if cmd == "/pause":
             entry = db.query(GroupRegistry).filter_by(group_jid=group_jid).first()
-            if entry:
-                entry.status = "paused"
-                db.commit()
+            if not entry:
+                return "No agent is bound to this group."
+            entry.status = "paused"
+            db.commit()
             return "Agent paused."
 
         if cmd == "/resume":
             entry = db.query(GroupRegistry).filter_by(group_jid=group_jid).first()
-            if entry:
-                entry.status = "active"
-                db.commit()
+            if not entry:
+                return "No agent is bound to this group."
+            entry.status = "active"
+            db.commit()
             return "Agent resumed."
 
-        return None
+        return f"Unknown command: {parts[0]}. Try /blueprints."
 
     def _is_admin(self, db: Session, phone: str) -> bool:
         return db.query(AdminNumbers).filter_by(phone_number=phone).first() is not None
