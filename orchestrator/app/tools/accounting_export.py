@@ -49,9 +49,10 @@ def _compute_net_balances(entries: list) -> dict[tuple[str, str], Decimal]:
     netted: dict[tuple[str, str], Decimal] = {}
     seen: set[tuple[str, str]] = set()
     for (a, b), amt in raw.items():
-        if (a, b) in seen or (b, a) in seen:
+        canonical = (min(a, b), max(a, b))
+        if canonical in seen:
             continue
-        seen.add((a, b))
+        seen.add(canonical)
         reverse = raw.get((b, a), Decimal("0"))
         net = amt - reverse
         if net > Decimal("0"):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import date, datetime, timezone
@@ -224,13 +225,15 @@ async def _exec_record_payment(params: dict, **ctx) -> str:
 
         for leg_id, new_settled in result.updated_legs:
             row = db.get(LedgerEntry, leg_id)
+            if row is None:
+                continue
             row.amount_settled_ils = new_settled
 
         payment_leg = LedgerEntry(
             transaction_id=str(uuid.uuid4()),
             group_jid=group_jid,
-            from_phone=payee,
-            to_phone=payer,
+            from_phone=payer,
+            to_phone=payee,
             amount_ils=amount_ils,
             amount_settled_ils=amount_ils,
             description=f"Payment on {pay_date.isoformat()}",
@@ -339,7 +342,8 @@ async def _exec_export_ledger(params: dict, **ctx) -> str:
 
     try:
         from app.mailer.gmail import send_report_email
-        send_report_email(
+        await asyncio.to_thread(
+            send_report_email,
             to=email,
             subject="Family Ledger Export",
             body="Your family ledger export is attached.",
@@ -356,6 +360,8 @@ async def _exec_set_reminder(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
     sender = ctx.get("sender", "")
     to_phone = sender.split("@")[0].split(":")[0]
+    if not to_phone:
+        return "Error: could not determine sender phone. Please try again."
     message = params["message"]
     send_at_str = params["send_at"]
 
