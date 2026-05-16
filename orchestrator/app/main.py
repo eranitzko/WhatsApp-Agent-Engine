@@ -18,6 +18,8 @@ from app.command_handler import CommandHandler
 from app.agent.context import ContextStore
 from app.agent.confirmation import confirmation_store
 from app.tools.invoice_tools import get_invoice_tools
+from app.tools.accounting_tools import get_accounting_tools
+from app.scheduler import start_scheduler, stop_scheduler
 from app.pipeline.pipeline import process_image_event
 from app.utils.rate_limiter import rate_limiter
 from app.logging_config import configure_logging
@@ -79,6 +81,7 @@ async def lifespan(_app: FastAPI):
     _http_client = httpx.AsyncClient()
 
     tool_registry.register(get_invoice_tools())
+    tool_registry.register(get_accounting_tools())
     if settings.notion_api_key:
         from app.tools.notion_tools import get_notion_tools
         tool_registry.register(get_notion_tools(settings.notion_api_key, settings.notion_tasks_database_id))
@@ -86,10 +89,12 @@ async def lifespan(_app: FastAPI):
         logger.warning("NOTION_API_KEY not set — Notion tools disabled")
 
     agent_runner = AgentRunner(anthropic_client, tool_registry)
+    start_scheduler()
 
     logger.info("WhatsApp Agent Engine started — %d tools registered", len(tool_registry._tools))
     yield
     await _http_client.aclose()
+    stop_scheduler()
     logger.info("Shutting down.")
 
 
