@@ -1,6 +1,7 @@
 import json
 import uuid
 from datetime import datetime, timezone, date as date_type
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean, Column, Date, DateTime, Float, Index, Integer, String, Text, Numeric, ForeignKey
@@ -125,3 +126,47 @@ class AdminNumbers(Base):
     phone_number = Column(String, primary_key=True)
     label = Column(String, nullable=True)
     added_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class LedgerEntry(Base):
+    __tablename__ = "ledger_entries"
+
+    id                 = Column(String(36), primary_key=True, default=_uuid)
+    transaction_id     = Column(String(36), nullable=False, index=True)
+    group_jid          = Column(String(255), nullable=False, index=True)
+    from_phone         = Column(String(255), nullable=False)
+    to_phone           = Column(String(255), nullable=False)
+    amount_ils         = Column(Numeric(18, 4), nullable=False)
+    amount_settled_ils = Column(Numeric(18, 4), nullable=False, default=Decimal("0"))
+    description        = Column(Text, nullable=False, default="")
+    transaction_date   = Column(Date, nullable=False)
+    created_at         = Column(DateTime(timezone=True), nullable=False,
+                                default=lambda: datetime.now(timezone.utc))
+
+    @property
+    def remaining_ils(self) -> Decimal:
+        return self.amount_ils - self.amount_settled_ils
+
+
+class LedgerSettlement(Base):
+    __tablename__ = "ledger_settlements"
+
+    id             = Column(String(36), primary_key=True, default=_uuid)
+    payment_leg_id = Column(String(36), ForeignKey("ledger_entries.id"), nullable=False)
+    debt_leg_id    = Column(String(36), ForeignKey("ledger_entries.id"), nullable=False)
+    amount_ils     = Column(Numeric(18, 4), nullable=False)
+    created_at     = Column(DateTime(timezone=True), nullable=False,
+                            default=lambda: datetime.now(timezone.utc))
+
+
+class ScheduledMessage(Base):
+    __tablename__ = "scheduled_messages"
+
+    id         = Column(String(36), primary_key=True, default=_uuid)
+    group_jid  = Column(String(255), nullable=False)
+    to_phone   = Column(String(255), nullable=False)
+    message    = Column(Text, nullable=False)
+    send_at    = Column(DateTime(timezone=True), nullable=False)
+    sent       = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
