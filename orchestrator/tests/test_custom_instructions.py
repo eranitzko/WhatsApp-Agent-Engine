@@ -74,9 +74,6 @@ async def test_sync_no_group_bound(db):
     assert "no agent" in reply.lower()
 
 
-from app.db.models import GroupRegistry
-
-
 def test_group_registry_has_custom_instructions_column(db):
     entry = GroupRegistry(
         group_jid="123@g.us",
@@ -97,3 +94,47 @@ def test_custom_instructions_defaults_to_none(db):
     db.expire_all()
     fetched = db.get(GroupRegistry, "456@g.us")
     assert fetched.custom_instructions is None
+
+
+@pytest.mark.asyncio
+async def test_sync_no_bridge_url(db):
+    db.add(AdminNumbers(phone_number="972500000001"))
+    db.add(Blueprint(
+        id="invoice_curator",
+        display_name="Invoice Curator",
+        system_prompt="prompt",
+        tools_enabled="[]",
+    ))
+    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="invoice_curator"))
+    db.commit()
+
+    handler = CommandHandler(bridge_url="")
+    reply = await handler.handle(db, "123@g.us", "972500000001", "/sync")
+    assert "bridge url" in reply.lower() or "not configured" in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_sync_bridge_http_error(db):
+    db.add(AdminNumbers(phone_number="972500000001"))
+    db.add(Blueprint(
+        id="invoice_curator",
+        display_name="Invoice Curator",
+        system_prompt="prompt",
+        tools_enabled="[]",
+    ))
+    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="invoice_curator"))
+    db.commit()
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=Exception("connection refused"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    handler = CommandHandler(bridge_url="http://bridge:3000")
+    with patch("app.command_handler.httpx.AsyncClient", return_value=mock_client):
+        reply = await handler.handle(db, "123@g.us", "972500000001", "/sync")
+
+    assert "failed" in reply.lower() or "connection" in reply.lower()
+    db.expire_all()
+    entry = db.get(GroupRegistry, "123@g.us")
+    assert entry.custom_instructions is None  # not modified on error
