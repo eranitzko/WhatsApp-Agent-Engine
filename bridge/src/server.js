@@ -94,13 +94,13 @@ app.get('/groups', async (_req, res) => {
   }
 })
 
-// Manual test:
-// curl http://localhost:3000/group-meta/120363...@g.us
-// → { description: "..." }
-// # GET /group-meta/120363...@g.us → { description: "..." }
-app.get('/group-meta/:jid', async (req, res) => {
+// GET /group-meta/:jid — returns the group description for the given group JID.
+app.get('/group-meta/:jid', requireBridgeAuth, async (req, res) => {
   const sock = getSocket()
   if (!sock) return res.status(503).json({ error: 'WhatsApp not connected' })
+  if (!req.params.jid || !req.params.jid.endsWith('@g.us')) {
+    return res.status(400).json({ error: 'jid must be a group JID (@g.us)' })
+  }
   try {
     const meta = await sock.groupMetadata(req.params.jid)
     res.json({ description: meta.desc || '' })
