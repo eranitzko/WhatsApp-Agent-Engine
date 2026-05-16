@@ -43,7 +43,7 @@ def _verify_webhook_auth(request: Request) -> None:
 
 # --- Globals (initialized at startup) ---
 router = Router()
-command_handler = CommandHandler()
+command_handler = CommandHandler(bridge_url=settings.bridge_url)
 context_store = ContextStore()
 tool_registry = ToolRegistry()
 agent_runner: AgentRunner | None = None
@@ -170,6 +170,7 @@ async def _process(payload: WebhookPayload) -> None:
             message=agent_message,
             context=context_store,
             confirmation_store=confirmation_store,
+            custom_instructions=entry.custom_instructions if entry else None,
         )
         await _send(payload.jid, reply)
     except Exception:

@@ -19,6 +19,7 @@ class AgentRunner:
         message: str,
         context,           # GroupContext instance
         confirmation_store, # ConfirmationStore instance
+        custom_instructions: str | None = None,
     ) -> str:
         allowed_tools = blueprint.tools_list()
 
@@ -58,6 +59,11 @@ class AgentRunner:
                 "text": f"Today's date: {datetime.now(timezone.utc).date()}. Sender is_admin: {is_admin}.",
             },
         ]
+        if custom_instructions:
+            system.append({
+                "type": "text",
+                "text": f"Group-specific instructions:\n{custom_instructions}",
+            })
         tool_schemas = self.registry.get_schemas(allowed_tools)
 
         for _ in range(blueprint.max_tool_turns):

@@ -138,3 +138,103 @@ async def test_sync_bridge_http_error(db):
     db.expire_all()
     entry = db.get(GroupRegistry, "123@g.us")
     assert entry.custom_instructions is None  # not modified on error
+
+
+import anthropic
+from app.agent_runner import AgentRunner
+from app.tool_registry import ToolRegistry
+
+
+def _make_runner():
+    client = MagicMock()
+    registry = ToolRegistry()
+    return AgentRunner(client, registry)
+
+
+def _make_blueprint():
+    bp = MagicMock()
+    bp.system_prompt = "Base prompt."
+    bp.model = "claude-sonnet-4-6"
+    bp.max_tool_turns = 1
+    bp.context_window = 4
+    bp.context_idle_reset_minutes = 60
+    bp.tools_list.return_value = []
+    return bp
+
+
+def _fake_end_turn(text="ok"):
+    block = MagicMock()
+    block.type = "text"
+    block.text = text
+    resp = MagicMock()
+    resp.stop_reason = "end_turn"
+    resp.content = [block]
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_custom_instructions_appended_to_system_prompt():
+    runner = _make_runner()
+    bp = _make_blueprint()
+
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured["system"] = kwargs["system"]
+        return _fake_end_turn()
+
+    runner.client.messages.create = fake_create
+
+    context = MagicMock()
+    context.get_history.return_value = []
+    context.add = MagicMock()
+    confirmation_store = MagicMock()
+    confirmation_store.get.return_value = None
+
+    await runner.run(
+        blueprint=bp,
+        group_jid="123@g.us",
+        sender="972500000001@s.whatsapp.net",
+        is_admin=False,
+        message="hello",
+        context=context,
+        confirmation_store=confirmation_store,
+        custom_instructions="Work invoices only. USD.",
+    )
+
+    system_texts = [block["text"] for block in captured["system"]]
+    assert any("Work invoices only" in t for t in system_texts)
+
+
+@pytest.mark.asyncio
+async def test_no_custom_instructions_block_when_none():
+    runner = _make_runner()
+    bp = _make_blueprint()
+
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured["system"] = kwargs["system"]
+        return _fake_end_turn()
+
+    runner.client.messages.create = fake_create
+
+    context = MagicMock()
+    context.get_history.return_value = []
+    context.add = MagicMock()
+    confirmation_store = MagicMock()
+    confirmation_store.get.return_value = None
+
+    await runner.run(
+        blueprint=bp,
+        group_jid="123@g.us",
+        sender="972500000001@s.whatsapp.net",
+        is_admin=False,
+        message="hello",
+        context=context,
+        confirmation_store=confirmation_store,
+        custom_instructions=None,
+    )
+
+    system_texts = [block["text"] for block in captured["system"]]
+    assert not any("Group-specific" in t for t in system_texts)
