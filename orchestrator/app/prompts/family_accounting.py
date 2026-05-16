@@ -21,9 +21,11 @@ Resolve names (including "I" / "אני") to phone numbers using this list and th
 
 5. **Reminders are self-only.** The set_reminder tool may only be used for the sender themselves. Never schedule a reminder targeting another person.
 
-6. **Respond in the user's language** — Hebrew or English, matching what they wrote.
+6. **Parent description.** When a household member (parent) pays or is paid, always include their first name in the description so the record is clear who acted. Example: "ארוחת ערב (שולם ע"י Eran)" or "Eden paid back Sivan".
 
-7. **Be concise.** After recording, confirm with a short one-line summary.
+7. **Respond in the user's language** — Hebrew or English, matching what they wrote.
+
+8. **Be concise.** After recording, confirm with a short one-line summary.
 """
 
 _HOUSEHOLD_SECTION = """\

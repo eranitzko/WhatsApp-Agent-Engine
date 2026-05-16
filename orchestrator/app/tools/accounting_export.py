@@ -3,13 +3,28 @@
 from __future__ import annotations
 
 import io
+import json
 from decimal import Decimal
 
 import openpyxl
 from openpyxl.styles import Font
 
+from app.config import settings
 from app.db.session import SessionLocal
 from app.db.models import LedgerEntry
+
+
+def _phone_to_name() -> dict[str, str]:
+    """Return phone → display name. Household members all map to 'Parents'."""
+    try:
+        members = json.loads(settings.family_members_json) if settings.family_members_json else {}
+    except Exception:
+        members = {}
+    household: set[str] = set()
+    if settings.family_household_members and members:
+        hnames = [n.strip() for n in settings.family_household_members.split(",") if n.strip()]
+        household = {members[n] for n in hnames if n in members}
+    return {phone: ("Parents" if phone in household else name) for name, phone in members.items()}
 
 
 def generate_ledger_xlsx(group_jid: str) -> bytes:
@@ -22,28 +37,33 @@ def generate_ledger_xlsx(group_jid: str) -> bytes:
             .all()
         )
 
+    names = _phone_to_name()
     wb = openpyxl.Workbook()
 
     ws_bal = wb.active
     ws_bal.title = "Balances"
-    _write_balances_sheet(ws_bal, entries)
+    _write_balances_sheet(ws_bal, entries, names)
 
     ws_tx = wb.create_sheet("Transactions")
-    _write_transactions_sheet(ws_tx, entries)
+    _write_transactions_sheet(ws_tx, entries, names)
 
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
 
 
-def _compute_net_balances(entries: list) -> dict[tuple[str, str], Decimal]:
-    """Return net remaining amount per ordered pair (from_phone, to_phone)."""
+def _compute_net_balances(entries: list, names: dict[str, str]) -> dict[tuple[str, str], Decimal]:
+    """Return net remaining amount per display-name pair (owes, owed_by)."""
     raw: dict[tuple[str, str], Decimal] = {}
     for e in entries:
         remaining = e.amount_ils - (e.amount_settled_ils or Decimal("0"))
         if remaining <= Decimal("0"):
             continue
-        key = (e.from_phone, e.to_phone)
+        frm = names.get(e.from_phone, e.from_phone)
+        to = names.get(e.to_phone, e.to_phone)
+        if frm == to:
+            continue  # intra-household entry — skip
+        key = (frm, to)
         raw[key] = raw.get(key, Decimal("0")) + remaining
 
     netted: dict[tuple[str, str], Decimal] = {}
@@ -62,17 +82,17 @@ def _compute_net_balances(entries: list) -> dict[tuple[str, str], Decimal]:
     return netted
 
 
-def _write_balances_sheet(ws, entries: list) -> None:
+def _write_balances_sheet(ws, entries: list, names: dict[str, str]) -> None:
     headers = ["Owes", "To", "Amount (ILS)"]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
 
-    for (frm, to), amt in sorted(_compute_net_balances(entries).items()):
+    for (frm, to), amt in sorted(_compute_net_balances(entries, names).items()):
         ws.append([frm, to, float(amt)])
 
 
-def _write_transactions_sheet(ws, entries: list) -> None:
+def _write_transactions_sheet(ws, entries: list, names: dict[str, str]) -> None:
     headers = ["Date", "From", "To", "Amount ILS", "Settled ILS", "Remaining ILS", "Description", "Transaction ID"]
     ws.append(headers)
     for cell in ws[1]:
@@ -81,8 +101,8 @@ def _write_transactions_sheet(ws, entries: list) -> None:
     for e in entries:
         ws.append([
             e.transaction_date.isoformat() if e.transaction_date else "",
-            e.from_phone,
-            e.to_phone,
+            names.get(e.from_phone, e.from_phone),
+            names.get(e.to_phone, e.to_phone),
             float(e.amount_ils),
             float(e.amount_settled_ils or Decimal("0")),
             float(e.amount_ils - (e.amount_settled_ils or Decimal("0"))),

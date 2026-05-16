@@ -70,12 +70,18 @@ def seed(db: Session, admin_phone: str, legacy_group_jid: str | None = None) -> 
         if not db.query(Blueprint).filter_by(id=bp_data["id"]).first():
             db.add(Blueprint(**bp_data))
 
-    # Family accounting blueprint — system prompt built from config at seed time
-    if not db.query(Blueprint).filter_by(id="family_accounting").first():
+    # Family accounting blueprint — system prompt rebuilt on every startup so
+    # changes to FAMILY_MEMBERS_JSON / FAMILY_HOUSEHOLD_MEMBERS take effect
+    # without a manual DB edit.
+    fa_prompt = build_family_accounting_prompt(_family_members(), _household_members())
+    fa_bp = db.query(Blueprint).filter_by(id="family_accounting").first()
+    if fa_bp:
+        fa_bp.system_prompt = fa_prompt
+    else:
         db.add(Blueprint(
             id="family_accounting",
             display_name="Family Accounting",
-            system_prompt=build_family_accounting_prompt(_family_members(), _household_members()),
+            system_prompt=fa_prompt,
             model="claude-sonnet-4-6",
             tools_enabled=json.dumps(FAMILY_ACCOUNTING_TOOLS),
             max_tool_turns=5,

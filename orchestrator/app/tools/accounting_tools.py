@@ -10,6 +10,7 @@ from decimal import Decimal
 
 from sqlalchemy import or_
 
+from app.config import settings
 from app.db.models import LedgerEntry, LedgerSettlement, ScheduledMessage
 from app.db.session import SessionLocal
 from app.tools.accounting_export import generate_ledger_xlsx
@@ -17,6 +18,30 @@ from app.tools.accounting_fifo import DebtLeg, apply_payment
 from app.tools.accounting_fx import to_ils
 
 logger = logging.getLogger(__name__)
+
+
+def _household_phones() -> set[str]:
+    """Return phone numbers of members who share a single household account."""
+    if not settings.family_household_members or not settings.family_members_json:
+        return set()
+    try:
+        import json
+        members = json.loads(settings.family_members_json)
+    except Exception:
+        return set()
+    names = [n.strip() for n in settings.family_household_members.split(",") if n.strip()]
+    return {members[n] for n in names if n in members}
+
+
+def _phone_to_name() -> dict[str, str]:
+    """Return phone → display name. Household members all map to 'Parents'."""
+    try:
+        import json
+        members = json.loads(settings.family_members_json) if settings.family_members_json else {}
+    except Exception:
+        members = {}
+    household = _household_phones()
+    return {phone: ("Parents" if phone in household else name) for name, phone in members.items()}
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -263,17 +288,39 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
     phone_a = params["phone_a"]
     phone_b = params.get("phone_b")
 
+    household = _household_phones()
+    names = _phone_to_name()
+
+    def label(phone: str) -> str:
+        return names.get(phone, phone)
+
+    def net_vs_group(db, group_jid, from_phone, to_phones):
+        """Net balance: from_phone owes to_phones (aggregated)."""
+        owes = sum(_net_owed(db, group_jid, from_phone, cp) for cp in to_phones)
+        owed = sum(_net_owed(db, group_jid, cp, from_phone) for cp in to_phones)
+        return owes - owed
+
     with SessionLocal() as db:
         if phone_b:
-            a_owes_b = _net_owed(db, group_jid, phone_a, phone_b)
-            b_owes_a = _net_owed(db, group_jid, phone_b, phone_a)
-            net = a_owes_b - b_owes_a
-            if net > Decimal("0"):
-                return f"{phone_a} owes {phone_b}: {net:.2f} ILS"
-            elif net < Decimal("0"):
-                return f"{phone_b} owes {phone_a}: {(-net):.2f} ILS"
-            return f"{phone_a} and {phone_b} are settled up."
+            # Both in same household — no debt tracked between them
+            if phone_a in household and phone_b in household:
+                return f"{label(phone_a)} and {label(phone_b)} share a household — no debt tracked between them."
 
+            # Expand household side to all member phones
+            counterparts_a = household if phone_b in household else {phone_b}
+            counterparts_b = household if phone_a in household else {phone_a}
+
+            net = net_vs_group(db, group_jid, phone_a, counterparts_a) if phone_a not in household \
+                else -net_vs_group(db, group_jid, phone_b, counterparts_b)
+
+            la, lb = label(phone_a), label(phone_b)
+            if net > Decimal("0"):
+                return f"{la} owes {lb}: {net:.2f} ILS"
+            elif net < Decimal("0"):
+                return f"{lb} owes {la}: {(-net):.2f} ILS"
+            return f"{la} and {lb} are settled up."
+
+        # Summary: all partners of phone_a
         rows = (
             db.query(LedgerEntry)
             .filter(
@@ -282,22 +329,37 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
             )
             .all()
         )
-        partners = {
-            r.from_phone if r.to_phone == phone_a else r.to_phone
-            for r in rows
-        }
+        all_partners = {r.from_phone if r.to_phone == phone_a else r.to_phone for r in rows}
+        all_partners.discard(phone_a)
+        # Never show intra-household balances
+        if phone_a in household:
+            all_partners -= household
+
+        # Collapse household phones into one "Parents" entry
+        household_partners = all_partners & household
+        individual_partners = sorted(all_partners - household)
 
         lines = []
-        for partner in sorted(partners):
+
+        if household_partners and phone_a not in household:
+            net = net_vs_group(db, group_jid, phone_a, household_partners)
+            la = label(phone_a)
+            if net > Decimal("0"):
+                lines.append(f"{la} owes Parents: {net:.2f} ILS")
+            elif net < Decimal("0"):
+                lines.append(f"Parents owe {la}: {(-net):.2f} ILS")
+
+        for partner in individual_partners:
             a_owes = _net_owed(db, group_jid, phone_a, partner)
             p_owes = _net_owed(db, group_jid, partner, phone_a)
             net = a_owes - p_owes
+            la, lp = label(phone_a), label(partner)
             if net > Decimal("0"):
-                lines.append(f"{phone_a} owes {partner}: {net:.2f} ILS")
+                lines.append(f"{la} owes {lp}: {net:.2f} ILS")
             elif net < Decimal("0"):
-                lines.append(f"{partner} owes {phone_a}: {(-net):.2f} ILS")
+                lines.append(f"{lp} owes {la}: {(-net):.2f} ILS")
 
-        return "\n".join(lines) if lines else f"No open balances for {phone_a}."
+        return "\n".join(lines) if lines else f"No open balances for {label(phone_a)}."
 
 
 async def _exec_get_history(params: dict, **ctx) -> str:
@@ -319,12 +381,15 @@ async def _exec_get_history(params: dict, **ctx) -> str:
     if not rows:
         return "No transactions found."
 
+    names = _phone_to_name()
     lines = []
     for r in rows:
         remaining = r.amount_ils - (r.amount_settled_ils or Decimal("0"))
         status = "settled" if remaining <= Decimal("0") else f"{remaining:.2f} ILS remaining"
+        frm = names.get(r.from_phone, r.from_phone)
+        to = names.get(r.to_phone, r.to_phone)
         lines.append(
-            f"{r.transaction_date} | {r.from_phone} → {r.to_phone} | "
+            f"{r.transaction_date} | {frm} → {to} | "
             f"{r.amount_ils:.2f} ILS | {status} | {r.description}"
         )
     return "\n".join(lines)
