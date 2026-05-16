@@ -1,3 +1,79 @@
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from app.command_handler import CommandHandler
+from app.db.models import GroupRegistry, AdminNumbers, Blueprint
+
+
+def _seed(db):
+    db.add(AdminNumbers(phone_number="972500000001"))
+    db.add(Blueprint(
+        id="invoice_curator",
+        display_name="Invoice Curator",
+        system_prompt="prompt",
+        tools_enabled="[]",
+    ))
+    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="invoice_curator"))
+    db.commit()
+
+
+@pytest.mark.asyncio
+async def test_sync_stores_description(db):
+    _seed(db)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"description": "Work invoices only. USD."}
+    mock_resp.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    handler = CommandHandler(bridge_url="http://bridge:3000")
+    with patch("app.command_handler.httpx.AsyncClient", return_value=mock_client):
+        reply = await handler.handle(db, "123@g.us", "972500000001", "/sync")
+
+    assert "synced" in reply.lower()
+    db.expire_all()
+    entry = db.get(GroupRegistry, "123@g.us")
+    assert entry.custom_instructions == "Work invoices only. USD."
+
+
+@pytest.mark.asyncio
+async def test_sync_clears_instructions_when_description_empty(db):
+    _seed(db)
+    db.get(GroupRegistry, "123@g.us").custom_instructions = "old value"
+    db.commit()
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"description": ""}
+    mock_resp.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    handler = CommandHandler(bridge_url="http://bridge:3000")
+    with patch("app.command_handler.httpx.AsyncClient", return_value=mock_client):
+        await handler.handle(db, "123@g.us", "972500000001", "/sync")
+
+    db.expire_all()
+    entry = db.get(GroupRegistry, "123@g.us")
+    assert entry.custom_instructions is None
+
+
+@pytest.mark.asyncio
+async def test_sync_no_group_bound(db):
+    db.add(AdminNumbers(phone_number="972500000001"))
+    db.commit()
+
+    handler = CommandHandler(bridge_url="http://bridge:3000")
+    reply = await handler.handle(db, "999@g.us", "972500000001", "/sync")
+    assert "no agent" in reply.lower()
+
+
 from app.db.models import GroupRegistry
 
 

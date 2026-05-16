@@ -1,3 +1,4 @@
+import httpx
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from app.db.models import Blueprint, GroupRegistry, AdminNumbers, ConversationHistory
@@ -6,7 +7,10 @@ _VALID_TRIGGERS = {"always", "mention", "prefix"}
 
 
 class CommandHandler:
-    COMMANDS = {"/bind", "/unbind", "/pause", "/resume", "/blueprints"}
+    COMMANDS = {"/bind", "/unbind", "/pause", "/resume", "/blueprints", "/sync"}
+
+    def __init__(self, bridge_url: str = ""):
+        self._bridge_url = bridge_url
 
     def is_command(self, text: str) -> bool:
         if not text:
@@ -91,6 +95,26 @@ class CommandHandler:
             entry.status = "active"
             db.commit()
             return "Agent resumed."
+
+        if cmd == "/sync":
+            entry = db.query(GroupRegistry).filter_by(group_jid=group_jid).first()
+            if not entry:
+                return "No agent is bound to this group."
+            if not self._bridge_url:
+                return "Bridge URL not configured — cannot fetch group description."
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.get(f"{self._bridge_url}/group-meta/{group_jid}")
+                    resp.raise_for_status()
+                    description = resp.json().get("description", "").strip()
+            except Exception as exc:
+                return f"Failed to fetch group description: {exc}"
+            entry.custom_instructions = description or None
+            db.commit()
+            if description:
+                preview = description[:80] + ("…" if len(description) > 80 else "")
+                return f"Custom instructions synced: \"{preview}\""
+            return "Group description is empty — custom instructions cleared."
 
         return f"Unknown command: {parts[0]}. Try /blueprints."
 
