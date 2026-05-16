@@ -170,7 +170,7 @@ async def _process(payload: WebhookPayload) -> None:
             message=agent_message,
             context=context_store,
             confirmation_store=confirmation_store,
-            custom_instructions=entry.custom_instructions if entry else None,
+            custom_instructions=entry.custom_instructions,
         )
         await _send(payload.jid, reply)
     except Exception:
