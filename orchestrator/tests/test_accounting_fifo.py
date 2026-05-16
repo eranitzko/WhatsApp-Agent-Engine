@@ -69,3 +69,15 @@ def test_fully_settled_debt_is_skipped():
     result = apply_payment(Decimal("50"), debts)
     assert all(d != "done" for d, _ in result.settlements)
     assert ("open", Decimal("50")) in result.settlements
+
+
+def test_payment_runs_out_mid_list_partial_settles_last_leg():
+    # 150 payment against two 100 debts: first fully settled, second partially settled
+    debts = [_leg("first", 100, days_ago=5), _leg("second", 100, days_ago=1)]
+    result = apply_payment(Decimal("150"), debts)
+    assert ("first", Decimal("100")) in result.settlements
+    assert ("second", Decimal("50")) in result.settlements
+    assert result.leftover == Decimal("0")
+    # second debt only partially settled
+    second_updated = next(amt for leg_id, amt in result.updated_legs if leg_id == "second")
+    assert second_updated == Decimal("50")
