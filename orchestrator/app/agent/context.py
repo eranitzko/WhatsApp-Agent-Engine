@@ -162,5 +162,3 @@ class ContextStore:
             del self._cache[group_id]
 
 
-# Singleton used by the agent
-context_store = ContextStore()

@@ -1,6 +1,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel
@@ -17,7 +18,6 @@ from app.command_handler import CommandHandler
 from app.agent.context import ContextStore
 from app.agent.confirmation import confirmation_store
 from app.tools.invoice_tools import get_invoice_tools
-from app.tools.notion_tools import get_notion_tools
 from app.pipeline.pipeline import process_image_event
 from app.utils.rate_limiter import rate_limiter
 from app.logging_config import configure_logging
@@ -45,6 +45,7 @@ command_handler = CommandHandler()
 context_store = ContextStore()
 tool_registry = ToolRegistry()
 agent_runner: AgentRunner | None = None
+_http_client: Optional[httpx.AsyncClient] = None
 
 
 class WebhookPayload(BaseModel):
@@ -61,7 +62,10 @@ class WebhookPayload(BaseModel):
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global agent_runner
+    global agent_runner, _http_client
+
+    if not settings.anthropic_api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is required but not set")
 
     db = SessionLocal()
     seeder.seed(
@@ -72,14 +76,20 @@ async def lifespan(_app: FastAPI):
     db.close()
 
     anthropic_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    _http_client = httpx.AsyncClient()
 
     tool_registry.register(get_invoice_tools())
-    tool_registry.register(get_notion_tools(settings.notion_api_key, settings.notion_tasks_database_id))
+    if settings.notion_api_key:
+        from app.tools.notion_tools import get_notion_tools
+        tool_registry.register(get_notion_tools(settings.notion_api_key, settings.notion_tasks_database_id))
+    else:
+        logger.warning("NOTION_API_KEY not set — Notion tools disabled")
 
     agent_runner = AgentRunner(anthropic_client, tool_registry)
 
     logger.info("WhatsApp Agent Engine started — %d tools registered", len(tool_registry._tools))
     yield
+    await _http_client.aclose()
     logger.info("Shutting down.")
 
 
@@ -182,12 +192,11 @@ def _pipeline_result_to_message(result: dict) -> str:
 
 
 async def _send(jid: str, text: str) -> None:
-    async with httpx.AsyncClient() as client:
-        try:
-            await client.post(
-                f"{settings.bridge_url}/send",
-                json={"jid": jid, "text": text},
-                timeout=10,
-            )
-        except Exception:
-            logger.exception("Failed to send message to bridge for %s", jid)
+    try:
+        await _http_client.post(
+            f"{settings.bridge_url}/send",
+            json={"jid": jid, "text": text},
+            timeout=10,
+        )
+    except Exception:
+        logger.exception("Failed to send message to bridge for %s", jid)
