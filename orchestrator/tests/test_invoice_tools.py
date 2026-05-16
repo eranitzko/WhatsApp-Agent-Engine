@@ -1,3 +1,6 @@
+import inspect
+from unittest.mock import MagicMock
+
 import pytest
 from app.tools.invoice_tools import get_invoice_tools
 
@@ -33,8 +36,6 @@ async def test_request_confirmation_without_store_returns_error():
     )
     assert "Error" in result or "not available" in result
 
-from unittest.mock import MagicMock
-
 @pytest.mark.asyncio
 async def test_request_confirmation_calls_store():
     mock_store = MagicMock()
@@ -44,9 +45,33 @@ async def test_request_confirmation_calls_store():
         group_jid="123@g.us",
         confirmation_store=mock_store,
     )
-    mock_store.set.assert_called_once()
+    mock_store.set.assert_called_once_with("123@g.us", "remove_invoice", {"invoice_id": "abc"}, "Remove invoice abc")
     assert "yes" in result.lower() or "confirm" in result.lower()
 
 def test_system_prompt_is_substantial():
     from app.prompts.invoice_curator import INVOICE_CURATOR_SYSTEM_PROMPT
     assert len(INVOICE_CURATOR_SYSTEM_PROMPT) > 500
+
+
+def test_each_schema_has_required_keys():
+    tools = get_invoice_tools()
+    for name, entry in tools.items():
+        missing = {"name", "description", "input_schema"} - entry["schema"].keys()
+        assert not missing, f"{name}: schema missing keys {missing}"
+
+
+def test_get_status_executor_is_async_callable():
+    tools = get_invoice_tools()
+    executor = tools["get_status"]["executor"]
+    assert callable(executor)
+    assert inspect.iscoroutinefunction(executor)
+
+
+def test_multiple_calls_return_fresh_executors():
+    tools_a = get_invoice_tools()
+    tools_b = get_invoice_tools()
+    wrapped_tools = [n for n in EXPECTED_TOOLS if n != "request_confirmation"]
+    for name in wrapped_tools:
+        assert tools_a[name]["executor"] is not tools_b[name]["executor"], (
+            f"{name}: executor is the same object across calls"
+        )
