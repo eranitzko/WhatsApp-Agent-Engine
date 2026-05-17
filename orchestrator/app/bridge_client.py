@@ -36,15 +36,22 @@ async def send_text(jid: str, text: str) -> None:
             raise
 
 
-async def fetch_group_description(jid: str) -> str:
-    """Fetch the WhatsApp group description from the bridge. Returns "" if unset."""
+async def fetch_group_meta(jid: str) -> dict:
+    """Fetch group description and participant list from the bridge.
+
+    Returns: {"description": str, "participants": [{"jid": str, "isAdmin": bool}]}
+    """
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(
             f"{settings.bridge_url}/group-meta/{jid}",
             headers=_bridge_headers(),
         )
         resp.raise_for_status()
-        return resp.json().get("description", "").strip()
+        data = resp.json()
+        return {
+            "description": data.get("description", "").strip(),
+            "participants": data.get("participants", []),
+        }
 
 
 async def send_file(jid: str, filename: str, mime_type: str, data: bytes) -> None:

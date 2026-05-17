@@ -20,7 +20,10 @@ def _seed(db):
 async def test_sync_stores_description(db):
     _seed(db)
     handler = CommandHandler(bridge_url="http://bridge:3000")
-    with patch("app.command_handler.fetch_group_description", new=AsyncMock(return_value="Work invoices only. USD.")):
+    with patch("app.command_handler.fetch_group_meta", new=AsyncMock(return_value={
+        "description": "Work invoices only. USD.",
+        "participants": [],
+    })):
         reply = await handler.handle(db, "123@g.us", "972500000001", "/sync")
 
     assert "synced" in reply.lower()
@@ -36,7 +39,10 @@ async def test_sync_clears_instructions_when_description_empty(db):
     db.commit()
 
     handler = CommandHandler(bridge_url="http://bridge:3000")
-    with patch("app.command_handler.fetch_group_description", new=AsyncMock(return_value="")):
+    with patch("app.command_handler.fetch_group_meta", new=AsyncMock(return_value={
+        "description": "",
+        "participants": [],
+    })):
         await handler.handle(db, "123@g.us", "972500000001", "/sync")
 
     db.expire_all()
@@ -106,7 +112,7 @@ async def test_sync_bridge_http_error(db):
     db.commit()
 
     handler = CommandHandler(bridge_url="http://bridge:3000")
-    with patch("app.command_handler.fetch_group_description", new=AsyncMock(side_effect=Exception("connection refused"))):
+    with patch("app.command_handler.fetch_group_meta", new=AsyncMock(side_effect=Exception("connection refused"))):
         reply = await handler.handle(db, "123@g.us", "972500000001", "/sync")
 
     assert "failed" in reply.lower() or "connection" in reply.lower()
