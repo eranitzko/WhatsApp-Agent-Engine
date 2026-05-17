@@ -17,6 +17,8 @@ from app.tool_registry import ToolRegistry
 from app.command_handler import CommandHandler
 from app.agent.context import ContextStore
 from app.agent.confirmation import confirmation_store
+from app.db.models import GroupParticipant
+from app.participants import build_participant_block
 from app.tools.invoice_tools import get_invoice_tools
 from app.tools.accounting_tools import get_accounting_tools
 from app.scheduler import start_scheduler, stop_scheduler
@@ -30,6 +32,35 @@ logger = logging.getLogger(__name__)
 _WEBHOOK_SECRET: str = os.environ.get("WEBHOOK_SECRET", "")
 if not _WEBHOOK_SECRET:
     logger.warning("WEBHOOK_SECRET is not configured — /webhook accepts unauthenticated requests")
+
+
+def _upsert_participant(
+    db,
+    group_jid: str,
+    phone: str,
+    *,
+    push_name: str | None = None,
+    status: str = "active",
+    removed_at=None,
+) -> None:
+    from datetime import datetime, timezone
+    row = db.get(GroupParticipant, (group_jid, phone))
+    if row is None:
+        db.add(GroupParticipant(
+            group_jid=group_jid,
+            phone=phone,
+            push_name=push_name,
+            status=status,
+            removed_at=removed_at,
+        ))
+    else:
+        if status != row.status:
+            row.status = status
+        if removed_at is not None:
+            row.removed_at = removed_at
+        if push_name is not None and row.admin_name is None and row.push_name != push_name:
+            row.push_name = push_name
+    db.commit()
 
 
 def _verify_webhook_auth(request: Request) -> None:
@@ -60,6 +91,9 @@ class WebhookPayload(BaseModel):
     image_base64: str | None = None
     mime_type: str | None = None
     caption: str | None = None
+    push_name: str | None = None
+    action: str | None = None
+    participants: list[str] | None = None
 
 
 @asynccontextmanager
@@ -117,6 +151,33 @@ async def _process(payload: WebhookPayload) -> None:
     db = SessionLocal()
     try:
         logger.debug("Processing event: type=%s jid=%s", payload.type, payload.jid)
+
+        # Track participant names passively from every incoming message
+        if payload.push_name and payload.sender and payload.jid:
+            sender_phone = payload.sender.split("@")[0].split(":")[0]
+            if sender_phone:
+                try:
+                    _upsert_participant(db, payload.jid, sender_phone, push_name=payload.push_name)
+                except Exception:
+                    db.rollback()
+                    logger.debug("Could not upsert participant %s", sender_phone)
+
+        # Handle participant join/leave events
+        if payload.type == "participant_update":
+            if payload.participants and payload.action in ("add", "remove", "leave"):
+                from datetime import datetime, timezone
+                for jid_str in payload.participants:
+                    phone = jid_str.split("@")[0].split(":")[0]
+                    if not phone:
+                        continue
+                    if payload.action == "add":
+                        _upsert_participant(db, payload.jid, phone, status="active")
+                    else:
+                        _upsert_participant(db, payload.jid, phone,
+                                            status="removed",
+                                            removed_at=datetime.now(timezone.utc))
+            return
+
         text = payload.text or payload.caption or ""
 
         # Commands are checked before blueprint lookup so /bind works on unregistered groups
@@ -130,6 +191,8 @@ async def _process(payload: WebhookPayload) -> None:
         blueprint, entry = router.resolve(db, payload.jid)
         if blueprint is None:
             return
+
+        participant_block = build_participant_block(db, payload.jid)
 
         # Rate limiting
         if payload.type == "image":
@@ -171,6 +234,7 @@ async def _process(payload: WebhookPayload) -> None:
             context=context_store,
             confirmation_store=confirmation_store,
             custom_instructions=entry.custom_instructions,
+            participant_block=participant_block,
         )
         await _send(payload.jid, reply)
     except Exception:
