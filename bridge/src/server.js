@@ -103,7 +103,13 @@ app.get('/group-meta/:jid', requireBridgeAuth, async (req, res) => {
   }
   try {
     const meta = await sock.groupMetadata(req.params.jid)
-    res.json({ description: meta.desc || '' })
+    res.json({
+      description: meta.desc || '',
+      participants: (meta.participants || []).map(p => ({
+        jid: p.id,
+        isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+      })),
+    })
   } catch (err) {
     console.error('Failed to fetch group metadata:', err.message)
     res.status(500).json({ error: err.message })

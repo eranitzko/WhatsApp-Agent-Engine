@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from app.db.models import Blueprint, GroupRegistry, AdminNumbers, ConversationHistory
-from app.bridge_client import fetch_group_description
+from app.bridge_client import fetch_group_meta
 
 _VALID_TRIGGERS = {"always", "mention", "prefix"}
 
@@ -103,15 +103,31 @@ class CommandHandler:
             if not self._bridge_url:
                 return "Bridge URL not configured — cannot fetch group description."
             try:
-                description = await fetch_group_description(group_jid)
+                meta = await fetch_group_meta(group_jid)
             except Exception as exc:
-                return f"Failed to fetch group description: {exc}"
+                return f"Failed to fetch group metadata: {exc}"
+
+            description = meta["description"]
             entry.custom_instructions = description or None
+
+            from app.db.models import GroupParticipant
+            for p in meta.get("participants", []):
+                phone = p["jid"].split("@")[0].split(":")[0]
+                if not phone:
+                    continue
+                row = db.get(GroupParticipant, (group_jid, phone))
+                if row is None:
+                    db.add(GroupParticipant(group_jid=group_jid, phone=phone, status="active"))
+                elif row.status == "removed":
+                    row.status = "active"
+                    row.removed_at = None
+
             db.commit()
+            n = len(meta.get("participants", []))
             if description:
                 preview = description[:80] + ("…" if len(description) > 80 else "")
-                return f"Custom instructions synced: \"{preview}\""
-            return "Group description is empty — custom instructions cleared."
+                return f"Synced {n} participants. Custom instructions: \"{preview}\""
+            return f"Synced {n} participants. No custom instructions set."
 
         return f"Unknown command: {parts[0]}. Try /blueprints."
 

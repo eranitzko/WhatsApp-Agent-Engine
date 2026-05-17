@@ -85,8 +85,23 @@ export async function connect() {
   })
 
   // Invalidate admin cache whenever group membership or roles change
-  sock.ev.on('group-participants.update', ({ id }) => {
+  sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
     invalidateGroup(id)
+    if (action === 'add' || action === 'remove' || action === 'leave') {
+      try {
+        await forwardToBackend({
+          type: 'participant_update',
+          jid: id,
+          sender: '',
+          messageId: '',
+          isAdmin: false,
+          action,
+          participants,
+        })
+      } catch (err) {
+        console.error('Failed to forward participant update:', err.message)
+      }
+    }
   })
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
@@ -143,6 +158,7 @@ export async function connect() {
                 sender,
                 messageId,
                 isAdmin,
+                pushName: msg.pushName || '',
                 imageBase64: compressedBuffer.toString('base64'),
                 mimeType: 'image/jpeg',
                 caption: imageMessage.caption || '',
@@ -159,6 +175,7 @@ export async function connect() {
             sender,
             messageId,
             isAdmin,
+            pushName: msg.pushName || '',
             text: text.trim(),
           })
         }
