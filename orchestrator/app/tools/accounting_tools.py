@@ -10,7 +10,6 @@ from decimal import Decimal
 
 from sqlalchemy import or_
 
-from app.config import settings
 from app.db.models import LedgerEntry, LedgerSettlement, ScheduledMessage
 from app.db.session import SessionLocal
 from app.tools.accounting_export import generate_ledger_xlsx
@@ -20,28 +19,23 @@ from app.tools.accounting_fx import to_ils
 logger = logging.getLogger(__name__)
 
 
-def _household_phones() -> set[str]:
-    """Return phone numbers of members who share a single household account."""
-    if not settings.family_household_members or not settings.family_members_json:
-        return set()
-    try:
-        import json
-        members = json.loads(settings.family_members_json)
-    except Exception:
-        return set()
-    names = [n.strip() for n in settings.family_household_members.split(",") if n.strip()]
-    return {members[n] for n in names if n in members}
+def _household_phones_from_db(db, group_jid: str) -> set[str]:
+    """Return phones of participants with is_household=True for this group."""
+    from app.db.models import GroupParticipant
+    rows = db.query(GroupParticipant).filter_by(group_jid=group_jid, is_household=True).all()
+    return {r.phone for r in rows}
 
 
-def _phone_to_name() -> dict[str, str]:
-    """Return phone → display name. Household members all map to 'Parents'."""
-    try:
-        import json
-        members = json.loads(settings.family_members_json) if settings.family_members_json else {}
-    except Exception:
-        members = {}
-    household = _household_phones()
-    return {phone: ("Parents" if phone in household else name) for name, phone in members.items()}
+def _phone_to_name_from_db(db, group_jid: str) -> dict[str, str]:
+    """Return phone → display name. Household members map to 'Parents'."""
+    from app.db.models import GroupParticipant
+    rows = db.query(GroupParticipant).filter_by(group_jid=group_jid).all()
+    household = {r.phone for r in rows if r.is_household}
+    result = {}
+    for r in rows:
+        name = r.admin_name or r.push_name or r.phone
+        result[r.phone] = "Parents" if r.phone in household else name
+    return result
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -141,6 +135,36 @@ _SCHEMAS: dict[str, dict] = {
                 "send_at": {"type": "string", "description": "ISO 8601 datetime, e.g. 2026-06-01T09:00:00"},
             },
             "required": ["message", "send_at"],
+        },
+    },
+    "rename_participant": {
+        "name": "rename_participant",
+        "description": (
+            "Set or clear the display name for a group participant. "
+            "Pass empty string to revert to their WhatsApp push name. Admin only."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "phone": {"type": "string", "description": "The participant's phone number (digits only)"},
+                "name": {"type": "string", "description": "New display name, or empty string to clear override"},
+            },
+            "required": ["phone", "name"],
+        },
+    },
+    "set_household": {
+        "name": "set_household",
+        "description": (
+            "Mark or unmark a participant as part of the shared household (shown as 'Parents'). "
+            "Admin only."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "phone": {"type": "string", "description": "The participant's phone number (digits only)"},
+                "is_household": {"type": "boolean", "description": "True to add to household, False to remove"},
+            },
+            "required": ["phone", "is_household"],
         },
     },
 }
@@ -288,31 +312,25 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
     phone_a = params["phone_a"]
     phone_b = params.get("phone_b")
 
-    household = _household_phones()
-    names = _phone_to_name()
-
-    def label(phone: str) -> str:
-        return names.get(phone, phone)
-
     def net_vs_group(db, group_jid, from_phone, to_phones):
-        """Net balance: from_phone owes to_phones (aggregated)."""
         owes = sum(_net_owed(db, group_jid, from_phone, cp) for cp in to_phones)
         owed = sum(_net_owed(db, group_jid, cp, from_phone) for cp in to_phones)
         return owes - owed
 
     with SessionLocal() as db:
+        household = _household_phones_from_db(db, group_jid)
+        names = _phone_to_name_from_db(db, group_jid)
+
+        def label(phone: str) -> str:
+            return names.get(phone, phone)
+
         if phone_b:
-            # Both in same household — no debt tracked between them
             if phone_a in household and phone_b in household:
                 return f"{label(phone_a)} and {label(phone_b)} share a household — no debt tracked between them."
-
-            # Expand household side to all member phones
             counterparts_a = household if phone_b in household else {phone_b}
             counterparts_b = household if phone_a in household else {phone_a}
-
             net = net_vs_group(db, group_jid, phone_a, counterparts_a) if phone_a not in household \
                 else -net_vs_group(db, group_jid, phone_b, counterparts_b)
-
             la, lb = label(phone_a), label(phone_b)
             if net > Decimal("0"):
                 return f"{la} owes {lb}: {net:.2f} ILS"
@@ -320,7 +338,6 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
                 return f"{lb} owes {la}: {(-net):.2f} ILS"
             return f"{la} and {lb} are settled up."
 
-        # Summary: all partners of phone_a
         rows = (
             db.query(LedgerEntry)
             .filter(
@@ -331,16 +348,11 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
         )
         all_partners = {r.from_phone if r.to_phone == phone_a else r.to_phone for r in rows}
         all_partners.discard(phone_a)
-        # Never show intra-household balances
         if phone_a in household:
             all_partners -= household
-
-        # Collapse household phones into one "Parents" entry
         household_partners = all_partners & household
         individual_partners = sorted(all_partners - household)
-
         lines = []
-
         if household_partners and phone_a not in household:
             net = net_vs_group(db, group_jid, phone_a, household_partners)
             la = label(phone_a)
@@ -348,7 +360,6 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
                 lines.append(f"{la} owes Parents: {net:.2f} ILS")
             elif net < Decimal("0"):
                 lines.append(f"Parents owe {la}: {(-net):.2f} ILS")
-
         for partner in individual_partners:
             a_owes = _net_owed(db, group_jid, phone_a, partner)
             p_owes = _net_owed(db, group_jid, partner, phone_a)
@@ -358,7 +369,6 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
                 lines.append(f"{la} owes {lp}: {net:.2f} ILS")
             elif net < Decimal("0"):
                 lines.append(f"{lp} owes {la}: {(-net):.2f} ILS")
-
         return "\n".join(lines) if lines else f"No open balances for {label(phone_a)}."
 
 
@@ -377,11 +387,11 @@ async def _exec_get_history(params: dict, **ctx) -> str:
         if to_date:
             q = q.filter(LedgerEntry.transaction_date <= date.fromisoformat(to_date))
         rows = q.order_by(LedgerEntry.transaction_date).all()
+        names = _phone_to_name_from_db(db, group_jid)
 
     if not rows:
         return "No transactions found."
 
-    names = _phone_to_name()
     lines = []
     for r in rows:
         remaining = r.amount_ils - (r.amount_settled_ils or Decimal("0"))
@@ -455,18 +465,73 @@ async def _exec_set_reminder(params: dict, **ctx) -> str:
     return f"Reminder set for {send_at.isoformat()}: \"{message}\""
 
 
+async def _exec_rename_participant(params: dict, **ctx) -> str:
+    if not ctx.get("is_admin"):
+        return "Only admins can rename participants."
+    group_jid = ctx.get("group_jid", "")
+    phone = params["phone"]
+    name = params["name"].strip()
+
+    db = ctx.get("db")
+    close_db = db is None
+    if db is None:
+        db = SessionLocal()
+    try:
+        from app.db.models import GroupParticipant
+        row = db.get(GroupParticipant, (group_jid, phone))
+        if row is None:
+            return f"Participant {phone} not found in this group."
+        row.admin_name = name or None
+        db.commit()
+        display = name or row.push_name or phone
+        if name:
+            return f"Renamed {phone} to \"{display}\"."
+        return f"Display name cleared for {phone} — reverted to WhatsApp name."
+    finally:
+        if close_db:
+            db.close()
+
+
+async def _exec_set_household(params: dict, **ctx) -> str:
+    if not ctx.get("is_admin"):
+        return "Only admins can change household membership."
+    group_jid = ctx.get("group_jid", "")
+    phone = params["phone"]
+    is_household = params["is_household"]
+
+    db = ctx.get("db")
+    close_db = db is None
+    if db is None:
+        db = SessionLocal()
+    try:
+        from app.db.models import GroupParticipant
+        row = db.get(GroupParticipant, (group_jid, phone))
+        if row is None:
+            return f"Participant {phone} not found in this group."
+        row.is_household = is_household
+        db.commit()
+        name = row.admin_name or row.push_name or phone
+        action = "added to" if is_household else "removed from"
+        return f"{name} {action} the shared household account."
+    finally:
+        if close_db:
+            db.close()
+
+
 # ── Public factory ─────────────────────────────────────────────────────────────
 
 def get_accounting_tools() -> dict[str, dict]:
-    """Return all 6 accounting tools in ToolRegistry format."""
+    """Return all 8 accounting tools in ToolRegistry format."""
     return {
         name: {"schema": _SCHEMAS[name], "executor": executor}
         for name, executor in [
-            ("record_transaction", _exec_record_transaction),
-            ("record_payment",     _exec_record_payment),
-            ("get_balance",        _exec_get_balance),
-            ("get_history",        _exec_get_history),
-            ("export_ledger",      _exec_export_ledger),
-            ("set_reminder",       _exec_set_reminder),
+            ("record_transaction",  _exec_record_transaction),
+            ("record_payment",      _exec_record_payment),
+            ("get_balance",         _exec_get_balance),
+            ("get_history",         _exec_get_history),
+            ("export_ledger",       _exec_export_ledger),
+            ("set_reminder",        _exec_set_reminder),
+            ("rename_participant",  _exec_rename_participant),
+            ("set_household",       _exec_set_household),
         ]
     }

@@ -3,8 +3,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Blueprint, GroupRegistry, AdminNumbers
 from app.prompts.invoice_curator import INVOICE_CURATOR_SYSTEM_PROMPT
 from app.prompts.notion_assistant import NOTION_ASSISTANT_SYSTEM_PROMPT
-from app.prompts.family_accounting import build_family_accounting_prompt
-from app.config import settings
+from app.prompts.family_accounting import FAMILY_ACCOUNTING_SYSTEM_PROMPT
 
 
 INVOICE_CURATOR_TOOLS = [
@@ -20,24 +19,8 @@ NOTION_ASSISTANT_TOOLS = [
 FAMILY_ACCOUNTING_TOOLS = [
     "record_transaction", "record_payment", "get_balance",
     "get_history", "export_ledger", "set_reminder",
+    "rename_participant", "set_household",
 ]
-
-
-def _family_members() -> dict[str, str]:
-    """Parse FAMILY_MEMBERS_JSON from settings. Returns empty dict on error."""
-    if not settings.family_members_json:
-        return {}
-    try:
-        return json.loads(settings.family_members_json)
-    except (json.JSONDecodeError, ValueError):
-        return {}
-
-
-def _household_members() -> list[str]:
-    """Parse FAMILY_HOUSEHOLD_MEMBERS (comma-separated names). Returns empty list on error."""
-    if not settings.family_household_members:
-        return []
-    return [n.strip() for n in settings.family_household_members.split(",") if n.strip()]
 
 
 DEFAULT_BLUEPRINTS = [
@@ -70,18 +53,17 @@ def seed(db: Session, admin_phone: str, legacy_group_jid: str | None = None) -> 
         if not db.query(Blueprint).filter_by(id=bp_data["id"]).first():
             db.add(Blueprint(**bp_data))
 
-    # Family accounting blueprint — system prompt rebuilt on every startup so
-    # changes to FAMILY_MEMBERS_JSON / FAMILY_HOUSEHOLD_MEMBERS take effect
-    # without a manual DB edit.
-    fa_prompt = build_family_accounting_prompt(_family_members(), _household_members())
+    # Family accounting blueprint — upsert static prompt so old template-based
+    # rows are replaced on next startup.
     fa_bp = db.query(Blueprint).filter_by(id="family_accounting").first()
     if fa_bp:
-        fa_bp.system_prompt = fa_prompt
+        fa_bp.system_prompt = FAMILY_ACCOUNTING_SYSTEM_PROMPT
+        fa_bp.tools_enabled = json.dumps(FAMILY_ACCOUNTING_TOOLS)
     else:
         db.add(Blueprint(
             id="family_accounting",
             display_name="Family Accounting",
-            system_prompt=fa_prompt,
+            system_prompt=FAMILY_ACCOUNTING_SYSTEM_PROMPT,
             model="claude-sonnet-4-6",
             tools_enabled=json.dumps(FAMILY_ACCOUNTING_TOOLS),
             max_tool_turns=5,

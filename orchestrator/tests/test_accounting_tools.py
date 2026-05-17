@@ -11,6 +11,7 @@ from app.tools.accounting_tools import get_accounting_tools
 EXPECTED_TOOLS = [
     "record_transaction", "record_payment", "get_balance",
     "get_history", "export_ledger", "set_reminder",
+    "rename_participant", "set_household",
 ]
 
 
@@ -26,7 +27,7 @@ class _CM:
         pass
 
 
-def test_get_accounting_tools_returns_all_six():
+def test_get_accounting_tools_returns_all_eight():
     tools = get_accounting_tools()
     assert set(tools.keys()) == set(EXPECTED_TOOLS)
 
