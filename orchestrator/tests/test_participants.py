@@ -1,5 +1,6 @@
 import pytest
 from datetime import datetime, timezone
+from sqlalchemy.exc import IntegrityError
 from app.db.models import GroupParticipant
 
 
@@ -40,7 +41,6 @@ def test_participant_admin_name_override(db):
 
 
 def test_participant_removed_keeps_row(db):
-    from datetime import datetime, timezone
     p = GroupParticipant(
         group_jid="123@g.us",
         phone="972509999999",
@@ -54,3 +54,15 @@ def test_participant_removed_keeps_row(db):
     fetched = db.get(GroupParticipant, ("123@g.us", "972509999999"))
     assert fetched.status == "removed"
     assert fetched.removed_at is not None
+
+
+def test_participant_duplicate_pk_raises(db):
+    row1 = GroupParticipant(group_jid="123@g.us", phone="972501111111")
+    db.add(row1)
+    db.commit()
+
+    row2 = GroupParticipant(group_jid="123@g.us", phone="972501111111")
+    db.add(row2)
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
