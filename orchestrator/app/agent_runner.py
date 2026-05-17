@@ -20,6 +20,7 @@ class AgentRunner:
         context,           # GroupContext instance
         confirmation_store, # ConfirmationStore instance
         custom_instructions: str | None = None,
+        participant_block: str | None = None,
     ) -> str:
         allowed_tools = blueprint.tools_list()
 
@@ -59,6 +60,8 @@ class AgentRunner:
                 "text": f"Today's date: {datetime.now(timezone.utc).date()}. Sender is_admin: {is_admin}.",
             },
         ]
+        if participant_block:
+            system.append({"type": "text", "text": participant_block})
         if custom_instructions:
             system.append({
                 "type": "text",
