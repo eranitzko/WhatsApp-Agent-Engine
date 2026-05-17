@@ -121,6 +121,20 @@ class GroupRegistry(Base):
     custom_instructions = Column(Text, nullable=True)
 
 
+class GroupParticipant(Base):
+    __tablename__ = "group_participants"
+
+    group_jid  = Column(String, ForeignKey("group_registry.group_jid"), primary_key=True)
+    phone      = Column(String, primary_key=True)
+    push_name  = Column(String, nullable=True)
+    admin_name = Column(String, nullable=True)
+    is_household = Column(Boolean, nullable=False, default=False)
+    status     = Column(String, nullable=False, default="active")   # active | removed
+    joined_at  = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    removed_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class AdminNumbers(Base):
     __tablename__ = "admin_numbers"
 
