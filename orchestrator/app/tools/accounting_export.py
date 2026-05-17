@@ -3,28 +3,25 @@
 from __future__ import annotations
 
 import io
-import json
 from decimal import Decimal
 
 import openpyxl
 from openpyxl.styles import Font
 
-from app.config import settings
 from app.db.session import SessionLocal
 from app.db.models import LedgerEntry
 
 
-def _phone_to_name() -> dict[str, str]:
+def _phone_to_name_from_db(db, group_jid: str) -> dict[str, str]:
     """Return phone → display name. Household members all map to 'Parents'."""
-    try:
-        members = json.loads(settings.family_members_json) if settings.family_members_json else {}
-    except Exception:
-        members = {}
-    household: set[str] = set()
-    if settings.family_household_members and members:
-        hnames = [n.strip() for n in settings.family_household_members.split(",") if n.strip()]
-        household = {members[n] for n in hnames if n in members}
-    return {phone: ("Parents" if phone in household else name) for name, phone in members.items()}
+    from app.db.models import GroupParticipant
+    rows = db.query(GroupParticipant).filter_by(group_jid=group_jid).all()
+    household = {r.phone for r in rows if r.is_household}
+    result = {}
+    for r in rows:
+        name = r.admin_name or r.push_name or r.phone
+        result[r.phone] = "Parents" if r.phone in household else name
+    return result
 
 
 def generate_ledger_xlsx(group_jid: str) -> bytes:
@@ -36,8 +33,7 @@ def generate_ledger_xlsx(group_jid: str) -> bytes:
             .order_by(LedgerEntry.transaction_date)
             .all()
         )
-
-    names = _phone_to_name()
+        names = _phone_to_name_from_db(db, group_jid)
     wb = openpyxl.Workbook()
 
     ws_bal = wb.active
