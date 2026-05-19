@@ -6,6 +6,7 @@ class Settings(BaseSettings):
 
     # Internal bridge URL (Docker service name)
     bridge_url: str = "http://bridge:3000"
+    bridge_secret: str = ""
 
     # Database (SQLite file on persistent volume)
     database_url: str = "sqlite:////data/invoice_curator.db"

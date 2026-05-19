@@ -17,6 +17,7 @@ from app.tool_registry import ToolRegistry
 from app.command_handler import CommandHandler
 from app.agent.context import ContextStore
 from app.agent.confirmation import confirmation_store
+from app.agent.multi_confirmation import multi_confirmation_store
 from app.db.models import GroupParticipant
 from app.participants import build_participant_block
 from app.tools.invoice_tools import get_invoice_tools
@@ -123,6 +124,9 @@ async def lifespan(_app: FastAPI):
         logger.warning("NOTION_API_KEY not set — Notion tools disabled")
 
     agent_runner = AgentRunner(anthropic_client, tool_registry)
+    multi_confirmation_store.set_sender(
+        lambda jid, text, mentions=None: _send(jid, text, mentions=mentions)
+    )
     start_scheduler()
 
     logger.info("WhatsApp Agent Engine started — %d tools registered", len(tool_registry._tools))
@@ -233,6 +237,7 @@ async def _process(payload: WebhookPayload) -> None:
             message=agent_message,
             context=context_store,
             confirmation_store=confirmation_store,
+            multi_confirmation_store=multi_confirmation_store,
             custom_instructions=entry.custom_instructions,
             participant_block=participant_block,
         )
@@ -261,11 +266,14 @@ def _pipeline_result_to_message(result: dict) -> str:
     return "New invoice received. " + " | ".join(parts) if parts else "New invoice received."
 
 
-async def _send(jid: str, text: str) -> None:
+async def _send(jid: str, text: str, *, mentions: list[str] | None = None) -> None:
     try:
+        payload: dict = {"jid": jid, "text": text}
+        if mentions:
+            payload["mentions"] = mentions
         await _http_client.post(
             f"{settings.bridge_url}/send",
-            json={"jid": jid, "text": text},
+            json=payload,
             timeout=10,
         )
     except Exception:

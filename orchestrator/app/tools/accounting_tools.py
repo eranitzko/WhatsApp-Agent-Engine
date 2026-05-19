@@ -295,6 +295,8 @@ _SCHEMAS: dict[str, dict] = {
 
 async def _exec_record_transaction(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
+    sender = ctx.get("sender", "")
+    sender_phone = sender.split("@")[0].split(":")[0]
     payer = params["payer_phone"]
     participants = params["participant_phones"]
     amount = Decimal(str(params["amount"]))
@@ -318,98 +320,99 @@ async def _exec_record_transaction(params: dict, **ctx) -> str:
         else description
     )
     transaction_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
 
-    with SessionLocal() as db:
-        for phone in participants:
-            db.add(LedgerEntry(
-                transaction_id=transaction_id,
-                group_jid=group_jid,
-                from_phone=phone,
-                to_phone=payer,
-                amount_ils=per_person,
-                amount_settled_ils=Decimal("0"),
-                description=desc_with_fx,
-                transaction_date=tx_date,
-                created_at=now,
-            ))
-        db.commit()
+    # Determine who needs to confirm:
+    # - Each participant (debtor) must confirm unless they sent the message.
+    # - If sender is not the payer, the payer must also confirm.
+    awaiting: list[str] = []
+    for phone in participants:
+        if phone != sender_phone:
+            awaiting.append(phone)
+    if payer != sender_phone and payer not in awaiting:
+        awaiting.append(payer)
 
+    if not awaiting:
+        # All parties are the sender — record immediately
+        now = datetime.now(timezone.utc)
+        with SessionLocal() as db:
+            for phone in participants:
+                db.add(LedgerEntry(
+                    transaction_id=transaction_id,
+                    group_jid=group_jid,
+                    from_phone=phone,
+                    to_phone=payer,
+                    amount_ils=per_person,
+                    amount_settled_ils=Decimal("0"),
+                    description=desc_with_fx,
+                    transaction_date=tx_date,
+                    created_at=now,
+                ))
+            db.commit()
+        split_info = (
+            f"split equally {per_person:.2f} ILS each among {len(participants)}"
+            if len(participants) > 1 else f"{amount_ils:.2f} ILS"
+        )
+        return f"Recorded: {payer} paid for {', '.join(participants)} — {split_info}. (tx: {transaction_id[:8]})"
+
+    # Stage multi-party confirmation
+    mcs = ctx.get("multi_confirmation_store")
+    if mcs is None:
+        return "Error: confirmation system unavailable."
+
+    commit_params = {
+        "group_jid": group_jid,
+        "transaction_id": transaction_id,
+        "payer_phone": payer,
+        "participant_phones": participants,
+        "per_person_ils": str(per_person),
+        "description": desc_with_fx,
+        "transaction_date": tx_date.isoformat(),
+    }
     split_info = (
-        f"split equally {per_person:.2f} ILS each among {len(participants)} people"
-        if len(participants) > 1
-        else f"{amount_ils:.2f} ILS"
+        f"{per_person:.2f} ILS each among {len(participants)} people"
+        if len(participants) > 1 else f"{amount_ils:.2f} ILS"
     )
-    return f"Recorded: {payer} paid for {', '.join(participants)} — {split_info}. (tx: {transaction_id[:8]})"
+    pending_desc = (
+        f"{payer} paid for {', '.join(participants)} — {split_info}\n"
+        f"Description: {description}"
+    )
+    await mcs.propose(group_jid, awaiting, "commit_transaction", commit_params, pending_desc)
+    return f"Confirmation requested from {len(awaiting)} participant(s)."
 
 
 async def _exec_record_payment(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
+    sender = ctx.get("sender", "")
+    sender_phone = sender.split("@")[0].split(":")[0]
     payer = params["payer_phone"]
     payee = params["payee_phone"]
     amount_ils = Decimal(str(params["amount_ils"]))
     pay_date_str = params.get("payment_date") or date.today().isoformat()
     pay_date = date.fromisoformat(pay_date_str)
-    now = datetime.now(timezone.utc)
 
-    with SessionLocal() as db:
-        open_rows = (
-            db.query(LedgerEntry)
-            .filter(
-                LedgerEntry.group_jid == group_jid,
-                LedgerEntry.from_phone == payer,
-                LedgerEntry.to_phone == payee,
-                LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
-            )
-            .order_by(LedgerEntry.transaction_date)
-            .all()
-        )
+    # Determine who needs to confirm:
+    # - If sender is the payer → payee must confirm receiving.
+    # - Otherwise → payer must confirm paying.
+    if sender_phone == payer:
+        awaiting = [payee]
+    else:
+        awaiting = [payer]
 
-        debt_legs = [
-            DebtLeg(
-                id=r.id,
-                amount_ils=r.amount_ils,
-                amount_settled_ils=r.amount_settled_ils or Decimal("0"),
-                transaction_date=r.transaction_date,
-            )
-            for r in open_rows
-        ]
+    mcs = ctx.get("multi_confirmation_store")
+    if mcs is None:
+        return "Error: confirmation system unavailable."
 
-        result = apply_payment(amount_ils, debt_legs)
-
-        for leg_id, new_settled in result.updated_legs:
-            row = db.get(LedgerEntry, leg_id)
-            if row is None:
-                continue
-            row.amount_settled_ils = new_settled
-
-        payment_leg = LedgerEntry(
-            transaction_id=str(uuid.uuid4()),
-            group_jid=group_jid,
-            from_phone=payer,
-            to_phone=payee,
-            amount_ils=amount_ils,
-            amount_settled_ils=amount_ils,
-            description=f"Payment on {pay_date.isoformat()}",
-            transaction_date=pay_date,
-            created_at=now,
-        )
-        db.add(payment_leg)
-        db.flush()
-
-        for debt_leg_id, applied_amount in result.settlements:
-            db.add(LedgerSettlement(
-                payment_leg_id=payment_leg.id,
-                debt_leg_id=debt_leg_id,
-                amount_ils=applied_amount,
-                created_at=now,
-            ))
-        db.commit()
-
-    parts = [f"{amt:.2f} ILS off debt {did[:8]}" for did, amt in result.settlements]
-    summary = "; ".join(parts) if parts else "no open debts found to settle"
-    leftover = f" (overpaid by {result.leftover:.2f} ILS)" if result.leftover > 0 else ""
-    return f"Payment of {amount_ils:.2f} ILS recorded. {summary}.{leftover}"
+    commit_params = {
+        "group_jid": group_jid,
+        "payer_phone": payer,
+        "payee_phone": payee,
+        "amount_ils": str(amount_ils),
+        "payment_date": pay_date.isoformat(),
+    }
+    pending_desc = f"Payment of {amount_ils:.2f} ILS from {payer} to {payee} on {pay_date.isoformat()}"
+    await mcs.propose(group_jid, awaiting, "commit_payment", commit_params, pending_desc)
+    confirmer = "payee" if sender_phone == payer else "payer"
+    return f"Confirmation requested from {confirmer} ({awaiting[0]})."
 
 
 async def _exec_get_balance(params: dict, **ctx) -> str:

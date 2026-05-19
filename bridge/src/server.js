@@ -41,14 +41,18 @@ app.get('/health', (_req, res) => {
 })
 
 app.post('/send', requireBridgeAuth, async (req, res) => {
-  const { jid, text } = req.body
+  const { jid, text, mentions } = req.body
   if (!jid || !text) return res.status(400).json({ error: 'jid and text are required' })
 
   const sock = getSocket()
   if (!sock) return res.status(503).json({ error: 'WhatsApp not connected' })
 
   try {
-    await sock.sendMessage(jid, { text })
+    const msgContent = { text }
+    if (Array.isArray(mentions) && mentions.length > 0) {
+      msgContent.mentions = mentions
+    }
+    await sock.sendMessage(jid, msgContent)
     res.json({ ok: true })
   } catch (err) {
     console.error('Failed to send message:', err.message)
