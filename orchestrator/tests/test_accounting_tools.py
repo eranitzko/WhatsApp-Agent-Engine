@@ -11,7 +11,9 @@ from app.tools.accounting_tools import get_accounting_tools
 EXPECTED_TOOLS = [
     "record_transaction", "record_payment", "get_balance",
     "get_history", "export_ledger", "set_reminder",
-    "rename_participant", "set_household",
+    "save_email", "rename_participant", "set_household",
+    "correct_transaction", "apply_correction",
+    "create_report_format", "list_report_formats", "delete_report_format",
 ]
 
 
@@ -27,7 +29,7 @@ class _CM:
         pass
 
 
-def test_get_accounting_tools_returns_all_eight():
+def test_get_accounting_tools_returns_expected_set():
     tools = get_accounting_tools()
     assert set(tools.keys()) == set(EXPECTED_TOOLS)
 
@@ -96,7 +98,7 @@ async def test_get_balance_settled_up(db):
             {"phone_a": "A", "phone_b": "B"},
             group_jid="123@g.us",
             sender="A@s.whatsapp.net",
-            is_admin=False,
+            is_admin=True,
             confirmation_store=None,
         )
     assert "settled" in result.lower()
@@ -119,7 +121,7 @@ async def test_get_balance_shows_debt(db):
             {"phone_a": "A", "phone_b": "B"},
             group_jid="123@g.us",
             sender="A@s.whatsapp.net",
-            is_admin=False,
+            is_admin=True,
             confirmation_store=None,
         )
     assert "100.00" in result
