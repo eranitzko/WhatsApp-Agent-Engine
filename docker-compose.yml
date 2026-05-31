@@ -7,6 +7,7 @@ services:
     environment:
       - BACKEND_URL=http://orchestrator:8000
       - AUTH_PATH=/data/auth
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 30s
