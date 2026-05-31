@@ -1,4 +1,4 @@
-"""Admin panel REST API endpoints."""
+﻿"""Admin panel REST API endpoints."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _bridge_headers() -> dict:
     return {}
 
 
-# ── Login ─────────────────────────────────────────────────────────────────────
+# -- Login -------------------------------------------------------------------
 
 class LoginRequest(BaseModel):
     password: str
@@ -41,17 +41,15 @@ def login(body: LoginRequest):
         raise HTTPException(status_code=401, detail=str(exc))
 
 
-# ── Groups ────────────────────────────────────────────────────────────────────
+# -- Groups ------------------------------------------------------------------
 
 class RegisterGroupRequest(BaseModel):
     group_jid: str
     blueprint_id: str
 
 
-@router.get("/groups", dependencies=[Depends(require_auth)])
-async def list_groups():
-    # Fetch group names from bridge
-    name_map: dict[str, str] = {}
+async def _fetch_bridge_name_map() -> dict[str, str]:
+    """Fetch {jid: name} map from bridge. Returns empty dict on failure."""
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(
@@ -59,11 +57,15 @@ async def list_groups():
                 headers=_bridge_headers(),
             )
             if resp.status_code == 200:
-                for g in resp.json().get("groups", []):
-                    name_map[g["jid"]] = g["name"]
+                return {g["jid"]: g["name"] for g in resp.json().get("groups", [])}
     except Exception:
         logger.warning("Could not fetch group names from bridge")
+    return {}
 
+
+@router.get("/groups", dependencies=[Depends(require_auth)])
+async def list_groups():
+    name_map = await _fetch_bridge_name_map()
     with SessionLocal() as db:
         rows = db.query(GroupRegistry).all()
         blueprints = {b.id: b.display_name for b in db.query(Blueprint).all()}
@@ -124,7 +126,7 @@ async def bridge_groups():
     return [g for g in all_groups if g["jid"] not in registered]
 
 
-# ── Admins ────────────────────────────────────────────────────────────────────
+# -- Admins ------------------------------------------------------------------
 
 class AddAdminRequest(BaseModel):
     phone_number: str
@@ -158,7 +160,7 @@ def delete_admin(phone_number: str):
     return {"ok": True}
 
 
-# ── Blueprints ────────────────────────────────────────────────────────────────
+# -- Blueprints --------------------------------------------------------------
 
 @router.get("/blueprints", dependencies=[Depends(require_auth)])
 def list_blueprints():

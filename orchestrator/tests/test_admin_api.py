@@ -1,4 +1,4 @@
-"""Tests for admin panel REST API endpoints."""
+﻿"""Tests for admin panel REST API endpoints."""
 
 import pytest
 from unittest.mock import patch
@@ -9,7 +9,7 @@ from app.admin.api import router as api_router
 from app.db.models import Blueprint, GroupRegistry, AdminNumbers
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+# -- helpers -----------------------------------------------------------------
 
 class _SessionCM:
     """Context manager that returns a new session from the given factory."""
@@ -56,12 +56,38 @@ def _session_patch(db):
     return patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session))
 
 
-# ── /admin/api/groups ─────────────────────────────────────────────────────────
+# -- /admin/api/groups -------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_list_groups(db):
     _seed(db)
     db.close()  # flush so the route's new session can see the data
+
+    Session = _get_session_factory(db)
+
+    from app.admin import api as admin_api
+
+    async def _mock_name_map():
+        return {"111@g.us": "Test Group"}
+
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)), \
+         patch.object(admin_api, "_fetch_bridge_name_map", _mock_name_map):
+        app = _make_app(db)
+        client = TestClient(app)
+        resp = client.get("/admin/api/groups")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["group_jid"] == "111@g.us"
+        assert data[0]["group_name"] == "Test Group"
+        assert data[0]["blueprint_name"] == "Family Accounting"
+
+
+@pytest.mark.asyncio
+async def test_list_groups_bridge_fallback(db):
+    """When bridge is unreachable, group_name falls back to group_jid."""
+    _seed(db)
+    db.close()
 
     Session = _get_session_factory(db)
 
@@ -119,7 +145,7 @@ async def test_delete_group(db):
     verify.close()
 
 
-# ── /admin/api/admins ─────────────────────────────────────────────────────────
+# -- /admin/api/admins -------------------------------------------------------
 
 def test_list_admins(db):
     _seed(db)
@@ -171,7 +197,7 @@ def test_delete_admin(db):
     verify.close()
 
 
-# ── /admin/api/blueprints ─────────────────────────────────────────────────────
+# -- /admin/api/blueprints ---------------------------------------------------
 
 def test_list_blueprints(db):
     _seed(db)
@@ -188,7 +214,7 @@ def test_list_blueprints(db):
         assert "Family Accounting" in names
 
 
-# ── auth required ─────────────────────────────────────────────────────────────
+# -- auth required -----------------------------------------------------------
 
 def test_endpoints_require_auth(db):
     """Without overriding require_auth, all endpoints should return 401."""
@@ -202,7 +228,7 @@ def test_endpoints_require_auth(db):
         assert client.get("/admin/api/blueprints").status_code == 401
 
 
-# ── internal helper ───────────────────────────────────────────────────────────
+# -- internal helper ---------------------------------------------------------
 
 def _get_session_factory(db):
     """Return a sessionmaker bound to the same engine as ``db``."""
