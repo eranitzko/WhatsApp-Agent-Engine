@@ -5,7 +5,7 @@ services:
     volumes:
       - ./data/auth:/data/auth
     environment:
-      - ORCHESTRATOR_URL=http://orchestrator:8000
+      - BACKEND_URL=http://orchestrator:8000
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 30s
