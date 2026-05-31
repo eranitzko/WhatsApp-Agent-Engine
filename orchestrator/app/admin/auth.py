@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import time
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -35,7 +36,6 @@ def create_token(password: str) -> str:
         raise AdminAuthError("ADMIN_UI_PASSWORD is not configured")
     if not hmac.compare_digest(password, settings.admin_ui_password):
         raise AdminAuthError("Invalid password")
-    import time
     payload = {"sub": "admin", "exp": int(time.time()) + _TOKEN_EXPIRE_SECONDS}
     return jwt.encode(payload, _jwt_secret(), algorithm=_ALGORITHM)
 
