@@ -59,7 +59,7 @@ async def _fetch_bridge_name_map() -> dict[str, str]:
             if resp.status_code == 200:
                 return {g["jid"]: g["name"] for g in resp.json().get("groups", [])}
     except Exception:
-        logger.warning("Could not fetch group names from bridge")
+        logger.warning("Could not fetch group names from bridge", exc_info=True)
     return {}
 
 
@@ -123,7 +123,7 @@ async def bridge_groups():
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Bridge unreachable: {exc}")
 
-    return [g for g in all_groups if g["jid"] not in registered]
+    return [{"jid": g["jid"], "name": g.get("name", g["jid"])} for g in all_groups if g["jid"] not in registered]
 
 
 # -- Admins ------------------------------------------------------------------
@@ -166,12 +166,17 @@ def delete_admin(phone_number: str):
 def list_blueprints():
     with SessionLocal() as db:
         rows = db.query(Blueprint).all()
-        return [
-            {
+        result = []
+        for b in rows:
+            try:
+                tools_count = len(json.loads(b.tools_enabled or "[]"))
+            except json.JSONDecodeError:
+                logger.warning("Malformed tools_enabled for blueprint %s", b.id)
+                tools_count = 0
+            result.append({
                 "id": b.id,
                 "display_name": b.display_name,
-                "tools_count": len(json.loads(b.tools_enabled or "[]")),
+                "tools_count": tools_count,
                 "system_prompt_preview": b.system_prompt[:100] if b.system_prompt else "",
-            }
-            for b in rows
-        ]
+            })
+        return result

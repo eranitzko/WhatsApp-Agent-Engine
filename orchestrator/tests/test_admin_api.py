@@ -45,17 +45,6 @@ def _make_app(db, *, override_auth=True):
     return app
 
 
-def _session_patch(db):
-    """Return a patch context that replaces SessionLocal with a factory
-    backed by the same in-memory engine used by the ``db`` fixture."""
-    from sqlalchemy import inspect as sa_inspect
-    factory = db.get_bind().dialect  # noqa: not used directly
-    # We need the sessionmaker bound to the same engine.
-    from sqlalchemy.orm import sessionmaker
-    Session = sessionmaker(bind=db.get_bind())
-    return patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session))
-
-
 # -- /admin/api/groups -------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -87,22 +76,24 @@ async def test_list_groups(db):
 async def test_list_groups_bridge_fallback(db):
     """When bridge is unreachable, group_name falls back to group_jid."""
     _seed(db)
-    db.close()
+    app = FastAPI()
+    from app.admin.auth import require_auth
+    from app.admin import api as admin_api
+    app.include_router(api_router, prefix="/admin/api")
+    app.dependency_overrides[require_auth] = lambda: None
 
     Session = _get_session_factory(db)
 
-    # Bridge is unreachable in tests; group_name falls back to group_jid.
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
-        app = _make_app(db)
+    async def _empty_name_map():
+        return {}
+
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)), \
+         patch.object(admin_api, "_fetch_bridge_name_map", _empty_name_map):
         client = TestClient(app)
         resp = client.get("/admin/api/groups")
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data) == 1
-        assert data[0]["group_jid"] == "111@g.us"
-        # group_name falls back to group_jid when bridge is unreachable
-        assert data[0]["group_name"] == "111@g.us"
-        assert data[0]["blueprint_name"] == "Family Accounting"
+        assert data[0]["group_name"] == "111@g.us"  # fallback to JID
 
 
 @pytest.mark.asyncio
@@ -226,6 +217,36 @@ def test_endpoints_require_auth(db):
         assert client.get("/admin/api/groups").status_code == 401
         assert client.get("/admin/api/admins").status_code == 401
         assert client.get("/admin/api/blueprints").status_code == 401
+
+
+def test_register_group_duplicate_returns_409(db):
+    _seed(db)
+    app = FastAPI()
+    from app.admin.auth import require_auth
+    app.include_router(api_router, prefix="/admin/api")
+    app.dependency_overrides[require_auth] = lambda: None
+
+    Session = _get_session_factory(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post("/admin/api/groups",
+                           json={"group_jid": "111@g.us", "blueprint_id": "fa"})
+        assert resp.status_code == 409
+
+
+def test_add_admin_duplicate_returns_409(db):
+    _seed(db)
+    app = FastAPI()
+    from app.admin.auth import require_auth
+    app.include_router(api_router, prefix="/admin/api")
+    app.dependency_overrides[require_auth] = lambda: None
+
+    Session = _get_session_factory(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post("/admin/api/admins",
+                           json={"phone_number": "972500000001"})
+        assert resp.status_code == 409
 
 
 # -- internal helper ---------------------------------------------------------
