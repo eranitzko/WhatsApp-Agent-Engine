@@ -48,5 +48,8 @@ class Settings(BaseSettings):
     notion_api_key: str = ""
     notion_tasks_database_id: str = ""
 
+    # Admin panel
+    admin_ui_password: str = ""
+
 
 settings = Settings()
