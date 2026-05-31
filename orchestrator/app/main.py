@@ -26,6 +26,8 @@ from app.scheduler import start_scheduler, stop_scheduler
 from app.pipeline.pipeline import process_image_event
 from app.utils.rate_limiter import rate_limiter
 from app.logging_config import configure_logging
+from app.admin.router import router as admin_router, get_static_dir
+from fastapi.staticfiles import StaticFiles
 
 configure_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
@@ -137,6 +139,8 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="WhatsApp Agent Engine", lifespan=lifespan)
+app.include_router(admin_router, prefix="/admin")
+app.mount("/admin/static", StaticFiles(directory=str(get_static_dir())), name="admin_static")
 
 
 @app.get("/health")
