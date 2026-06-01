@@ -399,6 +399,7 @@ async def exec_flag_invoice(group_id: str, is_admin: bool, invoice_id: str, reas
     if not is_admin:
         return {"error": "Admin only."}
 
+    from app.pipeline.storage import sync_invoice_sidecar
     with SessionLocal() as db:
         invoice = db.get(Invoice, invoice_id)
         if not invoice or invoice.group_id != group_id:
@@ -406,6 +407,8 @@ async def exec_flag_invoice(group_id: str, is_admin: bool, invoice_id: str, reas
         invoice.flagged = True
         invoice.flag_reason = reason or "Manually flagged"
         db.commit()
+        db.refresh(invoice)
+        await sync_invoice_sidecar(invoice)
 
     return {"ok": True, "invoice_id": invoice_id, "reason": reason}
 
@@ -414,6 +417,7 @@ async def exec_unflag_invoice(group_id: str, is_admin: bool, invoice_id: str, **
     if not is_admin:
         return {"error": "Admin only."}
 
+    from app.pipeline.storage import sync_invoice_sidecar
     with SessionLocal() as db:
         invoice = db.get(Invoice, invoice_id)
         if not invoice or invoice.group_id != group_id:
@@ -421,6 +425,8 @@ async def exec_unflag_invoice(group_id: str, is_admin: bool, invoice_id: str, **
         invoice.flagged = False
         invoice.flag_reason = None
         db.commit()
+        db.refresh(invoice)
+        await sync_invoice_sidecar(invoice)
 
     return {"ok": True, "invoice_id": invoice_id}
 
@@ -456,6 +462,9 @@ async def exec_set_invoice_date(group_id: str, is_admin: bool, invoice_id: str, 
                 invoice.rate_date     = conversion.rate_date
 
         db.commit()
+        db.refresh(invoice)
+        from app.pipeline.storage import sync_invoice_sidecar
+        await sync_invoice_sidecar(invoice)
 
     return {"ok": True, "invoice_id": invoice_id, "new_date": new_date}
 
@@ -493,6 +502,9 @@ async def exec_set_invoice_amount(
             invoice.amount_ils = amount
 
         db.commit()
+        db.refresh(invoice)
+        from app.pipeline.storage import sync_invoice_sidecar
+        await sync_invoice_sidecar(invoice)
 
     return {
         "ok": True,

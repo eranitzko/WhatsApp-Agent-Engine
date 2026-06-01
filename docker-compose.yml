@@ -5,7 +5,9 @@ services:
     volumes:
       - ./data/auth:/data/auth
     environment:
-      - ORCHESTRATOR_URL=http://orchestrator:8000
+      - BACKEND_URL=http://orchestrator:8000
+      - AUTH_PATH=/data/auth
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 30s
@@ -15,6 +17,8 @@ services:
   orchestrator:
     build: ./orchestrator
     restart: unless-stopped
+    ports:
+      - "8080:8000"
     volumes:
       - ./data/db:/data/db
       - ./data/auth:/data/auth

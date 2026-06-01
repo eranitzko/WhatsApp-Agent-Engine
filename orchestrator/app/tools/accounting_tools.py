@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from datetime import date, datetime, timezone
@@ -10,24 +11,27 @@ from decimal import Decimal
 
 from sqlalchemy import or_
 
-from app.db.models import LedgerEntry, LedgerSettlement, ScheduledMessage
+from app.db.models import (
+    LedgerEntry, LedgerSettlement, ScheduledMessage, UserProfile, ReportFormat,
+)
 from app.db.session import SessionLocal
 from app.tools.accounting_export import generate_ledger_xlsx
 from app.tools.accounting_fifo import DebtLeg, apply_payment
 from app.tools.accounting_fx import to_ils
+from app.agent.correction_queue import correction_queue
 
 logger = logging.getLogger(__name__)
 
 
+# ── DB helpers ────────────────────────────────────────────────────────────────
+
 def _household_phones_from_db(db, group_jid: str) -> set[str]:
-    """Return phones of participants with is_household=True for this group."""
     from app.db.models import GroupParticipant
     rows = db.query(GroupParticipant).filter_by(group_jid=group_jid, is_household=True).all()
     return {r.phone for r in rows}
 
 
 def _phone_to_name_from_db(db, group_jid: str) -> dict[str, str]:
-    """Return phone → display name. Household members map to 'Parents'."""
     from app.db.models import GroupParticipant
     rows = db.query(GroupParticipant).filter_by(group_jid=group_jid).all()
     household = {r.phone for r in rows if r.is_household}
@@ -36,6 +40,30 @@ def _phone_to_name_from_db(db, group_jid: str) -> dict[str, str]:
         name = r.admin_name or r.push_name or r.phone
         result[r.phone] = "Parents" if r.phone in household else name
     return result
+
+
+def _count_admins(db) -> int:
+    from app.db.models import AdminNumbers
+    return db.query(AdminNumbers).count()
+
+
+def _sender_phone(ctx: dict) -> str:
+    sender = ctx.get("sender", "")
+    return sender.split("@")[0].split(":")[0]
+
+
+def _net_owed(db, group_jid: str, from_phone: str, to_phone: str) -> Decimal:
+    rows = (
+        db.query(LedgerEntry)
+        .filter(
+            LedgerEntry.group_jid == group_jid,
+            LedgerEntry.from_phone == from_phone,
+            LedgerEntry.to_phone == to_phone,
+        )
+        .all()
+    )
+    return sum((r.amount_ils - (r.amount_settled_ils or Decimal("0")) for r in rows), Decimal("0"))
+
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -86,7 +114,8 @@ _SCHEMAS: dict[str, dict] = {
     "get_balance": {
         "name": "get_balance",
         "description": (
-            "Get net balance. With phone_a only: all open balances for that person. "
+            "Get net balance. Non-admins automatically see only their own balances. "
+            "With phone_a only: all open balances for that person. "
             "With phone_a and phone_b: net balance between them."
         ),
         "input_schema": {
@@ -100,11 +129,14 @@ _SCHEMAS: dict[str, dict] = {
     },
     "get_history": {
         "name": "get_history",
-        "description": "Get itemized transaction history, optionally filtered by person and/or date range.",
+        "description": (
+            "Get itemized transaction history. Non-admins automatically see only their own transactions. "
+            "Optionally filtered by person and/or date range."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "phone": {"type": "string", "description": "Filter to transactions involving this phone (optional)"},
+                "phone": {"type": "string", "description": "Filter to transactions involving this phone (optional; ignored for non-admins)"},
                 "from_date": {"type": "string", "description": "Start date YYYY-MM-DD (optional)"},
                 "to_date": {"type": "string", "description": "End date YYYY-MM-DD (optional)"},
             },
@@ -113,13 +145,17 @@ _SCHEMAS: dict[str, dict] = {
     },
     "export_ledger": {
         "name": "export_ledger",
-        "description": "Generate an XLSX with full balances and transaction history and email it.",
+        "description": (
+            "Generate an XLSX ledger report and email it. Non-admins receive only their own data. "
+            "If no email is given, uses the sender's saved email address."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "email": {"type": "string", "description": "Email address to send the export to"},
+                "email": {"type": "string", "description": "Email address to send the export to (optional if saved)"},
+                "format_name": {"type": "string", "description": "Named report format to use (optional)"},
             },
-            "required": ["email"],
+            "required": [],
         },
     },
     "set_reminder": {
@@ -135,6 +171,17 @@ _SCHEMAS: dict[str, dict] = {
                 "send_at": {"type": "string", "description": "ISO 8601 datetime, e.g. 2026-06-01T09:00:00"},
             },
             "required": ["message", "send_at"],
+        },
+    },
+    "save_email": {
+        "name": "save_email",
+        "description": "Save the sender's email address so it can be used for ledger exports.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "email": {"type": "string", "description": "Email address to save"},
+            },
+            "required": ["email"],
         },
     },
     "rename_participant": {
@@ -167,29 +214,89 @@ _SCHEMAS: dict[str, dict] = {
             "required": ["phone", "is_household"],
         },
     },
+    "correct_transaction": {
+        "name": "correct_transaction",
+        "description": (
+            "Propose a correction to an existing transaction (date, amount, or participants). "
+            "Admin only. Returns a diff for confirmation. Corrections with any settled amount "
+            "on the affected legs must be cleared first. Corrections are applied FIFO."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "transaction_id": {"type": "string", "description": "Transaction ID prefix (at least 8 chars) to correct"},
+                "new_date": {"type": "string", "description": "New date YYYY-MM-DD (optional)"},
+                "new_amount_ils": {"type": "number", "description": "New total amount in ILS for the transaction (optional)"},
+                "add_phones": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Phone numbers of participants to add (optional)",
+                },
+                "remove_phones": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Phone numbers of participants to remove (optional)",
+                },
+            },
+            "required": ["transaction_id"],
+        },
+    },
+    "create_report_format": {
+        "name": "create_report_format",
+        "description": "Create or update a named report format for XLSX ledger exports. Admin only.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Format name (e.g. 'monthly', 'detailed')"},
+                "language": {"type": "string", "description": "'he' or 'en'", "enum": ["he", "en"]},
+                "grouping": {"type": "string", "description": "How to group rows", "enum": ["person", "month", "none"]},
+                "sections": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Sections to include: 'balances', 'transactions', 'settlements'",
+                },
+                "date_format": {"type": "string", "description": "'DD/MM/YYYY', 'YYYY-MM-DD', or 'DD MMM YYYY'"},
+                "currency_display": {"type": "string", "description": "'ILS' or '₪'"},
+                "include_settled": {"type": "boolean", "description": "Include fully-settled transaction legs"},
+                "sort_by": {"type": "string", "description": "'date', 'person', or 'amount'", "enum": ["date", "person", "amount"]},
+            },
+            "required": ["name"],
+        },
+    },
+    "list_report_formats": {
+        "name": "list_report_formats",
+        "description": "List all saved report formats for this group. Admin only.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    "delete_report_format": {
+        "name": "delete_report_format",
+        "description": "Delete a named report format. Admin only.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Format name to delete"},
+            },
+            "required": ["name"],
+        },
+    },
+    "apply_correction": {
+        "name": "apply_correction",
+        "description": "Internal: apply a staged ledger correction by token. Called by the confirmation flow.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "token": {"type": "string"},
+                "admin_phone": {"type": "string"},
+            },
+            "required": ["token"],
+        },
+    },
 }
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _net_owed(db, group_jid: str, from_phone: str, to_phone: str) -> Decimal:
-    """Total remaining amount from_phone owes to_phone in this group."""
-    rows = (
-        db.query(LedgerEntry)
-        .filter(
-            LedgerEntry.group_jid == group_jid,
-            LedgerEntry.from_phone == from_phone,
-            LedgerEntry.to_phone == to_phone,
-        )
-        .all()
-    )
-    return sum((r.amount_ils - (r.amount_settled_ils or Decimal("0")) for r in rows), Decimal("0"))
 
 
 # ── Executors ─────────────────────────────────────────────────────────────────
 
 async def _exec_record_transaction(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
+    sender = ctx.get("sender", "")
+    sender_phone = sender.split("@")[0].split(":")[0]
     payer = params["payer_phone"]
     participants = params["participant_phones"]
     amount = Decimal(str(params["amount"]))
@@ -213,104 +320,111 @@ async def _exec_record_transaction(params: dict, **ctx) -> str:
         else description
     )
     transaction_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
 
-    with SessionLocal() as db:
-        for phone in participants:
-            db.add(LedgerEntry(
-                transaction_id=transaction_id,
-                group_jid=group_jid,
-                from_phone=phone,
-                to_phone=payer,
-                amount_ils=per_person,
-                amount_settled_ils=Decimal("0"),
-                description=desc_with_fx,
-                transaction_date=tx_date,
-                created_at=now,
-            ))
-        db.commit()
+    # Determine who needs to confirm:
+    # - Each participant (debtor) must confirm unless they sent the message.
+    # - If sender is not the payer, the payer must also confirm.
+    awaiting: list[str] = []
+    for phone in participants:
+        if phone != sender_phone:
+            awaiting.append(phone)
+    if payer != sender_phone and payer not in awaiting:
+        awaiting.append(payer)
 
+    if not awaiting:
+        # All parties are the sender — record immediately
+        now = datetime.now(timezone.utc)
+        with SessionLocal() as db:
+            for phone in participants:
+                db.add(LedgerEntry(
+                    transaction_id=transaction_id,
+                    group_jid=group_jid,
+                    from_phone=phone,
+                    to_phone=payer,
+                    amount_ils=per_person,
+                    amount_settled_ils=Decimal("0"),
+                    description=desc_with_fx,
+                    transaction_date=tx_date,
+                    created_at=now,
+                ))
+            db.commit()
+        split_info = (
+            f"split equally {per_person:.2f} ILS each among {len(participants)}"
+            if len(participants) > 1 else f"{amount_ils:.2f} ILS"
+        )
+        return f"Recorded: {payer} paid for {', '.join(participants)} — {split_info}. (tx: {transaction_id[:8]})"
+
+    # Stage multi-party confirmation
+    mcs = ctx.get("multi_confirmation_store")
+    if mcs is None:
+        return "Error: confirmation system unavailable."
+
+    commit_params = {
+        "group_jid": group_jid,
+        "transaction_id": transaction_id,
+        "payer_phone": payer,
+        "participant_phones": participants,
+        "per_person_ils": str(per_person),
+        "description": desc_with_fx,
+        "transaction_date": tx_date.isoformat(),
+    }
     split_info = (
-        f"split equally {per_person:.2f} ILS each among {len(participants)} people"
-        if len(participants) > 1
-        else f"{amount_ils:.2f} ILS"
+        f"{per_person:.2f} ILS each among {len(participants)} people"
+        if len(participants) > 1 else f"{amount_ils:.2f} ILS"
     )
-    return f"Recorded: {payer} paid for {', '.join(participants)} — {split_info}. (tx: {transaction_id[:8]})"
+    pending_desc = (
+        f"{payer} paid for {', '.join(participants)} — {split_info}\n"
+        f"Description: {description}"
+    )
+    await mcs.propose(group_jid, awaiting, "commit_transaction", commit_params, pending_desc)
+    return f"Confirmation requested from {len(awaiting)} participant(s)."
 
 
 async def _exec_record_payment(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
+    sender = ctx.get("sender", "")
+    sender_phone = sender.split("@")[0].split(":")[0]
     payer = params["payer_phone"]
     payee = params["payee_phone"]
     amount_ils = Decimal(str(params["amount_ils"]))
     pay_date_str = params.get("payment_date") or date.today().isoformat()
     pay_date = date.fromisoformat(pay_date_str)
-    now = datetime.now(timezone.utc)
 
-    with SessionLocal() as db:
-        open_rows = (
-            db.query(LedgerEntry)
-            .filter(
-                LedgerEntry.group_jid == group_jid,
-                LedgerEntry.from_phone == payer,
-                LedgerEntry.to_phone == payee,
-                LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
-            )
-            .order_by(LedgerEntry.transaction_date)
-            .all()
-        )
+    # Determine who needs to confirm:
+    # - If sender is the payer → payee must confirm receiving.
+    # - Otherwise → payer must confirm paying.
+    if sender_phone == payer:
+        awaiting = [payee]
+    else:
+        awaiting = [payer]
 
-        debt_legs = [
-            DebtLeg(
-                id=r.id,
-                amount_ils=r.amount_ils,
-                amount_settled_ils=r.amount_settled_ils or Decimal("0"),
-                transaction_date=r.transaction_date,
-            )
-            for r in open_rows
-        ]
+    mcs = ctx.get("multi_confirmation_store")
+    if mcs is None:
+        return "Error: confirmation system unavailable."
 
-        result = apply_payment(amount_ils, debt_legs)
-
-        for leg_id, new_settled in result.updated_legs:
-            row = db.get(LedgerEntry, leg_id)
-            if row is None:
-                continue
-            row.amount_settled_ils = new_settled
-
-        payment_leg = LedgerEntry(
-            transaction_id=str(uuid.uuid4()),
-            group_jid=group_jid,
-            from_phone=payer,
-            to_phone=payee,
-            amount_ils=amount_ils,
-            amount_settled_ils=amount_ils,
-            description=f"Payment on {pay_date.isoformat()}",
-            transaction_date=pay_date,
-            created_at=now,
-        )
-        db.add(payment_leg)
-        db.flush()
-
-        for debt_leg_id, applied_amount in result.settlements:
-            db.add(LedgerSettlement(
-                payment_leg_id=payment_leg.id,
-                debt_leg_id=debt_leg_id,
-                amount_ils=applied_amount,
-                created_at=now,
-            ))
-        db.commit()
-
-    parts = [f"{amt:.2f} ILS off debt {did[:8]}" for did, amt in result.settlements]
-    summary = "; ".join(parts) if parts else "no open debts found to settle"
-    leftover = f" (overpaid by {result.leftover:.2f} ILS)" if result.leftover > 0 else ""
-    return f"Payment of {amount_ils:.2f} ILS recorded. {summary}.{leftover}"
+    commit_params = {
+        "group_jid": group_jid,
+        "payer_phone": payer,
+        "payee_phone": payee,
+        "amount_ils": str(amount_ils),
+        "payment_date": pay_date.isoformat(),
+    }
+    pending_desc = f"Payment of {amount_ils:.2f} ILS from {payer} to {payee} on {pay_date.isoformat()}"
+    await mcs.propose(group_jid, awaiting, "commit_payment", commit_params, pending_desc)
+    confirmer = "payee" if sender_phone == payer else "payer"
+    return f"Confirmation requested from {confirmer} ({awaiting[0]})."
 
 
 async def _exec_get_balance(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
+    is_admin = ctx.get("is_admin", False)
     phone_a = params["phone_a"]
     phone_b = params.get("phone_b")
+
+    # Non-admins may only query their own phone
+    if not is_admin:
+        phone_a = _sender_phone(ctx)
+        phone_b = None
 
     def net_vs_group(db, group_jid, from_phone, to_phones):
         owes = sum(_net_owed(db, group_jid, from_phone, cp) for cp in to_phones)
@@ -374,9 +488,15 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
 
 async def _exec_get_history(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
-    phone = params.get("phone")
+    is_admin = ctx.get("is_admin", False)
     from_date = params.get("from_date")
     to_date = params.get("to_date")
+
+    # Non-admins always see only their own transactions
+    if is_admin:
+        phone = params.get("phone")
+    else:
+        phone = _sender_phone(ctx)
 
     with SessionLocal() as db:
         q = db.query(LedgerEntry).filter(LedgerEntry.group_jid == group_jid)
@@ -407,10 +527,34 @@ async def _exec_get_history(params: dict, **ctx) -> str:
 
 async def _exec_export_ledger(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
-    email = params["email"]
+    is_admin = ctx.get("is_admin", False)
+    sender_phone = _sender_phone(ctx)
+    email = params.get("email", "").strip()
+    format_name = params.get("format_name", "").strip() or None
+
+    # Resolve email: param → saved profile → error
+    if not email:
+        with SessionLocal() as db:
+            profile = db.get(UserProfile, sender_phone)
+        if profile and profile.email:
+            email = profile.email
+        else:
+            return "No email address provided and none saved. Use save_email first or provide an email."
+
+    # Load report format config if specified
+    fmt_config: dict = {}
+    if format_name:
+        with SessionLocal() as db:
+            row = db.query(ReportFormat).filter_by(group_jid=group_jid, name=format_name).first()
+        if row is None:
+            return f"Report format '{format_name}' not found. Use list_report_formats to see available formats."
+        fmt_config = row.config()
+
+    # Non-admins get only their own data
+    filter_phone = None if is_admin else sender_phone
 
     try:
-        xlsx_bytes = generate_ledger_xlsx(group_jid)
+        xlsx_bytes = generate_ledger_xlsx(group_jid, filter_phone=filter_phone, fmt_config=fmt_config)
     except Exception as exc:
         logger.exception("export_ledger: XLSX generation failed")
         return f"Failed to generate report: {exc}"
@@ -433,8 +577,7 @@ async def _exec_export_ledger(params: dict, **ctx) -> str:
 
 async def _exec_set_reminder(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
-    sender = ctx.get("sender", "")
-    to_phone = sender.split("@")[0].split(":")[0]
+    to_phone = _sender_phone(ctx)
     if not to_phone:
         return "Error: could not determine sender phone. Please try again."
     message = params["message"]
@@ -463,6 +606,25 @@ async def _exec_set_reminder(params: dict, **ctx) -> str:
         db.commit()
 
     return f"Reminder set for {send_at.isoformat()}: \"{message}\""
+
+
+async def _exec_save_email(params: dict, **ctx) -> str:
+    phone = _sender_phone(ctx)
+    if not phone:
+        return "Error: could not determine your phone number."
+    email = params["email"].strip()
+    if not email or "@" not in email:
+        return "Invalid email address."
+
+    with SessionLocal() as db:
+        profile = db.get(UserProfile, phone)
+        if profile is None:
+            db.add(UserProfile(phone=phone, email=email))
+        else:
+            profile.email = email
+        db.commit()
+
+    return f"Email saved: {email}"
 
 
 async def _exec_rename_participant(params: dict, **ctx) -> str:
@@ -518,20 +680,273 @@ async def _exec_set_household(params: dict, **ctx) -> str:
             db.close()
 
 
+async def _exec_correct_transaction(params: dict, **ctx) -> str:
+    if not ctx.get("is_admin"):
+        return "Only admins can correct transactions."
+    group_jid = ctx.get("group_jid", "")
+    admin_phone = _sender_phone(ctx)
+    tx_prefix = params["transaction_id"]
+
+    new_date = params.get("new_date")
+    new_amount_ils = params.get("new_amount_ils")
+    add_phones: list[str] = params.get("add_phones") or []
+    remove_phones: list[str] = params.get("remove_phones") or []
+
+    if not any([new_date, new_amount_ils is not None, add_phones, remove_phones]):
+        return "No changes specified. Provide at least one of: new_date, new_amount_ils, add_phones, remove_phones."
+
+    with SessionLocal() as db:
+        legs = (
+            db.query(LedgerEntry)
+            .filter(
+                LedgerEntry.group_jid == group_jid,
+                LedgerEntry.transaction_id.like(f"{tx_prefix}%"),
+            )
+            .all()
+        )
+        if not legs:
+            return f"No transaction found with ID starting '{tx_prefix}'."
+        if len({leg.transaction_id for leg in legs}) > 1:
+            return f"Prefix '{tx_prefix}' matches multiple transactions. Use a longer prefix."
+
+        transaction_id = legs[0].transaction_id
+        payer = legs[0].to_phone
+
+        # Block if any removed participant has settlements
+        if remove_phones:
+            for leg in legs:
+                if leg.from_phone in remove_phones:
+                    settled = leg.amount_settled_ils or Decimal("0")
+                    if settled > Decimal("0"):
+                        return (
+                            f"Cannot remove {leg.from_phone}: they have {settled:.2f} ILS already settled "
+                            f"on this transaction. Clear the payment first."
+                        )
+
+        num_admins = _count_admins(db)
+
+    # Build human-readable diff
+    diff_lines = [f"Correction to transaction {transaction_id[:8]}:"]
+    current_legs = {leg.from_phone: leg for leg in legs}
+    current_participants = sorted(current_legs.keys())
+
+    if new_date:
+        diff_lines.append(f"  Date: {legs[0].transaction_date} → {new_date}")
+    if new_amount_ils is not None:
+        total_current = sum(leg.amount_ils for leg in legs)
+        diff_lines.append(f"  Total amount: {total_current:.2f} ILS → {new_amount_ils:.2f} ILS")
+    if add_phones:
+        diff_lines.append(f"  Add participants: {', '.join(add_phones)}")
+    if remove_phones:
+        diff_lines.append(f"  Remove participants: {', '.join(remove_phones)}")
+
+    changes = {
+        "transaction_id": transaction_id,
+        "payer": payer,
+        "new_date": new_date,
+        "new_amount_ils": new_amount_ils,
+        "add_phones": add_phones,
+        "remove_phones": remove_phones,
+        "current_participants": current_participants,
+    }
+
+    result = correction_queue.enqueue(
+        group_jid=group_jid,
+        admin_phone=admin_phone,
+        transaction_id=transaction_id,
+        changes=changes,
+        description="\n".join(diff_lines),
+        max_slots=num_admins + 1,
+    )
+    if isinstance(result, str):
+        return result  # error message
+
+    # Also set confirmation_store so "yes"/"confirm" applies it
+    confirmation_store = ctx.get("confirmation_store")
+    if confirmation_store:
+        confirmation_store.set(
+            group_jid,
+            "apply_correction",
+            {"token": result.token, "admin_phone": admin_phone},
+            "\n".join(diff_lines),
+        )
+
+    return "\n".join(diff_lines) + f"\n\nToken: {result.token}\nReply 'confirm' to apply or 'cancel' to discard."
+
+
+async def _exec_apply_correction(params: dict, **ctx) -> str:
+    """Internal tool called by the confirmation flow when admin says 'yes'."""
+    group_jid = ctx.get("group_jid", "")
+    token = params.get("token", "")
+    admin_phone = params.get("admin_phone", "") or _sender_phone(ctx)
+
+    correction = correction_queue.get_by_token(group_jid, token)
+    if correction is None:
+        return "Correction not found or expired."
+    if correction.admin_phone != admin_phone:
+        return "You can only confirm your own pending corrections."
+
+    changes = correction.changes
+    transaction_id = changes["transaction_id"]
+    payer = changes["payer"]
+
+    with SessionLocal() as db:
+        legs = (
+            db.query(LedgerEntry)
+            .filter(
+                LedgerEntry.group_jid == group_jid,
+                LedgerEntry.transaction_id == transaction_id,
+            )
+            .all()
+        )
+        if not legs:
+            correction_queue.remove(group_jid, token)
+            return "Transaction no longer exists."
+
+        current_legs = {leg.from_phone: leg for leg in legs}
+        current_participants = list(current_legs.keys())
+
+        # Compute new per-person amount
+        remove_phones: list[str] = changes.get("remove_phones") or []
+        add_phones: list[str] = changes.get("add_phones") or []
+        new_participants = [p for p in current_participants if p not in remove_phones] + add_phones
+
+        if not new_participants:
+            db.rollback()
+            correction_queue.remove(group_jid, token)
+            return "Error: correction would remove all participants."
+
+        if changes.get("new_amount_ils") is not None:
+            total_ils = Decimal(str(changes["new_amount_ils"]))
+        else:
+            total_ils = sum(leg.amount_ils for leg in legs)
+
+        per_person = (total_ils / Decimal(len(new_participants))).quantize(Decimal("0.01"))
+        new_date_val = date.fromisoformat(changes["new_date"]) if changes.get("new_date") else None
+
+        # Remove legs for removed participants
+        for phone in remove_phones:
+            if phone in current_legs:
+                db.delete(current_legs[phone])
+
+        # Update existing legs
+        for phone, leg in current_legs.items():
+            if phone in remove_phones:
+                continue
+            if new_date_val:
+                leg.transaction_date = new_date_val
+            if changes.get("new_amount_ils") is not None:
+                leg.amount_ils = per_person
+
+        # Add new legs
+        now = datetime.now(timezone.utc)
+        for phone in add_phones:
+            tx_date = new_date_val or legs[0].transaction_date
+            db.add(LedgerEntry(
+                transaction_id=transaction_id,
+                group_jid=group_jid,
+                from_phone=phone,
+                to_phone=payer,
+                amount_ils=per_person,
+                amount_settled_ils=Decimal("0"),
+                description=legs[0].description,
+                transaction_date=tx_date,
+                created_at=now,
+            ))
+
+        db.commit()
+
+    correction_queue.remove(group_jid, token)
+    return f"Correction applied to transaction {transaction_id[:8]}."
+
+
+async def _exec_create_report_format(params: dict, **ctx) -> str:
+    if not ctx.get("is_admin"):
+        return "Only admins can manage report formats."
+    group_jid = ctx.get("group_jid", "")
+    name = params["name"].strip()
+    if not name:
+        return "Format name cannot be empty."
+
+    config = {
+        "language": params.get("language", "en"),
+        "grouping": params.get("grouping", "none"),
+        "sections": params.get("sections") or ["balances", "transactions"],
+        "date_format": params.get("date_format", "YYYY-MM-DD"),
+        "currency_display": params.get("currency_display", "ILS"),
+        "include_settled": params.get("include_settled", True),
+        "sort_by": params.get("sort_by", "date"),
+    }
+
+    with SessionLocal() as db:
+        existing = db.query(ReportFormat).filter_by(group_jid=group_jid, name=name).first()
+        if existing:
+            existing.config_json = json.dumps(config)
+        else:
+            db.add(ReportFormat(group_jid=group_jid, name=name, config_json=json.dumps(config)))
+        db.commit()
+
+    return f"Report format '{name}' saved."
+
+
+async def _exec_list_report_formats(params: dict, **ctx) -> str:
+    if not ctx.get("is_admin"):
+        return "Only admins can view report formats."
+    group_jid = ctx.get("group_jid", "")
+
+    with SessionLocal() as db:
+        rows = db.query(ReportFormat).filter_by(group_jid=group_jid).all()
+
+    if not rows:
+        return "No report formats saved for this group."
+
+    lines = []
+    for r in rows:
+        cfg = r.config()
+        lines.append(
+            f"• {r.name}: lang={cfg.get('language','en')}, "
+            f"grouping={cfg.get('grouping','none')}, "
+            f"sections={cfg.get('sections')}, "
+            f"sort={cfg.get('sort_by','date')}"
+        )
+    return "Report formats:\n" + "\n".join(lines)
+
+
+async def _exec_delete_report_format(params: dict, **ctx) -> str:
+    if not ctx.get("is_admin"):
+        return "Only admins can delete report formats."
+    group_jid = ctx.get("group_jid", "")
+    name = params["name"].strip()
+
+    with SessionLocal() as db:
+        deleted = db.query(ReportFormat).filter_by(group_jid=group_jid, name=name).delete()
+        db.commit()
+
+    if deleted:
+        return f"Report format '{name}' deleted."
+    return f"Report format '{name}' not found."
+
+
 # ── Public factory ─────────────────────────────────────────────────────────────
 
 def get_accounting_tools() -> dict[str, dict]:
-    """Return all 8 accounting tools in ToolRegistry format."""
+    """Return all accounting tools in ToolRegistry format."""
     return {
         name: {"schema": _SCHEMAS[name], "executor": executor}
         for name, executor in [
-            ("record_transaction",  _exec_record_transaction),
-            ("record_payment",      _exec_record_payment),
-            ("get_balance",         _exec_get_balance),
-            ("get_history",         _exec_get_history),
-            ("export_ledger",       _exec_export_ledger),
-            ("set_reminder",        _exec_set_reminder),
-            ("rename_participant",  _exec_rename_participant),
-            ("set_household",       _exec_set_household),
+            ("record_transaction",   _exec_record_transaction),
+            ("record_payment",       _exec_record_payment),
+            ("get_balance",          _exec_get_balance),
+            ("get_history",          _exec_get_history),
+            ("export_ledger",        _exec_export_ledger),
+            ("set_reminder",         _exec_set_reminder),
+            ("save_email",           _exec_save_email),
+            ("rename_participant",   _exec_rename_participant),
+            ("set_household",        _exec_set_household),
+            ("correct_transaction",  _exec_correct_transaction),
+            ("apply_correction",     _exec_apply_correction),
+            ("create_report_format", _exec_create_report_format),
+            ("list_report_formats",  _exec_list_report_formats),
+            ("delete_report_format", _exec_delete_report_format),
         ]
     }

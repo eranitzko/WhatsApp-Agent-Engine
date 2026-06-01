@@ -185,3 +185,26 @@ class ScheduledMessage(Base):
     sent       = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), nullable=False,
                         default=lambda: datetime.now(timezone.utc))
+
+
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+
+    phone      = Column(String, primary_key=True)
+    email      = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+
+
+class ReportFormat(Base):
+    __tablename__ = "report_formats"
+
+    id         = Column(String(36), primary_key=True, default=_uuid)
+    group_jid  = Column(String, nullable=False)
+    name       = Column(String, nullable=False)
+    config_json = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+
+    def config(self) -> dict:
+        return json.loads(self.config_json)

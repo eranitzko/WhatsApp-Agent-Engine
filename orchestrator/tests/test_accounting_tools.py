@@ -11,7 +11,9 @@ from app.tools.accounting_tools import get_accounting_tools
 EXPECTED_TOOLS = [
     "record_transaction", "record_payment", "get_balance",
     "get_history", "export_ledger", "set_reminder",
-    "rename_participant", "set_household",
+    "save_email", "rename_participant", "set_household",
+    "correct_transaction", "apply_correction",
+    "create_report_format", "list_report_formats", "delete_report_format",
 ]
 
 
@@ -27,7 +29,7 @@ class _CM:
         pass
 
 
-def test_get_accounting_tools_returns_all_eight():
+def test_get_accounting_tools_returns_expected_set():
     tools = get_accounting_tools()
     assert set(tools.keys()) == set(EXPECTED_TOOLS)
 
@@ -55,6 +57,10 @@ def test_all_executors_are_async():
 
 @pytest.mark.asyncio
 async def test_record_transaction_creates_legs_for_each_participant(db):
+    from app.agent.multi_confirmation import MultiConfirmationStore
+    mcs = MultiConfirmationStore()
+    mcs.set_sender(AsyncMock())
+
     with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)), \
          patch("app.tools.accounting_tools.to_ils", new=AsyncMock(return_value=Decimal("300"))):
         tools = get_accounting_tools()
@@ -67,16 +73,16 @@ async def test_record_transaction_creates_legs_for_each_participant(db):
                 "description": "dinner",
             },
             group_jid="123@g.us",
-            sender="972500000001@s.whatsapp.net",
+            sender="972500000001@s.whatsapp.net",  # sender == payer → participants must confirm
             is_admin=False,
-            confirmation_store=None,
+            multi_confirmation_store=mcs,
         )
-    # Should create 2 legs (one per participant)
-    legs = db.query(LedgerEntry).all()
-    assert len(legs) == 2
-    assert all(leg.to_phone == "972500000001" for leg in legs)
-    assert all(leg.amount_ils == Decimal("150.00") for leg in legs)
-    assert "recorded" in result.lower() or "972500000001" in result
+    # Participants (002, 003) must confirm → staged, not yet in DB
+    assert "confirmation" in result.lower()
+    pending = mcs.find_for_phone("123@g.us", "972500000002")
+    assert pending is not None
+    assert pending.commit_params["per_person_ils"] == "150.00"
+    assert set(pending.commit_params["participant_phones"]) == {"972500000002", "972500000003"}
 
 
 @pytest.mark.asyncio
@@ -96,7 +102,7 @@ async def test_get_balance_settled_up(db):
             {"phone_a": "A", "phone_b": "B"},
             group_jid="123@g.us",
             sender="A@s.whatsapp.net",
-            is_admin=False,
+            is_admin=True,
             confirmation_store=None,
         )
     assert "settled" in result.lower()
@@ -119,7 +125,7 @@ async def test_get_balance_shows_debt(db):
             {"phone_a": "A", "phone_b": "B"},
             group_jid="123@g.us",
             sender="A@s.whatsapp.net",
-            is_admin=False,
+            is_admin=True,
             confirmation_store=None,
         )
     assert "100.00" in result

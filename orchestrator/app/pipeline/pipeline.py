@@ -27,7 +27,7 @@ from app.db.session import SessionLocal
 from app.pipeline.converter import convert_to_ils
 from app.pipeline.dedup import check_image_hash, check_invoice_key, compute_hash
 from app.pipeline.extractor import extract_invoice
-from app.pipeline.storage import upload_image
+from app.pipeline.storage import upload_image, upload_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +209,34 @@ async def process_image_event(event: dict) -> dict:
         "Invoice saved: id=%s vendor=%s amount=%s %s ils=%s flagged=%s",
         invoice_id, vendor, amount_original, currency_original, amount_ils, flagged,
     )
+
+    # ── 9. R2 metadata sidecar ────────────────────────────────────────────────
+    # Upload extracted metadata as a JSON sidecar alongside the image so R2
+    # is the source of truth and the DB can be rebuilt from R2 if needed.
+    if r2_key:
+        try:
+            await upload_metadata(r2_key, {
+                "invoice_id":          invoice_id,
+                "group_id":            jid,
+                "message_id":          message_id,
+                "image_hash":          image_hash,
+                "submitted_by":        sender,
+                "received_at":         datetime.now(timezone.utc).isoformat(),
+                "invoice_date":        invoice_date_str,
+                "invoice_number":      invoice_number,
+                "vendor":              vendor,
+                "description":         description,
+                "amount_original":     float(amount_original) if amount_original else None,
+                "currency_original":   currency_original,
+                "amount_ils":          float(amount_ils) if amount_ils else None,
+                "exchange_rate":       float(exchange_rate) if exchange_rate else None,
+                "rate_source":         rate_source,
+                "extraction_confidence": confidence,
+                "flagged":             flagged,
+                "flag_reason":         flag_reason,
+            })
+        except RuntimeError:
+            logger.warning("Metadata sidecar upload failed for invoice %s — data still in DB", invoice_id)
 
     return {
         "invoice_id":       invoice_id,

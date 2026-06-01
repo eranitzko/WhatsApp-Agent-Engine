@@ -1,19 +1,26 @@
-"""XLSX ledger export — two sheets: Balances and Transactions."""
+"""XLSX ledger export — supports filter_phone and report format config."""
 
 from __future__ import annotations
 
 import io
+from datetime import date as date_type
 from decimal import Decimal
 
 import openpyxl
 from openpyxl.styles import Font
+from sqlalchemy import or_
 
 from app.db.session import SessionLocal
 from app.db.models import LedgerEntry
 
+_DATE_FORMATS = {
+    "DD/MM/YYYY": lambda d: d.strftime("%d/%m/%Y") if d else "",
+    "YYYY-MM-DD": lambda d: d.isoformat() if d else "",
+    "DD MMM YYYY": lambda d: d.strftime("%d %b %Y") if d else "",
+}
+
 
 def _phone_to_name_from_db(db, group_jid: str) -> dict[str, str]:
-    """Return phone → display name. Household members all map to 'Parents'."""
     from app.db.models import GroupParticipant
     rows = db.query(GroupParticipant).filter_by(group_jid=group_jid).all()
     household = {r.phone for r in rows if r.is_household}
@@ -24,24 +31,84 @@ def _phone_to_name_from_db(db, group_jid: str) -> dict[str, str]:
     return result
 
 
-def generate_ledger_xlsx(group_jid: str) -> bytes:
-    """Return XLSX bytes with two sheets: Balances (net per pair) and Transactions (full log)."""
+def _fmt_date(d: date_type | None, date_format: str) -> str:
+    formatter = _DATE_FORMATS.get(date_format, _DATE_FORMATS["YYYY-MM-DD"])
+    return formatter(d)
+
+
+def _fmt_currency(amount: float, currency_display: str) -> str:
+    if currency_display == "₪":
+        return f"₪{amount:.2f}"
+    return f"{amount:.2f} ILS"
+
+
+def generate_ledger_xlsx(
+    group_jid: str,
+    filter_phone: str | None = None,
+    fmt_config: dict | None = None,
+) -> bytes:
+    cfg = fmt_config or {}
+    sections: list[str] = cfg.get("sections") or ["balances", "transactions"]
+    date_format: str = cfg.get("date_format", "YYYY-MM-DD")
+    currency_display: str = cfg.get("currency_display", "ILS")
+    include_settled: bool = cfg.get("include_settled", True)
+    sort_by: str = cfg.get("sort_by", "date")
+    grouping: str = cfg.get("grouping", "none")
+
     with SessionLocal() as db:
-        entries = (
-            db.query(LedgerEntry)
-            .filter_by(group_jid=group_jid)
-            .order_by(LedgerEntry.transaction_date)
-            .all()
-        )
+        q = db.query(LedgerEntry).filter(LedgerEntry.group_jid == group_jid)
+        if filter_phone:
+            q = q.filter(
+                or_(LedgerEntry.from_phone == filter_phone, LedgerEntry.to_phone == filter_phone)
+            )
+        entries = q.order_by(LedgerEntry.transaction_date).all()
         names = _phone_to_name_from_db(db, group_jid)
+
+    if not include_settled:
+        entries = [e for e in entries if (e.amount_ils - (e.amount_settled_ils or Decimal("0"))) > Decimal("0")]
+
+    if sort_by == "person":
+        entries = sorted(entries, key=lambda e: names.get(e.from_phone, e.from_phone))
+    elif sort_by == "amount":
+        entries = sorted(entries, key=lambda e: e.amount_ils, reverse=True)
+
     wb = openpyxl.Workbook()
+    first_sheet = True
 
-    ws_bal = wb.active
-    ws_bal.title = "Balances"
-    _write_balances_sheet(ws_bal, entries, names)
+    if "balances" in sections:
+        ws = wb.active if first_sheet else wb.create_sheet("Balances")
+        ws.title = "Balances"
+        first_sheet = False
+        _write_balances_sheet(ws, entries, names, date_format, currency_display)
 
-    ws_tx = wb.create_sheet("Transactions")
-    _write_transactions_sheet(ws_tx, entries, names)
+    if "transactions" in sections:
+        ws = wb.active if first_sheet else wb.create_sheet("Transactions")
+        ws.title = "Transactions"
+        first_sheet = False
+        _write_transactions_sheet(ws, entries, names, date_format, currency_display, grouping)
+
+    if "settlements" in sections:
+        with SessionLocal() as db:
+            from app.db.models import LedgerSettlement
+            entry_ids = {e.id for e in entries}
+            settlements = (
+                db.query(LedgerSettlement)
+                .filter(
+                    or_(
+                        LedgerSettlement.payment_leg_id.in_(entry_ids),
+                        LedgerSettlement.debt_leg_id.in_(entry_ids),
+                    )
+                )
+                .all()
+            )
+        ws = wb.active if first_sheet else wb.create_sheet("Settlements")
+        ws.title = "Settlements"
+        first_sheet = False
+        _write_settlements_sheet(ws, settlements, names, date_format, currency_display)
+
+    if first_sheet:
+        # No sections matched — write empty sheet to avoid empty workbook error
+        wb.active.title = "Empty"
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -49,7 +116,6 @@ def generate_ledger_xlsx(group_jid: str) -> bytes:
 
 
 def _compute_net_balances(entries: list, names: dict[str, str]) -> dict[tuple[str, str], Decimal]:
-    """Return net remaining amount per display-name pair (owes, owed_by)."""
     raw: dict[tuple[str, str], Decimal] = {}
     for e in entries:
         remaining = e.amount_ils - (e.amount_settled_ils or Decimal("0"))
@@ -58,7 +124,7 @@ def _compute_net_balances(entries: list, names: dict[str, str]) -> dict[tuple[st
         frm = names.get(e.from_phone, e.from_phone)
         to = names.get(e.to_phone, e.to_phone)
         if frm == to:
-            continue  # intra-household entry — skip
+            continue
         key = (frm, to)
         raw[key] = raw.get(key, Decimal("0")) + remaining
 
@@ -78,30 +144,55 @@ def _compute_net_balances(entries: list, names: dict[str, str]) -> dict[tuple[st
     return netted
 
 
-def _write_balances_sheet(ws, entries: list, names: dict[str, str]) -> None:
-    headers = ["Owes", "To", "Amount (ILS)"]
+def _write_balances_sheet(ws, entries, names, date_format, currency_display) -> None:
+    headers = ["Owes", "To", "Amount"]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
-
     for (frm, to), amt in sorted(_compute_net_balances(entries, names).items()):
-        ws.append([frm, to, float(amt)])
+        ws.append([frm, to, _fmt_currency(float(amt), currency_display)])
 
 
-def _write_transactions_sheet(ws, entries: list, names: dict[str, str]) -> None:
-    headers = ["Date", "From", "To", "Amount ILS", "Settled ILS", "Remaining ILS", "Description", "Transaction ID"]
+def _write_transactions_sheet(ws, entries, names, date_format, currency_display, grouping) -> None:
+    headers = ["Date", "From", "To", "Amount", "Settled", "Remaining", "Description", "Transaction ID"]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
 
+    last_group_key = None
     for e in entries:
+        group_key = None
+        if grouping == "month" and e.transaction_date:
+            group_key = e.transaction_date.strftime("%Y-%m")
+        elif grouping == "person":
+            group_key = names.get(e.from_phone, e.from_phone)
+
+        if grouping != "none" and group_key != last_group_key:
+            ws.append([f"── {group_key} ──"])
+            last_group_key = group_key
+
+        remaining = e.amount_ils - (e.amount_settled_ils or Decimal("0"))
         ws.append([
-            e.transaction_date.isoformat() if e.transaction_date else "",
+            _fmt_date(e.transaction_date, date_format),
             names.get(e.from_phone, e.from_phone),
             names.get(e.to_phone, e.to_phone),
-            float(e.amount_ils),
-            float(e.amount_settled_ils or Decimal("0")),
-            float(e.amount_ils - (e.amount_settled_ils or Decimal("0"))),
+            _fmt_currency(float(e.amount_ils), currency_display),
+            _fmt_currency(float(e.amount_settled_ils or Decimal("0")), currency_display),
+            _fmt_currency(float(remaining), currency_display),
             e.description,
             e.transaction_id,
+        ])
+
+
+def _write_settlements_sheet(ws, settlements, names, date_format, currency_display) -> None:
+    headers = ["Payment Leg ID", "Debt Leg ID", "Amount Applied", "Date"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for s in settlements:
+        ws.append([
+            s.payment_leg_id[:8],
+            s.debt_leg_id[:8],
+            _fmt_currency(float(s.amount_ils), currency_display),
+            _fmt_date(s.created_at.date() if s.created_at else None, date_format),
         ])
