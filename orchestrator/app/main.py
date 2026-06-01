@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 import anthropic
 import httpx
 
@@ -85,16 +85,18 @@ _http_client: Optional[httpx.AsyncClient] = None
 
 
 class WebhookPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     type: str
     jid: str
     sender: str
-    message_id: str = ""
-    is_admin: bool = False
+    message_id: str = Field(default="", alias="messageId")
+    is_admin: bool = Field(default=False, alias="isAdmin")
     text: str | None = None
-    image_base64: str | None = None
-    mime_type: str | None = None
+    image_base64: str | None = Field(default=None, alias="imageBase64")
+    mime_type: str | None = Field(default=None, alias="mimeType")
     caption: str | None = None
-    push_name: str | None = None
+    push_name: str | None = Field(default=None, alias="pushName")
     action: str | None = None
     participants: list[str] | None = None
 
