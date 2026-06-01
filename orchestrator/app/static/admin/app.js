@@ -126,10 +126,10 @@ async function renderGroups(app) {
       <h2>Groups</h2>
       <button class="btn btn-primary" onclick="openRegisterModal()">+ Register Group</button>
     </div>
-    <table class="table">
+    <div class="table-wrap"><table class="table">
       <thead><tr><th>Group</th><th>Blueprint</th><th>Status</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
-    </table>
+    </table></div>
     <div id="modal-container"></div>`);
 }
 
@@ -214,10 +214,10 @@ async function renderAdmins(app) {
 
   app.innerHTML = layout('admins', `
     <div class="page-header"><h2>Admins</h2></div>
-    <table class="table">
+    <div class="table-wrap"><table class="table">
       <thead><tr><th>Phone Number</th><th>Name</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
-    </table>
+    </table></div>
     <div class="add-row">
       <input id="new-phone" type="text" placeholder="Phone e.g. 972501234567" onkeydown="if(event.key==='Enter')document.getElementById('new-name').focus()">
       <input id="new-name" type="text" placeholder="Name (optional)" onkeydown="if(event.key==='Enter')addAdmin()">
@@ -290,10 +290,10 @@ async function renderBlueprints(app) {
 
   app.innerHTML = layout('blueprints', `
     <div class="page-header"><h2>Blueprints</h2></div>
-    <table class="table">
+    <div class="table-wrap"><table class="table">
       <thead><tr><th>Blueprint</th><th>Tools</th><th>System Prompt</th></tr></thead>
       <tbody>${rows}</tbody>
-    </table>`);
+    </table></div>`);
 }
 
 function expandPrompt(i) {
