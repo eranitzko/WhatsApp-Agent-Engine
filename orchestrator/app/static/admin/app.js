@@ -190,9 +190,13 @@ async function renderAdmins(app) {
 
   const rows = admins.length
     ? admins.map(a => `
-        <tr>
+        <tr id="admin-row-${escAttr(a.phone_number)}">
           <td>${escHtml(a.phone_number)}</td>
-          <td>${escHtml(a.label || '—')}</td>
+          <td>
+            <span id="admin-label-${escAttr(a.phone_number)}" style="cursor:pointer;color:var(--accent)" onclick="editAdminLabel('${escAttr(a.phone_number)}','${escAttr(a.label||'')}')">
+              ${escHtml(a.label || '+ add name')}
+            </span>
+          </td>
           <td><button class="btn btn-danger" onclick="deleteAdmin('${escAttr(a.phone_number)}')">Remove</button></td>
         </tr>`).join('')
     : '<tr><td colspan="3" class="empty">No admins configured.</td></tr>';
@@ -200,19 +204,42 @@ async function renderAdmins(app) {
   app.innerHTML = layout('admins', `
     <div class="page-header"><h2>Admins</h2></div>
     <table class="table">
-      <thead><tr><th>Phone Number</th><th>Label</th><th></th></tr></thead>
+      <thead><tr><th>Phone Number</th><th>Name</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <div class="add-row">
-      <input id="new-phone" type="text" placeholder="e.g. 972501234567" onkeydown="if(event.key==='Enter')addAdmin()">
+      <input id="new-phone" type="text" placeholder="Phone e.g. 972501234567" onkeydown="if(event.key==='Enter')document.getElementById('new-name').focus()">
+      <input id="new-name" type="text" placeholder="Name (optional)" onkeydown="if(event.key==='Enter')addAdmin()">
       <button class="btn btn-primary" onclick="addAdmin()">+ Add Admin</button>
     </div>`);
 }
 
+function editAdminLabel(phone, currentLabel) {
+  const span = document.getElementById('admin-label-' + phone);
+  if (!span) return;
+  span.innerHTML = `
+    <input id="edit-label-${escAttr(phone)}" type="text" value="${escAttr(currentLabel)}"
+      style="width:140px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:13px"
+      onkeydown="if(event.key==='Enter')saveAdminLabel('${escAttr(phone)}');if(event.key==='Escape')renderAdmins(document.getElementById('app'))">
+    <button class="btn btn-primary" style="padding:4px 10px;font-size:12px;margin-left:4px" onclick="saveAdminLabel('${escAttr(phone)}')">Save</button>`;
+  document.getElementById('edit-label-' + phone).focus();
+}
+
+async function saveAdminLabel(phone) {
+  const input = document.getElementById('edit-label-' + phone);
+  if (!input) return;
+  await apiFetch('/admins/' + encodeURIComponent(phone), {
+    method: 'PATCH',
+    body: JSON.stringify({ label: input.value.trim() || null }),
+  });
+  renderAdmins(document.getElementById('app'));
+}
+
 async function addAdmin() {
   const phone = document.getElementById('new-phone').value.trim();
+  const name  = document.getElementById('new-name').value.trim();
   if (!phone) return;
-  await apiFetch('/admins', { method: 'POST', body: JSON.stringify({ phone_number: phone }) });
+  await apiFetch('/admins', { method: 'POST', body: JSON.stringify({ phone_number: phone, label: name || null }) });
   renderAdmins(document.getElementById('app'));
 }
 

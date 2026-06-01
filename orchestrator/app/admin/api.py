@@ -130,6 +130,11 @@ async def bridge_groups():
 
 class AddAdminRequest(BaseModel):
     phone_number: str
+    label: str | None = None
+
+
+class UpdateAdminRequest(BaseModel):
+    label: str | None = None
 
 
 @router.get("/admins", dependencies=[Depends(require_auth)])
@@ -144,7 +149,18 @@ def add_admin(body: AddAdminRequest):
     with SessionLocal() as db:
         if db.get(AdminNumbers, body.phone_number):
             raise HTTPException(status_code=409, detail="Admin already exists")
-        db.add(AdminNumbers(phone_number=body.phone_number))
+        db.add(AdminNumbers(phone_number=body.phone_number, label=body.label or None))
+        db.commit()
+    return {"ok": True}
+
+
+@router.patch("/admins/{phone_number}", dependencies=[Depends(require_auth)])
+def update_admin(phone_number: str, body: UpdateAdminRequest):
+    with SessionLocal() as db:
+        row = db.get(AdminNumbers, phone_number)
+        if not row:
+            raise HTTPException(status_code=404, detail="Admin not found")
+        row.label = body.label or None
         db.commit()
     return {"ok": True}
 
