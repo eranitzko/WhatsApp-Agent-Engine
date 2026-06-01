@@ -93,10 +93,21 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple
 /* ── Mobile bottom nav (≤640px) ─────────────────────────────────────────── */
 @media (max-width: 640px) {
   .sidebar { display: none; }
-  .main { padding: 16px 12px 90px; }
+  .main { padding: 16px 12px 90px; overflow-x: hidden; }
   .modal { width: calc(100vw - 32px); }
   .add-row { flex-wrap: wrap; }
   .add-row input { min-width: 0; }
+
+  /* Prevent table overflow on mobile */
+  .table { table-layout: fixed; word-break: break-word; }
+  .table td, .table th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 0; }
+  .table td:first-child, .table th:first-child { width: 45%; }
+  .table td:nth-child(2), .table th:nth-child(2) { width: 30%; }
+  .table td:last-child, .table th:last-child { width: 25%; }
+
+  /* Blueprint prompt — don't overflow */
+  .bp-collapsed { max-width: calc(100vw - 80px); }
+  .bp-full { min-width: unset; width: 100%; }
 
   .bottom-nav {
     display: flex;
