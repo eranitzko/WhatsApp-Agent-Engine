@@ -1,15 +1,15 @@
 *, *::before, *::after { box-sizing: border-box; }
 
 :root {
-  --bg: #0d1117;
-  --surface: #161b22;
-  --surface2: #1e2433;
-  --border: #2d3a52;
-  --text: #e2e8f0;
-  --muted: #7c8db0;
+  --bg: #f0f4f8;
+  --surface: #ffffff;
+  --surface2: #e8f0fe;
+  --border: #d0daea;
+  --text: #1a2332;
+  --muted: #6b7a99;
   --accent: #2563eb;
   --accent-hover: #1d4ed8;
-  --danger: #ef4444;
+  --danger: #dc2626;
   --sidebar-w: 200px;
 }
 
@@ -56,7 +56,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple
 .form-group input:focus, .form-group select:focus { outline: none; border-color: var(--accent); }
 
 /* Modal */
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; z-index: 100; }
 .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; width: 420px; }
 .modal h3 { margin: 0 0 4px; }
 .modal .subtitle { color: var(--muted); font-size: 12px; margin: 0 0 20px; }
