@@ -133,3 +133,39 @@ async def upload_metadata(r2_key: str, metadata: dict) -> str:
     Returns the sidecar key. Raises RuntimeError if upload fails.
     """
     return await asyncio.to_thread(_upload_metadata_sync, r2_key, metadata)
+
+
+async def sync_invoice_sidecar(invoice) -> None:
+    """Re-upload the R2 JSON sidecar for an invoice after any field correction.
+
+    Silently logs and returns if the invoice has no r2_key (image upload failed
+    at ingest time) so corrections still apply to the DB without crashing.
+    """
+    if not invoice.r2_key:
+        return
+    try:
+        await upload_metadata(invoice.r2_key, {
+            "invoice_id":            invoice.id,
+            "group_id":              invoice.group_id,
+            "message_id":            invoice.message_id,
+            "image_hash":            invoice.image_hash,
+            "submitted_by":          invoice.submitted_by,
+            "received_at":           invoice.received_at.isoformat() if invoice.received_at else None,
+            "invoice_date":          invoice.invoice_date.isoformat() if invoice.invoice_date else None,
+            "invoice_number":        invoice.invoice_number,
+            "vendor":                invoice.vendor,
+            "description":           invoice.description,
+            "amount_original":       float(invoice.amount_original) if invoice.amount_original else None,
+            "currency_original":     invoice.currency_original,
+            "amount_ils":            float(invoice.amount_ils) if invoice.amount_ils else None,
+            "exchange_rate":         float(invoice.exchange_rate) if invoice.exchange_rate else None,
+            "rate_source":           invoice.rate_source,
+            "extraction_confidence": invoice.extraction_confidence,
+            "flagged":               invoice.flagged,
+            "flag_reason":           invoice.flag_reason,
+        })
+    except RuntimeError:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Could not sync R2 sidecar for invoice %s — DB is authoritative", invoice.id
+        )
