@@ -193,6 +193,7 @@ def list_blueprints():
                 "id": b.id,
                 "display_name": b.display_name,
                 "tools_count": tools_count,
+                "system_prompt": b.system_prompt or "",
                 "system_prompt_preview": b.system_prompt[:100] if b.system_prompt else "",
             })
         return result

@@ -268,11 +268,24 @@ async function renderBlueprints(app) {
   if (!res) return;
   const blueprints = await res.json();
 
-  const rows = blueprints.map(b => `
+  const rows = blueprints.map((b, i) => `
     <tr>
       <td><strong>${escHtml(b.display_name)}</strong><br><span style="font-size:11px;color:var(--muted)">${escHtml(b.id)}</span></td>
       <td><span class="badge">${b.tools_count} tools</span></td>
-      <td class="bp-prompt">${escHtml(b.system_prompt_preview)}…</td>
+      <td>
+        <div class="bp-expand-wrap" id="bp-wrap-${i}">
+          <div class="bp-prompt bp-collapsed" id="bp-prompt-${i}"
+               onclick="expandPrompt(${i})"
+               title="Click to expand">
+            ${escHtml(b.system_prompt_preview)}…
+          </div>
+          <textarea class="bp-full" id="bp-full-${i}"
+            readonly
+            onblur="collapsePrompt(${i})"
+            style="display:none"
+          >${escHtml(b.system_prompt)}</textarea>
+        </div>
+      </td>
     </tr>`).join('');
 
   app.innerHTML = layout('blueprints', `
@@ -281,6 +294,18 @@ async function renderBlueprints(app) {
       <thead><tr><th>Blueprint</th><th>Tools</th><th>System Prompt</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`);
+}
+
+function expandPrompt(i) {
+  document.getElementById('bp-prompt-' + i).style.display = 'none';
+  const ta = document.getElementById('bp-full-' + i);
+  ta.style.display = 'block';
+  ta.focus();
+}
+
+function collapsePrompt(i) {
+  document.getElementById('bp-full-' + i).style.display = 'none';
+  document.getElementById('bp-prompt-' + i).style.display = '';
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
