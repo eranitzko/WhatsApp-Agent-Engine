@@ -91,24 +91,31 @@ class AgentRunner:
                 "text": blueprint.system_prompt,
                 "cache_control": {"type": "ephemeral"},
             },
-            {
-                "type": "text",
-                "text": f"Today's date: {datetime.now(timezone.utc).date()}. Sender is_admin: {is_admin}. Sender phone: {sender_phone}.",
-            },
         ]
         if participant_block:
-            system.append({"type": "text", "text": participant_block})
+            # Cache participant block — it changes rarely and can be large
+            system.append({
+                "type": "text",
+                "text": participant_block,
+                "cache_control": {"type": "ephemeral"},
+            })
         if custom_instructions:
             system.append({
                 "type": "text",
                 "text": f"Group-specific instructions:\n{custom_instructions}",
+                "cache_control": {"type": "ephemeral"},
             })
+        # Ephemeral runtime context — not cached (changes every message)
+        system.append({
+            "type": "text",
+            "text": f"Today's date: {datetime.now(timezone.utc).date()}. Sender is_admin: {is_admin}. Sender phone: {sender_phone}.",
+        })
         tool_schemas = self.registry.get_schemas(allowed_tools)
 
         for _ in range(blueprint.max_tool_turns):
             response = await self.client.messages.create(
                 model=blueprint.model,
-                max_tokens=4096,
+                max_tokens=1024,  # WhatsApp replies are short; saves tokens and reduces latency
                 system=system,
                 tools=tool_schemas,
                 messages=messages,

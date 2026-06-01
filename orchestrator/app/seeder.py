@@ -61,12 +61,13 @@ def seed(db: Session, admin_phone: str, legacy_group_jid: str | None = None) -> 
     if fa_bp:
         fa_bp.system_prompt = FAMILY_ACCOUNTING_SYSTEM_PROMPT
         fa_bp.tools_enabled = json.dumps(FAMILY_ACCOUNTING_TOOLS)
+        fa_bp.model = "claude-haiku-4-5"
     else:
         db.add(Blueprint(
             id="family_accounting",
             display_name="Family Accounting",
             system_prompt=FAMILY_ACCOUNTING_SYSTEM_PROMPT,
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5",
             tools_enabled=json.dumps(FAMILY_ACCOUNTING_TOOLS),
             max_tool_turns=5,
             context_window=8,

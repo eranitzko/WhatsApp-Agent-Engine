@@ -116,7 +116,10 @@ async def lifespan(_app: FastAPI):
     )
     db.close()
 
-    anthropic_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    anthropic_client = anthropic.AsyncAnthropic(
+        api_key=settings.anthropic_api_key,
+        max_retries=4,  # retry overload/529 up to 4 times with exponential backoff
+    )
     _http_client = httpx.AsyncClient()
 
     tool_registry.register(get_invoice_tools())
