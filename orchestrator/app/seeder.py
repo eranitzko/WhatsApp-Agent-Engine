@@ -30,7 +30,7 @@ DEFAULT_BLUEPRINTS = [
         "id": "invoice_curator",
         "display_name": "Invoice Curator",
         "system_prompt": INVOICE_CURATOR_SYSTEM_PROMPT,
-        "model": "claude-sonnet-4-6",
+        "model": "claude-haiku-4-5",
         "tools_enabled": json.dumps(INVOICE_CURATOR_TOOLS),
         "max_tool_turns": 6,
         "context_window": 8,
@@ -50,9 +50,12 @@ DEFAULT_BLUEPRINTS = [
 
 
 def seed(db: Session, admin_phone: str, legacy_group_jid: str | None = None) -> None:
-    # Static blueprints
+    # Static blueprints — upsert model on each startup so DB stays in sync
     for bp_data in DEFAULT_BLUEPRINTS:
-        if not db.query(Blueprint).filter_by(id=bp_data["id"]).first():
+        existing = db.query(Blueprint).filter_by(id=bp_data["id"]).first()
+        if existing:
+            existing.model = bp_data["model"]
+        else:
             db.add(Blueprint(**bp_data))
 
     # Family accounting blueprint — upsert static prompt so old template-based
