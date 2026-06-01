@@ -18,7 +18,7 @@ services:
     build: ./orchestrator
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8000:8000"
+      - "8080:8000"
     volumes:
       - ./data/db:/data/db
       - ./data/auth:/data/auth
