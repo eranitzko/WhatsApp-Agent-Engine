@@ -100,7 +100,14 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple
 
   /* Scrollable table wrapper */
   .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; width: 100%; }
-  .table { min-width: 420px; }
+  .table { min-width: 0; width: 100%; }
+
+  /* Hide Status column on mobile — it's always "active" */
+  .col-status { display: none; }
+
+  /* Constrain group name cell so Remove button stays visible */
+  .table td:first-child { max-width: 45vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .table td:first-child span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Blueprint prompt — don't overflow */
   .bp-collapsed { max-width: 180px; }

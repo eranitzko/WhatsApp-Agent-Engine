@@ -116,7 +116,7 @@ async function renderGroups(app) {
         <tr>
           <td>${escHtml(g.group_name)}<br><span style="font-size:11px;color:var(--muted)">${escHtml(g.group_jid)}</span></td>
           <td><span class="badge">${escHtml(g.blueprint_name)}</span></td>
-          <td><span class="badge">${escHtml(g.status)}</span></td>
+          <td class="col-status"><span class="badge">${escHtml(g.status)}</span></td>
           <td><button class="btn btn-danger" onclick="deleteGroup('${escAttr(g.group_jid)}')">Remove</button></td>
         </tr>`).join('')
     : '<tr><td colspan="4" class="empty">No groups registered yet.</td></tr>';
@@ -127,7 +127,7 @@ async function renderGroups(app) {
       <button class="btn btn-primary" onclick="openRegisterModal()">+ Register Group</button>
     </div>
     <div class="table-wrap"><table class="table">
-      <thead><tr><th>Group</th><th>Blueprint</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Group</th><th>Blueprint</th><th class="col-status">Status</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
     <div id="modal-container"></div>`);
