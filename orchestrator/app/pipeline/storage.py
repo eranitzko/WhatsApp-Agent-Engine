@@ -101,3 +101,35 @@ async def download_image(r2_key: str) -> bytes:
     Raises RuntimeError if download fails.
     """
     return await asyncio.to_thread(download_image_sync, r2_key)
+
+
+def _upload_metadata_sync(r2_key: str, metadata: dict) -> str:
+    """Upload invoice metadata as a JSON sidecar alongside the image.
+
+    The sidecar key is the image key with .jpg replaced by .json.
+    Returns the sidecar key.
+    """
+    import json
+    sidecar_key = r2_key.rsplit(".", 1)[0] + ".json"
+    payload = json.dumps(metadata, default=str).encode("utf-8")
+    try:
+        client = _get_client()
+        client.put_object(
+            Bucket=settings.r2_bucket,
+            Key=sidecar_key,
+            Body=payload,
+            ContentType="application/json",
+        )
+        logger.info("Uploaded metadata sidecar to R2: %s", sidecar_key)
+        return sidecar_key
+    except (BotoCoreError, ClientError) as exc:
+        logger.error("R2 metadata upload failed for key %s: %s", sidecar_key, exc)
+        raise RuntimeError(f"R2 metadata upload failed: {exc}") from exc
+
+
+async def upload_metadata(r2_key: str, metadata: dict) -> str:
+    """Async upload of invoice metadata JSON sidecar to R2.
+
+    Returns the sidecar key. Raises RuntimeError if upload fails.
+    """
+    return await asyncio.to_thread(_upload_metadata_sync, r2_key, metadata)
