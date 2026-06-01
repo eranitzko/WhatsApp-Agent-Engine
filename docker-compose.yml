@@ -2,6 +2,8 @@ services:
   bridge:
     build: ./bridge
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3000"
     volumes:
       - ./data/auth:/data/auth
     environment:
