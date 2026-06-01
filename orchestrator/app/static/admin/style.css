@@ -72,3 +72,48 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple
 
 /* Empty state */
 .empty { color: var(--muted); text-align: center; padding: 40px; font-size: 13px; }
+
+/* ── Mobile bottom nav (≤640px) ─────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .sidebar { display: none; }
+  .main { padding: 16px 12px 90px; }
+  .modal { width: calc(100vw - 32px); }
+  .add-row { flex-wrap: wrap; }
+  .add-row input { min-width: 0; }
+
+  .bottom-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 8px 8px env(safe-area-inset-bottom, 4px);
+    gap: 4px;
+    z-index: 50;
+  }
+  .bottom-nav-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    cursor: pointer;
+  }
+  .bottom-nav-item .bnav-icon {
+    border-radius: 12px;
+    padding: 4px 14px;
+    font-size: 18px;
+    transition: background 0.15s;
+  }
+  .bottom-nav-item.active .bnav-icon { background: var(--surface2); }
+  .bottom-nav-item .bnav-label {
+    font-size: 10px;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .bottom-nav-item.active .bnav-label { color: var(--accent); }
+}
+
+@media (min-width: 641px) {
+  .bottom-nav { display: none; }
+}

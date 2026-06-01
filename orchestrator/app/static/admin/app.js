@@ -53,7 +53,18 @@ function layout(page, content) {
         <div class="nav-item" onclick="clearToken();route()">🚪 Sign out</div>
       </nav>
       <main class="main">${content}</main>
-    </div>`;
+    </div>
+    <nav class="bottom-nav">
+      ${nav.map(n => `
+        <div class="bottom-nav-item ${page === n.hash ? 'active' : ''}" onclick="location.hash='${n.hash}'">
+          <div class="bnav-icon">${n.icon}</div>
+          <div class="bnav-label">${n.label}</div>
+        </div>`).join('')}
+      <div class="bottom-nav-item" onclick="clearToken();route()">
+        <div class="bnav-icon">🚪</div>
+        <div class="bnav-label">Sign out</div>
+      </div>
+    </nav>`;
 }
 
 // ── Login ─────────────────────────────────────────────────────────────────────
