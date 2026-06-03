@@ -191,7 +191,7 @@ class AutomationRule(Base):
     __tablename__ = "automation_rules"
 
     id               = Column(String(36), primary_key=True, default=_uuid)
-    group_jid        = Column(String, ForeignKey("group_registry.group_jid"), nullable=False)
+    group_jid        = Column(String, ForeignKey("group_registry.group_jid"), nullable=False, index=True)
     name             = Column(String, nullable=False)
     rule_type        = Column(String, nullable=False)   # one_off|recurring|inactivity|threshold|event_trigger
     schedule_cron    = Column(String, nullable=True)    # ISO datetime str for one_off; cron expr for recurring

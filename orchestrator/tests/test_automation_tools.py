@@ -5,12 +5,24 @@ from unittest.mock import patch
 
 import pytest
 
-from app.db.models import AutomationRule
+from app.db.models import AutomationRule, GroupRegistry, Blueprint
 
 
 # ── ORM tests ─────────────────────────────────────────────────────────────────
 
+def _seed_group_for_orm(db):
+    db.add(Blueprint(
+        id="invoice_curator",
+        display_name="Invoice Curator",
+        system_prompt="prompt",
+        tools_enabled="[]",
+    ))
+    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="invoice_curator"))
+    db.commit()
+
+
 def test_automation_rule_model_has_required_columns(db):
+    _seed_group_for_orm(db)
     rule = AutomationRule(
         group_jid="123@g.us",
         name="Friday debt reminder",
@@ -30,6 +42,7 @@ def test_automation_rule_model_has_required_columns(db):
 
 
 def test_automation_rule_defaults_status_to_pending_confirm(db):
+    _seed_group_for_orm(db)
     rule = AutomationRule(
         group_jid="123@g.us",
         name="test",

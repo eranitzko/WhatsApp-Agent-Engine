@@ -34,7 +34,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(["group_jid"], ["group_registry.group_jid"]),
     )
+    op.create_index("ix_automation_rules_group_jid", "automation_rules", ["group_jid"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_automation_rules_group_jid", table_name="automation_rules")
     op.drop_table("automation_rules")
