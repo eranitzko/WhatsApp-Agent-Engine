@@ -82,11 +82,13 @@ async def test_executor_send_message_posts_to_bridge(db):
     rule = _make_rule("send_message", {"message": "hello group"})
 
     mock_client = AsyncMock()
-    mock_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.raise_for_status = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("app.automation.executor.httpx.AsyncClient", return_value=mock_client):
+    with patch("app.bridge_client.httpx.AsyncClient", return_value=mock_client):
         await executor.execute(rule, db)
 
     mock_client.post.assert_called_once()
@@ -101,11 +103,13 @@ async def test_executor_send_message_with_mentions(db):
     rule = _make_rule("send_message", {"message": "pay up", "mentions": ["972500000001"]})
 
     mock_client = AsyncMock()
-    mock_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.raise_for_status = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("app.automation.executor.httpx.AsyncClient", return_value=mock_client):
+    with patch("app.bridge_client.httpx.AsyncClient", return_value=mock_client):
         await executor.execute(rule, db)
 
     payload = mock_client.post.call_args.kwargs["json"]

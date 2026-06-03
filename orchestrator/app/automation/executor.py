@@ -4,19 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-from typing import Callable, Awaitable
+from typing import TYPE_CHECKING, Callable, Awaitable
 
-import httpx
+if TYPE_CHECKING:
+    from app.db.models import AutomationRule
+    from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
 ActionFn = Callable[..., Awaitable[None]]
-
-
-def _bridge_headers() -> dict:
-    secret = os.environ.get("BRIDGE_SECRET", "")
-    return {"Authorization": f"Bearer {secret}"} if secret else {}
 
 
 class AutomationExecutor:
@@ -34,7 +30,7 @@ class AutomationExecutor:
     def register_action(self, name: str, fn: ActionFn) -> None:
         self._actions[name] = fn
 
-    async def execute(self, rule, db) -> None:
+    async def execute(self, rule: "AutomationRule", db: "Session") -> None:
         """Execute the action for a rule. Logs errors but never raises."""
         try:
             config = json.loads(rule.action_config)
@@ -55,14 +51,9 @@ class AutomationExecutor:
             logger.exception("AutomationExecutor.execute failed for rule %s", rule.id)
 
     async def _send_message(self, group_jid: str, config: dict) -> None:
-        from app.config import settings
-        payload: dict = {"jid": group_jid, "text": config.get("message", "")}
-        mentions = config.get("mentions")
-        if mentions:
-            payload["mentions"] = mentions
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(
-                f"{settings.bridge_url}/send",
-                json=payload,
-                headers=_bridge_headers(),
-            )
+        from app.bridge_client import send_message
+        await send_message(
+            group_jid,
+            config.get("message", ""),
+            mentions=config.get("mentions"),
+        )

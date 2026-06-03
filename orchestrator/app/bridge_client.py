@@ -36,6 +36,24 @@ async def send_text(jid: str, text: str) -> None:
             raise
 
 
+async def send_message(jid: str, text: str, *, mentions: list[str] | None = None) -> None:
+    """Send a text message to a WhatsApp JID, with optional @mentions."""
+    payload: dict = {"jid": jid, "text": text}
+    if mentions:
+        payload["mentions"] = mentions
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            resp = await client.post(
+                f"{settings.bridge_url}/send",
+                json=payload,
+                headers=_bridge_headers(),
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.error("Failed to send message to %s: %s", jid, exc)
+            raise
+
+
 async def fetch_group_meta(jid: str) -> dict:
     """Fetch group description and participant list from the bridge.
 
