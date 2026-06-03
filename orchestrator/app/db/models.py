@@ -187,6 +187,24 @@ class ScheduledMessage(Base):
                         default=lambda: datetime.now(timezone.utc))
 
 
+class AutomationRule(Base):
+    __tablename__ = "automation_rules"
+
+    id               = Column(String(36), primary_key=True, default=_uuid)
+    group_jid        = Column(String, ForeignKey("group_registry.group_jid"), nullable=False)
+    name             = Column(String, nullable=False)
+    rule_type        = Column(String, nullable=False)   # one_off|recurring|inactivity|threshold|event_trigger
+    schedule_cron    = Column(String, nullable=True)    # ISO datetime str for one_off; cron expr for recurring
+    inactivity_hours = Column(Integer, nullable=True)
+    threshold_config = Column(Text, nullable=True)      # JSON: {"metric": str, "op": str, "value": float}
+    action_type      = Column(String, nullable=False)   # send_message|run_agent_action
+    action_config    = Column(Text, nullable=False)     # JSON: {"message": str} or {"action": str}
+    status           = Column(String, nullable=False, default="pending_confirm")  # pending_confirm|active|paused|done
+    last_fired_at    = Column(DateTime(timezone=True), nullable=True)
+    created_at       = Column(DateTime(timezone=True), nullable=False,
+                              default=lambda: datetime.now(timezone.utc))
+
+
 class UserProfile(Base):
     __tablename__ = "user_profiles"
 
