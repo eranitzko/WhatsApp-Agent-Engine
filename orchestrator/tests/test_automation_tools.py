@@ -352,3 +352,50 @@ async def test_create_automation_invalid_rule_type(db):
             group_jid="123@g.us",
         )
     assert "invalid" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_pause_automation_wrong_group_rejected(db):
+    _seed_group(db)
+    rule = AutomationRule(
+        group_jid="123@g.us", name="test", rule_type="recurring",
+        schedule_cron="0 9 * * 1",
+        action_type="send_message", action_config=json.dumps({"message": "x"}),
+        status="active",
+    )
+    db.add(rule)
+    db.commit()
+
+    tools = get_automation_tools()
+    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+        result = await tools["pause_automation"]["executor"](
+            {"id": rule.id},
+            group_jid="999@g.us",
+        )
+    assert "different group" in result.lower()
+    db.expire_all()
+    assert db.get(AutomationRule, rule.id).status == "active"  # unchanged
+
+
+@pytest.mark.asyncio
+async def test_cancel_automation_wrong_group_rejected(db):
+    _seed_group(db)
+    rule = AutomationRule(
+        group_jid="123@g.us", name="test", rule_type="recurring",
+        schedule_cron="0 9 * * 1",
+        action_type="send_message", action_config=json.dumps({"message": "x"}),
+        status="active",
+    )
+    db.add(rule)
+    db.commit()
+    rule_id = rule.id
+
+    tools = get_automation_tools()
+    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+        result = await tools["cancel_automation"]["executor"](
+            {"id": rule_id},
+            group_jid="999@g.us",
+        )
+    assert "different group" in result.lower()
+    db.expire_all()
+    assert db.get(AutomationRule, rule_id) is not None  # rule still exists

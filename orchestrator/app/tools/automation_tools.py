@@ -104,6 +104,8 @@ async def _exec_confirm_automation(params: dict, **ctx) -> str:
             return f"No automation found with ID '{rule_id}'."
         if rule.group_jid != group_jid:
             return "That automation belongs to a different group."
+        if rule.status not in ("pending_confirm", "paused"):
+            return f"Automation '{rule.name}' cannot be activated (current status: {rule.status})."
         rule.status = "active"
         db.commit()
         name = rule.name
@@ -140,6 +142,8 @@ async def _exec_pause_automation(params: dict, **ctx) -> str:
             return f"No automation found with ID '{rule_id}'."
         if rule.group_jid != group_jid:
             return "That automation belongs to a different group."
+        if rule.status != "active":
+            return f"Automation '{rule.name}' is not active (current status: {rule.status})."
         rule.status = "paused"
         db.commit()
         name = rule.name
