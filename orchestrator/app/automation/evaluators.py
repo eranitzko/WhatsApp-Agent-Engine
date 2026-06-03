@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -55,17 +55,15 @@ class ThresholdEvaluator:
 
     def _metric_open_debt_amount(self, db: Session, group_jid: str) -> float:
         from app.db.models import LedgerEntry
-        entries = (
-            db.query(LedgerEntry)
-            .filter(LedgerEntry.group_jid == group_jid)
-            .all()
+        result = (
+            db.query(func.sum(LedgerEntry.amount_ils - LedgerEntry.amount_settled_ils))
+            .filter(
+                LedgerEntry.group_jid == group_jid,
+                LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
+            )
+            .scalar()
         )
-        total = sum(
-            float(e.amount_ils - (e.amount_settled_ils or Decimal("0")))
-            for e in entries
-            if e.amount_ils > (e.amount_settled_ils or Decimal("0"))
-        )
-        return total
+        return float(result or 0)
 
     def _metric_days_since_last_settlement(self, db: Session, group_jid: str) -> float:
         from app.db.models import LedgerSettlement, LedgerEntry

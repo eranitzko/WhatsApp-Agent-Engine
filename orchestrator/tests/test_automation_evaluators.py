@@ -22,8 +22,9 @@ def _add_invoice(db, group_id, amount_ils, invoice_date=None):
 
 
 def _add_ledger_entry(db, group_jid, from_phone, to_phone, amount_ils, amount_settled=0):
+    import uuid
     entry = LedgerEntry(
-        transaction_id="tx-1",
+        transaction_id=str(uuid.uuid4()),
         group_jid=group_jid,
         from_phone=from_phone,
         to_phone=to_phone,
