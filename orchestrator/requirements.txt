@@ -46,3 +46,6 @@ apscheduler==3.10.4
 
 # Admin panel auth
 python-jose[cryptography]==3.3.0
+
+# Cron expression evaluation (automation engine)
+croniter==3.0.3
