@@ -126,6 +126,13 @@ class AutomationExecutor:
                     "Automation workflow step %d (%r) returned for %s: %s",
                     i, tool_name, group_jid, result,
                 )
+                if tool_name == "request_confirmation":
+                    # Surface the confirmation prompt in the group and stop.
+                    # Remaining steps don't run — the confirmed action in
+                    # confirmation_store fires when the user replies "yes".
+                    if isinstance(result, str):
+                        await send_message(group_jid, result)
+                    return
                 if output_key and isinstance(result, str):
                     ctx.store(output_key, result)
             except Exception:
