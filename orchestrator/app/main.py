@@ -79,53 +79,6 @@ def _verify_webhook_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-# NOTE: These action functions use bridge_client, which includes authorization headers.
-async def _balance_summary_action(group_jid: str, db, config: dict) -> None:
-    """Automation action: send an open-debt summary to the group."""
-    from app.db.models import LedgerEntry
-    from decimal import Decimal
-    entries = db.query(LedgerEntry).filter(LedgerEntry.group_jid == group_jid).all()
-    open_debts = [
-        e for e in entries
-        if (e.amount_ils - (e.amount_settled_ils or Decimal("0"))) > 0
-    ]
-    if not open_debts:
-        await bridge_client.send_message(group_jid, "Balance summary: No open debts — all settled! ✅")
-        return
-    lines = [
-        f"• {e.from_phone} → {e.to_phone}: "
-        f"₪{float(e.amount_ils - (e.amount_settled_ils or Decimal('0'))):.2f}"
-        f" ({e.description})"
-        for e in open_debts
-    ]
-    await bridge_client.send_message(group_jid, "Balance summary:\n" + "\n".join(lines))
-
-
-async def _monthly_invoice_report_action(group_jid: str, db, config: dict) -> None:
-    """Automation action: send a monthly invoice summary to the group."""
-    from app.db.models import Invoice
-    from datetime import date
-    today = date.today()
-    first_of_month = today.replace(day=1)
-    invoices = (
-        db.query(Invoice)
-        .filter(Invoice.group_id == group_jid, Invoice.invoice_date >= first_of_month)
-        .all()
-    )
-    month_label = today.strftime("%B %Y")
-    if not invoices:
-        await bridge_client.send_message(group_jid, f"Monthly report ({month_label}): No invoices this month.")
-        return
-    total = sum(float(inv.amount_ils or 0) for inv in invoices)
-    lines = [
-        f"• {inv.vendor or 'Unknown'}: ₪{float(inv.amount_ils or 0):.2f}"
-        for inv in invoices
-    ]
-    await bridge_client.send_message(
-        group_jid,
-        f"Monthly report ({month_label}) — {len(invoices)} invoices, ₪{total:.2f} total:\n"
-        + "\n".join(lines),
-    )
 
 
 # --- Globals (initialized at startup) ---
@@ -184,8 +137,6 @@ async def lifespan(_app: FastAPI):
     registry_ref.set_registry(tool_registry)
 
     automation_executor = AutomationExecutor()
-    automation_executor.register_action("balance_summary", _balance_summary_action)
-    automation_executor.register_action("monthly_invoice_report", _monthly_invoice_report_action)
     set_automation_executor(automation_executor)
 
     if settings.notion_api_key:

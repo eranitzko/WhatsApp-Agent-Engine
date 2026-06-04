@@ -117,38 +117,62 @@ async def test_executor_send_message_with_mentions(db):
 
 
 @pytest.mark.asyncio
-async def test_executor_run_agent_action_calls_registered_fn(db):
-    called_with = {}
+async def test_executor_run_agent_action_calls_registry_tool(db):
+    from unittest.mock import AsyncMock, MagicMock, patch
 
-    async def fake_action(group_jid, db, config):
-        called_with["group_jid"] = group_jid
-        called_with["config"] = config
+    mock_registry = MagicMock()
+    mock_registry.has_tool.return_value = True
+    mock_registry.execute = AsyncMock(return_value="ok")
 
-    executor = AutomationExecutor(actions={"balance_summary": fake_action})
-    rule = _make_rule("run_agent_action", {"action": "balance_summary"})
-    await executor.execute(rule, db)
-
-    assert called_with["group_jid"] == "123@g.us"
-    assert called_with["config"]["action"] == "balance_summary"
-
-
-@pytest.mark.asyncio
-async def test_executor_unknown_action_logs_and_does_not_raise(db):
     executor = AutomationExecutor()
-    rule = _make_rule("run_agent_action", {"action": "nonexistent"})
-    # Should not raise
-    await executor.execute(rule, db)
+    rule = _make_rule("run_agent_action", {"action": "get_balance", "phone": "972501234567"})
+
+    with patch("app.automation.executor.registry_ref") as mock_ref:
+        mock_ref.get_registry.return_value = mock_registry
+        await executor.execute(rule, db)
+
+    mock_registry.execute.assert_called_once_with(
+        "get_balance", {"phone": "972501234567"},
+        group_jid="123@g.us", is_admin=True, sender="",
+    )
 
 
 @pytest.mark.asyncio
-async def test_executor_error_in_action_does_not_raise(db):
-    async def bad_action(group_jid, db, config):
-        raise RuntimeError("boom")
+async def test_executor_unknown_action_sends_error_message(db):
+    from unittest.mock import AsyncMock, MagicMock, patch
 
-    executor = AutomationExecutor(actions={"bad": bad_action})
-    rule = _make_rule("run_agent_action", {"action": "bad"})
-    # Should swallow the exception
-    await executor.execute(rule, db)
+    mock_registry = MagicMock()
+    mock_registry.has_tool.return_value = False
+    mock_send = AsyncMock()
+
+    executor = AutomationExecutor()
+    rule = _make_rule("run_agent_action", {"action": "nonexistent_tool"})
+
+    with patch("app.automation.executor.registry_ref") as mock_ref, \
+         patch("app.automation.executor.send_message", mock_send):
+        mock_ref.get_registry.return_value = mock_registry
+        await executor.execute(rule, db)
+
+    mock_send.assert_called_once()
+    msg = mock_send.call_args.args[1]
+    assert "nonexistent_tool" in msg
+    assert "administrator" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_executor_tool_error_does_not_raise(db):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_registry = MagicMock()
+    mock_registry.has_tool.return_value = True
+    mock_registry.execute = AsyncMock(side_effect=RuntimeError("boom"))
+
+    executor = AutomationExecutor()
+    rule = _make_rule("run_agent_action", {"action": "get_balance"})
+
+    with patch("app.automation.executor.registry_ref") as mock_ref:
+        mock_ref.get_registry.return_value = mock_registry
+        await executor.execute(rule, db)  # must not raise
 
 
 # ── Tool tests ────────────────────────────────────────────────────────────────

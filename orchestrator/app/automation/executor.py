@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Callable, Awaitable
+from typing import TYPE_CHECKING
+
+from app import registry_ref
+from app.bridge_client import send_message
 
 if TYPE_CHECKING:
     from app.db.models import AutomationRule
@@ -12,23 +15,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-ActionFn = Callable[..., Awaitable[None]]
-
 
 class AutomationExecutor:
     """Executes a single AutomationRule's action.
 
+    run_agent_action dispatches to the live ToolRegistry — any registered tool
+    can be used as an automation action with arbitrary params from action_config.
+
     Usage:
-        executor = AutomationExecutor(actions={"balance_summary": fn})
-        executor.register_action("monthly_invoice_report", fn2)
+        executor = AutomationExecutor()
         await executor.execute(rule, db)
     """
-
-    def __init__(self, actions: dict[str, ActionFn] | None = None):
-        self._actions: dict[str, ActionFn] = dict(actions or {})
-
-    def register_action(self, name: str, fn: ActionFn) -> None:
-        self._actions[name] = fn
 
     async def execute(self, rule: "AutomationRule", db: "Session") -> None:
         """Execute the action for a rule. Logs errors but never raises."""
@@ -37,23 +34,37 @@ class AutomationExecutor:
             if rule.action_type == "send_message":
                 await self._send_message(rule.group_jid, config)
             elif rule.action_type == "run_agent_action":
-                action_name = config.get("action", "")
-                fn = self._actions.get(action_name)
-                if fn is None:
-                    logger.error(
-                        "Automation action %r not registered (rule %s)", action_name, rule.id
-                    )
-                    return
-                await fn(group_jid=rule.group_jid, db=db, config=config)
+                await self._run_tool(rule.group_jid, config)
             else:
                 logger.error("Unknown action_type %r for rule %s", rule.action_type, rule.id)
         except Exception:
             logger.exception("AutomationExecutor.execute failed for rule %s", rule.id)
 
     async def _send_message(self, group_jid: str, config: dict) -> None:
-        from app.bridge_client import send_message
         await send_message(
             group_jid,
             config.get("message", ""),
             mentions=config.get("mentions"),
         )
+
+    async def _run_tool(self, group_jid: str, config: dict) -> None:
+        tool_name = config.get("action", "")
+        params = {k: v for k, v in config.items() if k != "action"}
+
+        try:
+            reg = registry_ref.get_registry()
+        except RuntimeError:
+            logger.error("AutomationExecutor: tool registry not available for action %r", tool_name)
+            return
+
+        if not reg.has_tool(tool_name):
+            logger.warning("Automation: tool %r not in registry (rule group %s)", tool_name, group_jid)
+            await send_message(
+                group_jid,
+                f"⚙️ Automation could not run: tool '{tool_name}' is not available. "
+                f"Ask your administrator to enable it.",
+            )
+            return
+
+        result = await reg.execute(tool_name, params, group_jid=group_jid, is_admin=True, sender="")
+        logger.info("Automation tool %r returned for %s: %s", tool_name, group_jid, result)

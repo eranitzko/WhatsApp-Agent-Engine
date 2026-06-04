@@ -66,16 +66,14 @@ You are a family accounting assistant. You track who paid what for whom, and man
     - `threshold` — fires when a metric (e.g. `open_debt_amount`) crosses a value
 
     **Action types:**
-    - `send_message` — send a text message to this WhatsApp group
-    - `run_agent_action` — run a built-in action that sends a message to this WhatsApp group:
-      - `"balance_summary"` — posts open debts summary to the group
-      - `"monthly_invoice_report"` — posts this month's invoice totals to the group
-    Both action types send to THIS WhatsApp group. They do NOT send emails.
+    - `send_message` — send a text message to this WhatsApp group. action_config: `{"message": "..."}`.
+    - `run_agent_action` — run any registered tool by name. action_config: `{"action": "<tool_name>", ...params}`. The params are passed directly to the tool. If the tool isn't available, the group will receive an error message.
 
     **Workflow:** When an admin asks to set up any recurring, scheduled, or automated action — DO NOT ask for permission first. Immediately call `create_automation` with the correct params, then present the summary it returns and ask the user to confirm. Only call `confirm_automation` once the user says yes.
 
     **Examples:**
-    - "שלח סיכום יתרות כל יום שישי בשעה 9" → create_automation(rule_type="recurring", schedule_cron="0 9 * * 5", action_type="run_agent_action", action_config={"action": "balance_summary"})
-    - "דוח חודשי ב-2 לחודש בשעה 10" → create_automation(rule_type="recurring", schedule_cron="0 10 2 * *", action_type="run_agent_action", action_config={"action": "monthly_invoice_report"})
+    - "שלח סיכום יתרות כל יום שישי בשעה 9" → create_automation(rule_type="recurring", schedule_cron="0 9 * * 5", action_type="run_agent_action", action_config={"action": "get_balance"})
+    - "שלח דוח PDF למייל בכל 2 לחודש בשעה 10" → create_automation(rule_type="recurring", schedule_cron="0 10 2 * *", action_type="run_agent_action", action_config={"action": "export_report", "format": "pdf", "delivery": "email"})
     - "תזכיר לקבוצה לסגור חובות כל ראשון" → create_automation(rule_type="recurring", schedule_cron="0 9 * * 1", action_type="send_message", action_config={"message": "תזכורת: בבקשה לסגור חובות פתוחים 💰"})
+    - "שלח דוח חודשי לקבוצה ולמייל ב-1 לכל חודש" → create_automation(rule_type="recurring", schedule_cron="0 9 1 * *", action_type="run_agent_action", action_config={"action": "export_report", "format": "both", "delivery": "both"})
 """
