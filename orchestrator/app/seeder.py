@@ -6,10 +6,16 @@ from app.prompts.notion_assistant import NOTION_ASSISTANT_SYSTEM_PROMPT
 from app.prompts.family_accounting import FAMILY_ACCOUNTING_SYSTEM_PROMPT
 
 
+AUTOMATION_TOOLS = [
+    "create_automation", "confirm_automation", "list_automations",
+    "pause_automation", "cancel_automation",
+]
+
 INVOICE_CURATOR_TOOLS = [
     "get_status", "list_invoices", "get_preview", "generate_report",
     "flag_invoice", "unflag_invoice", "set_invoice_date", "set_invoice_amount",
     "add_date_format", "update_config", "request_confirmation",
+    *AUTOMATION_TOOLS,
 ]
 
 NOTION_ASSISTANT_TOOLS = [
@@ -22,6 +28,7 @@ FAMILY_ACCOUNTING_TOOLS = [
     "save_email", "rename_participant", "set_household",
     "correct_transaction", "apply_correction",
     "create_report_format", "list_report_formats", "delete_report_format",
+    *AUTOMATION_TOOLS,
 ]
 
 
@@ -50,11 +57,12 @@ DEFAULT_BLUEPRINTS = [
 
 
 def seed(db: Session, admin_phone: str, legacy_group_jid: str | None = None) -> None:
-    # Static blueprints — upsert model on each startup so DB stays in sync
+    # Static blueprints — upsert on each startup so DB stays in sync
     for bp_data in DEFAULT_BLUEPRINTS:
         existing = db.query(Blueprint).filter_by(id=bp_data["id"]).first()
         if existing:
             existing.model = bp_data["model"]
+            existing.tools_enabled = bp_data["tools_enabled"]
         else:
             db.add(Blueprint(**bp_data))
 
