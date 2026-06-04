@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import anthropic
 
-from app.db.models import Blueprint
+from app.db.models import Blueprint, SystemConfig
 from app.db.session import SessionLocal
 from app.tool_registry import ToolRegistry
 
@@ -33,12 +33,10 @@ class AgentRunner:
 
         # Filter globally disabled tools (stored in SystemConfig["disabled_tools"])
         try:
-            from app.db.models import SystemConfig
-            import json as _json
             with SessionLocal() as _db:
                 _row = _db.get(SystemConfig, "disabled_tools")
                 if _row and _row.value:
-                    _disabled = set(_json.loads(_row.value))
+                    _disabled = set(json.loads(_row.value))
                     allowed_tools = [t for t in allowed_tools if t not in _disabled]
         except Exception:
             logger.warning("Could not read disabled_tools from SystemConfig", exc_info=True)

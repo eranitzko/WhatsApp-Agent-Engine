@@ -14,6 +14,10 @@ class ToolRegistry:
     def has_tool(self, tool_name: str) -> bool:
         return tool_name in self._tools
 
+    def list_tools(self) -> dict[str, dict]:
+        """Return a shallow copy of the registered tools dict."""
+        return dict(self._tools)
+
     async def execute(self, tool_name: str, params: dict, **ctx) -> Any:
         if tool_name not in self._tools:
             return f"Unknown tool: {tool_name}"

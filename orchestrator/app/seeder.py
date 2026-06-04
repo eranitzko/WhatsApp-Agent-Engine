@@ -71,7 +71,7 @@ def seed(db: Session, admin_phone: str, legacy_group_jid: str | None = None) -> 
     fa_bp = db.query(Blueprint).filter_by(id="family_accounting").first()
     if fa_bp:
         fa_bp.system_prompt = FAMILY_ACCOUNTING_SYSTEM_PROMPT
-        fa_bp.tools_enabled = json.dumps(FAMILY_ACCOUNTING_TOOLS)
+        # NOTE: do NOT overwrite tools_enabled — admin UI changes must persist across restarts
         fa_bp.model = "claude-haiku-4-5"
     else:
         db.add(Blueprint(

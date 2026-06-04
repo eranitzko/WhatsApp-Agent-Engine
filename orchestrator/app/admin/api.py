@@ -226,7 +226,7 @@ def list_tools():
                 pass
 
     result = []
-    for name, entry in reg._tools.items():
+    for name, entry in reg.list_tools().items():
         schema = entry["schema"]
         result.append({
             "name": name,
