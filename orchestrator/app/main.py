@@ -128,20 +128,6 @@ async def _monthly_invoice_report_action(group_jid: str, db, config: dict) -> No
     )
 
 
-async def _email_ledger_report_action(group_jid: str, db, config: dict) -> None:
-    """Automation action: email the ledger report (PDF and/or XLSX) to the configured address."""
-    from app.export.tool import _exec_export_report
-    fmt = config.get("format", "pdf")
-    delivery = config.get("delivery", "email")
-    email = config.get("email") or None
-    result = await _exec_export_report(
-        {"format": fmt, "delivery": delivery, "email": email} if email
-        else {"format": fmt, "delivery": delivery},
-        group_jid=group_jid, is_admin=True, sender="",
-    )
-    logger.info("email_ledger_report_action result for %s: %s", group_jid, result)
-
-
 # --- Globals (initialized at startup) ---
 router = Router()
 command_handler = CommandHandler(bridge_url=settings.bridge_url)
@@ -200,7 +186,6 @@ async def lifespan(_app: FastAPI):
     automation_executor = AutomationExecutor()
     automation_executor.register_action("balance_summary", _balance_summary_action)
     automation_executor.register_action("monthly_invoice_report", _monthly_invoice_report_action)
-    automation_executor.register_action("email_ledger_report", _email_ledger_report_action)
     set_automation_executor(automation_executor)
 
     if settings.notion_api_key:
