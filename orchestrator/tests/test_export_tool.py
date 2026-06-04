@@ -324,3 +324,36 @@ def test_get_export_tools_returns_one_tool():
     assert "export_report" in tools
     assert "schema" in tools["export_report"]
     assert "executor" in tools["export_report"]
+
+
+@pytest.mark.asyncio
+async def test_export_report_custom_subject_body_resolved_via_workflow_context(db):
+    """subject/body params with {{variables}} are resolved before delivery — not sent raw."""
+    _seed_bp_group(db, "family_accounting")
+    from app.export.tool import _exec_export_report
+    from app.config import settings
+
+    mock_gen = MagicMock()
+    mock_gen.build_pdf.return_value = (b"%PDF", "ledger.pdf")
+    mock_deliver = AsyncMock()
+
+    with patch("app.export.tool.SessionLocal", return_value=_CM2(db)), \
+         patch("app.export.tool.AccountingGenerator", return_value=mock_gen), \
+         patch("app.export.tool.deliver_files", mock_deliver), \
+         patch.object(settings, "default_report_email", "admin@example.com"), \
+         patch("app.automation.context.WorkflowContext") as mock_wf_cls:
+
+        mock_wf = MagicMock()
+        mock_wf.resolve.side_effect = lambda t: t.replace("{{previous_month}}", "May 2026")
+        mock_wf_cls.return_value = mock_wf
+
+        await _exec_export_report(
+            {"format": "pdf", "delivery": "email",
+             "subject": "Report for {{previous_month}}",
+             "body": "Hi, here is your {{previous_month}} report."},
+            group_jid="123@g.us", is_admin=True,
+        )
+
+    call_kwargs = mock_deliver.call_args.kwargs
+    assert call_kwargs["subject"] == "Report for May 2026"
+    assert call_kwargs["body"] == "Hi, here is your May 2026 report."

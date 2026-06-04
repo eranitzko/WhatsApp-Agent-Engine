@@ -47,6 +47,8 @@ async def _exec_export_report(params: dict, **ctx) -> str:
     attach_images = bool(params.get("attach_images", False))
     start_date = params.get("start_date")
     end_date = params.get("end_date")
+    custom_subject = params.get("subject", "").strip()
+    custom_body = params.get("body", "").strip()
 
     email = _resolve_email(params, sender_phone) if delivery in ("email", "both") else None
     if delivery in ("email", "both") and not email:
@@ -95,8 +97,16 @@ async def _exec_export_report(params: dict, **ctx) -> str:
         return "No files generated."
 
     period_hint = f"{month}/{year}" if month and year else "current period"
-    subject = f"Report — {group_jid.split('@')[0]} — {period_hint}"
-    body = f"Please find the {fmt.upper()} report attached."
+
+    if custom_subject or custom_body:
+        from app.automation.context import WorkflowContext
+        with SessionLocal() as db:
+            wf_ctx = WorkflowContext(group_jid, db=db)
+            subject = wf_ctx.resolve(custom_subject) if custom_subject else f"Report — {group_jid.split('@')[0]} — {period_hint}"
+            body = wf_ctx.resolve(custom_body) if custom_body else f"Please find the {fmt.upper()} report attached."
+    else:
+        subject = f"Report — {group_jid.split('@')[0]} — {period_hint}"
+        body = f"Please find the {fmt.upper()} report attached."
 
     try:
         await deliver_files(
@@ -164,6 +174,14 @@ _SCHEMA = {
             "end_date": {
                 "type": "string",
                 "description": "Custom range end YYYY-MM-DD. Invoice curator only.",
+            },
+            "subject": {
+                "type": "string",
+                "description": "Email subject. Supports {{variables}} (e.g. {{previous_month}}). Used only when delivery includes email.",
+            },
+            "body": {
+                "type": "string",
+                "description": "Email body text. Supports {{variables}} (e.g. {{monthly_invoice_total}}). Used only when delivery includes email.",
             },
         },
         "required": [],
