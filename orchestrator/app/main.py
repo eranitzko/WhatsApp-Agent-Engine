@@ -24,6 +24,7 @@ from app.tools.invoice_tools import get_invoice_tools
 from app.tools.accounting_tools import get_accounting_tools
 from app.tools.automation_tools import get_automation_tools
 from app.export.tool import get_export_tools
+from app.tools.send_email_tool import get_send_email_tools
 from app.automation.executor import AutomationExecutor
 from app.scheduler import start_scheduler, stop_scheduler, set_automation_executor
 from app.pipeline.pipeline import process_image_event
@@ -132,6 +133,7 @@ async def lifespan(_app: FastAPI):
     tool_registry.register(get_accounting_tools())
     tool_registry.register(get_automation_tools())
     tool_registry.register(get_export_tools())
+    tool_registry.register(get_send_email_tools())
 
     from app import registry_ref
     registry_ref.set_registry(tool_registry)

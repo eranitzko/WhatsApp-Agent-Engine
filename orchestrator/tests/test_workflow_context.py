@@ -223,3 +223,82 @@ async def test_workflow_stores_output_key_for_later_steps(db):
         await executor.execute(rule, db)
 
     assert step_params[1]["message"] == "Got: computed_value_42"
+
+
+# ── send_email tool ───────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_send_email_sends_with_resolved_templates():
+    from unittest.mock import MagicMock, patch, AsyncMock
+    from app.tools.send_email_tool import _exec_send_email
+
+    mock_mail = MagicMock()
+
+    with patch("app.tools.send_email_tool.send_report_email", mock_mail), \
+         patch("app.tools.send_email_tool.asyncio.to_thread", new=AsyncMock(side_effect=lambda fn, **kw: fn(**kw))):
+        result = await _exec_send_email(
+            {"to": "test@example.com", "subject": "Hello", "body": "World"},
+            group_jid="123@g.us", is_admin=True,
+        )
+
+    assert "test@example.com" in result
+    mock_mail.assert_called_once_with(
+        to="test@example.com",
+        subject="Hello",
+        body="World",
+        attachments=[],
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_email_rejected_if_not_admin():
+    from app.tools.send_email_tool import _exec_send_email
+    result = await _exec_send_email(
+        {"to": "x@y.com", "subject": "s", "body": "b"},
+        group_jid="123@g.us", is_admin=False,
+    )
+    assert "admin" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_send_email_rejected_if_not_in_allowlist():
+    from app.tools.send_email_tool import _exec_send_email
+    from app.config import settings
+    with patch.object(settings, "report_email_allowlist", "allowed@example.com"), \
+         patch.object(settings, "gmail_user", "bot@gmail.com"):
+        result = await _exec_send_email(
+            {"to": "notallowed@example.com", "subject": "s", "body": "b"},
+            group_jid="123@g.us", is_admin=True,
+        )
+    assert "not" in result.lower() or "allow" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_send_email_resolves_templates_from_context():
+    """Templates in subject/body are resolved via WorkflowContext at send time."""
+    from unittest.mock import MagicMock, patch, AsyncMock
+    from app.tools.send_email_tool import _exec_send_email
+
+    mock_mail = MagicMock()
+    mock_ctx = MagicMock()
+    mock_ctx.resolve.side_effect = lambda s: s.replace("{{previous_month}}", "May 2026")
+
+    with patch("app.tools.send_email_tool.send_report_email", mock_mail), \
+         patch("app.tools.send_email_tool.asyncio.to_thread", new=AsyncMock(side_effect=lambda fn, **kw: fn(**kw))), \
+         patch("app.tools.send_email_tool.WorkflowContext", return_value=mock_ctx):
+        result = await _exec_send_email(
+            {"to": "x@example.com", "subject": "{{previous_month}} report", "body": "Month: {{previous_month}}"},
+            group_jid="123@g.us", is_admin=True,
+        )
+
+    call_kwargs = mock_mail.call_args.kwargs
+    assert call_kwargs["subject"] == "May 2026 report"
+    assert call_kwargs["body"] == "Month: May 2026"
+
+
+def test_get_send_email_tools_returns_tool():
+    from app.tools.send_email_tool import get_send_email_tools
+    tools = get_send_email_tools()
+    assert "send_email" in tools
+    assert "schema" in tools["send_email"]
+    assert "executor" in tools["send_email"]

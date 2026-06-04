@@ -10,6 +10,7 @@ AUTOMATION_TOOLS = [
     "create_automation", "confirm_automation", "list_automations",
     "pause_automation", "cancel_automation",
     "export_report",
+    "send_email",
 ]
 
 INVOICE_CURATOR_TOOLS = [
