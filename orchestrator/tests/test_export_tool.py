@@ -197,3 +197,25 @@ def test_generate_ledger_pdf_empty_group_returns_bytes(db):
         result = generate_ledger_pdf("empty@g.us")
     assert isinstance(result, bytes)
     assert result[:4] == b"%PDF"
+
+
+# ── accounting generator tests ────────────────────────────────────────────────
+
+def test_accounting_generator_build_xlsx_returns_bytes():
+    from app.export.generators.accounting import AccountingGenerator
+
+    with patch("app.export.generators.accounting.generate_ledger_xlsx", return_value=b"xlsx"):
+        gen = AccountingGenerator("123@g.us")
+        result = gen.build_xlsx()
+
+    assert result == (b"xlsx", "ledger.xlsx")
+
+
+def test_accounting_generator_build_pdf_returns_bytes():
+    from app.export.generators.accounting import AccountingGenerator
+
+    with patch("app.export.generators.accounting.generate_ledger_pdf", return_value=b"%PDF"):
+        gen = AccountingGenerator("123@g.us")
+        result = gen.build_pdf()
+
+    assert result == (b"%PDF", "ledger.pdf")
