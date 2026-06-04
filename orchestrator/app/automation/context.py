@@ -55,7 +55,10 @@ class WorkflowContext:
             "group_jid": group_jid,
             "today": today.isoformat(),
             "current_month": f"{calendar.month_name[today.month]} {today.year}",
+            "current_month_number": str(today.month),
+            "current_year": str(today.year),
             "previous_month": f"{calendar.month_name[prev_month]} {prev_year}",
+            "previous_month_number": str(prev_month),
             "previous_month_name": calendar.month_name[prev_month],
             "previous_month_year": str(prev_year),
         }
