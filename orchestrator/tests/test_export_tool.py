@@ -77,3 +77,76 @@ async def test_deliver_files_both_calls_send_file_and_email():
 
     mock_send.assert_called_once()
     mock_mail.assert_called_once()
+
+
+# ── invoice generator tests ───────────────────────────────────────────────────
+
+def test_invoice_generator_generate_pdf_returns_bytes():
+    from app.export.generators.invoice import InvoiceGenerator
+
+    mock_data = MagicMock()
+    mock_data.rows = [MagicMock()]
+    mock_data.month = 5
+    mock_data.year = 2026
+    mock_data.period_label = None
+    mock_data.total_ils = 100
+
+    mock_cfg = MagicMock()
+    mock_cfg.feedback_language = "en"
+    mock_cfg.report_header = None
+    mock_cfg.report_author = None
+    mock_cfg.force_dual_currency = False
+
+    with patch("app.export.generators.invoice.fetch_report_data", return_value=mock_data), \
+         patch("app.export.generators.invoice.generate_pdf", return_value=b"pdf-bytes"), \
+         patch("app.export.generators.invoice._get_invoice_config", return_value=mock_cfg):
+        gen = InvoiceGenerator("123@g.us")
+        result = gen.build_pdf(month=5, year=2026)
+
+    assert result == (b"pdf-bytes", "invoices_May_2026.pdf")
+
+
+def test_invoice_generator_generate_xlsx_returns_bytes():
+    from app.export.generators.invoice import InvoiceGenerator
+
+    mock_data = MagicMock()
+    mock_data.rows = [MagicMock()]
+    mock_data.month = 5
+    mock_data.year = 2026
+    mock_data.period_label = None
+
+    mock_cfg = MagicMock()
+    mock_cfg.feedback_language = "en"
+    mock_cfg.report_header = None
+    mock_cfg.report_author = None
+    mock_cfg.force_dual_currency = False
+
+    with patch("app.export.generators.invoice.fetch_report_data", return_value=mock_data), \
+         patch("app.export.generators.invoice.generate_excel", return_value=b"xlsx-bytes"), \
+         patch("app.export.generators.invoice._get_invoice_config", return_value=mock_cfg):
+        gen = InvoiceGenerator("123@g.us")
+        result = gen.build_xlsx(month=5, year=2026)
+
+    assert result == (b"xlsx-bytes", "invoices_May_2026.xlsx")
+
+
+def test_invoice_generator_no_data_raises():
+    from app.export.generators.invoice import InvoiceGenerator, NoDataError
+
+    mock_data = MagicMock()
+    mock_data.rows = []
+    mock_data.month = 5
+    mock_data.year = 2026
+    mock_data.period_label = None
+
+    mock_cfg = MagicMock()
+    mock_cfg.feedback_language = "en"
+    mock_cfg.report_header = None
+    mock_cfg.report_author = None
+    mock_cfg.force_dual_currency = False
+
+    with patch("app.export.generators.invoice.fetch_report_data", return_value=mock_data), \
+         patch("app.export.generators.invoice._get_invoice_config", return_value=mock_cfg):
+        gen = InvoiceGenerator("123@g.us")
+        with pytest.raises(NoDataError):
+            gen.build_pdf(month=5, year=2026)
