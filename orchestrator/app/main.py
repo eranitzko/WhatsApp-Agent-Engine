@@ -178,6 +178,9 @@ async def lifespan(_app: FastAPI):
     tool_registry.register(get_accounting_tools())
     tool_registry.register(get_automation_tools())
 
+    from app import registry_ref
+    registry_ref.set_registry(tool_registry)
+
     automation_executor = AutomationExecutor()
     automation_executor.register_action("balance_summary", _balance_summary_action)
     automation_executor.register_action("monthly_invoice_report", _monthly_invoice_report_action)

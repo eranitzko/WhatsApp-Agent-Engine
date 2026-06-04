@@ -62,7 +62,7 @@ def seed(db: Session, admin_phone: str, legacy_group_jid: str | None = None) -> 
         existing = db.query(Blueprint).filter_by(id=bp_data["id"]).first()
         if existing:
             existing.model = bp_data["model"]
-            existing.tools_enabled = bp_data["tools_enabled"]
+            # NOTE: do NOT overwrite tools_enabled — admin UI changes must persist across restarts
         else:
             db.add(Blueprint(**bp_data))
 
