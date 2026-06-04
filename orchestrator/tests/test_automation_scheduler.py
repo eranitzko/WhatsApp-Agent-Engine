@@ -71,8 +71,10 @@ async def test_recurring_rule_fires_when_cron_due(db):
 @pytest.mark.asyncio
 async def test_recurring_rule_does_not_fire_when_not_due(db):
     _seed_group(db)
-    # Cron that will not match in the last hour: Feb 30 (impossible date)
-    rule = _make_rule(db, "recurring", schedule_cron="0 0 30 2 *")
+    # Use an hour 3 hours from now — guaranteed not to have fired in the last hour
+    now = datetime.now(timezone.utc)
+    future_hour = (now.hour + 3) % 24
+    rule = _make_rule(db, "recurring", schedule_cron=f"0 {future_hour} * * *")
     executor = _mock_executor()
 
     with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \

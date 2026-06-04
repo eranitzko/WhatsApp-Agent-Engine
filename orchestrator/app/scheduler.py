@@ -112,6 +112,13 @@ async def _fire_recurring_rules() -> None:
         for rule in rules:
             if not rule.schedule_cron:
                 continue
+            # Don't fire again within the same 60-min window (restart/misfire guard)
+            if rule.last_fired_at:
+                last_check = rule.last_fired_at
+                if last_check.tzinfo is None:
+                    last_check = last_check.replace(tzinfo=timezone.utc)
+                if (now - last_check).total_seconds() < 3600:
+                    continue
             try:
                 if rule.rule_type == "one_off":
                     fire_at = datetime.fromisoformat(rule.schedule_cron)
@@ -162,6 +169,13 @@ async def _check_inactivity() -> None:
         for rule in rules:
             if not rule.inactivity_hours:
                 continue
+            # Don't re-fire within the same inactivity window
+            if rule.last_fired_at:
+                last_fired = rule.last_fired_at
+                if last_fired.tzinfo is None:
+                    last_fired = last_fired.replace(tzinfo=timezone.utc)
+                if (now - last_fired).total_seconds() / 3600 < rule.inactivity_hours:
+                    continue
             history = db.query(ConversationHistory).filter_by(group_id=rule.group_jid).first()
             if history is None:
                 continue
