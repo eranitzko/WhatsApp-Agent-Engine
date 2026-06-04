@@ -6,6 +6,7 @@ Handles PDF, Excel, or both formats; image appendix; WA delivery; email delivery
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from calendar import month_name
 from datetime import datetime, timezone
@@ -200,8 +201,9 @@ async def generate_and_email_report(
         return {"error": "No report files were generated."}
 
     try:
-        await send_report_email(
-            to_email=to_email,
+        await asyncio.to_thread(
+            send_report_email,
+            to=to_email,
             subject=subject,
             body=body,
             attachments=attachments,
