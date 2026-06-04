@@ -31,7 +31,7 @@ async def test_due_message_is_sent_and_marked(db):
         def __enter__(self): return self._s
         def __exit__(self, *a): pass
 
-    with patch("app.db.session.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
          patch("app.scheduler.httpx.AsyncClient", return_value=mock_client):
         from app.scheduler import _dispatch_due_messages
         await _dispatch_due_messages()
@@ -67,7 +67,7 @@ async def test_future_message_is_not_sent(db):
         def __enter__(self): return self._s
         def __exit__(self, *a): pass
 
-    with patch("app.db.session.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
          patch("app.scheduler.httpx.AsyncClient", return_value=mock_client):
         from app.scheduler import _dispatch_due_messages
         await _dispatch_due_messages()
@@ -102,7 +102,7 @@ async def test_already_sent_message_is_not_resent(db):
         def __enter__(self): return self._s
         def __exit__(self, *a): pass
 
-    with patch("app.db.session.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
          patch("app.scheduler.httpx.AsyncClient", return_value=mock_client):
         from app.scheduler import _dispatch_due_messages
         await _dispatch_due_messages()
