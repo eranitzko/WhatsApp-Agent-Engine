@@ -150,3 +150,50 @@ def test_invoice_generator_no_data_raises():
         gen = InvoiceGenerator("123@g.us")
         with pytest.raises(NoDataError):
             gen.build_pdf(month=5, year=2026)
+
+
+# ── ledger PDF tests ──────────────────────────────────────────────────────────
+
+class _CM:
+    """Wrap a plain SQLAlchemy Session as a context manager for patching SessionLocal."""
+    def __init__(self, session):
+        self._s = session
+
+    def __enter__(self):
+        return self._s
+
+    def __exit__(self, *a):
+        pass
+
+
+def test_generate_ledger_pdf_returns_bytes(db):
+    from app.db.models import GroupParticipant, Blueprint, GroupRegistry, LedgerEntry
+    from decimal import Decimal
+    from datetime import date
+
+    db.add(Blueprint(id="fa", display_name="FA", system_prompt="p", tools_enabled="[]"))
+    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="fa"))
+    db.add(GroupParticipant(group_jid="123@g.us", phone="111", push_name="Alice"))
+    db.add(GroupParticipant(group_jid="123@g.us", phone="222", push_name="Bob"))
+    db.add(LedgerEntry(
+        transaction_id="tx1", group_jid="123@g.us",
+        from_phone="111", to_phone="222",
+        amount_ils=Decimal("100"), amount_settled_ils=Decimal("0"),
+        description="dinner", transaction_date=date(2026, 5, 1),
+    ))
+    db.commit()
+
+    from app.tools.accounting_export import generate_ledger_pdf
+    with patch("app.tools.accounting_export.SessionLocal", return_value=_CM(db)):
+        result = generate_ledger_pdf("123@g.us")
+    assert isinstance(result, bytes)
+    assert len(result) > 100
+    assert result[:4] == b"%PDF"
+
+
+def test_generate_ledger_pdf_empty_group_returns_bytes(db):
+    from app.tools.accounting_export import generate_ledger_pdf
+    with patch("app.tools.accounting_export.SessionLocal", return_value=_CM(db)):
+        result = generate_ledger_pdf("empty@g.us")
+    assert isinstance(result, bytes)
+    assert result[:4] == b"%PDF"

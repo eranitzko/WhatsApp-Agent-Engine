@@ -196,3 +196,105 @@ def _write_settlements_sheet(ws, settlements, names, date_format, currency_displ
             _fmt_currency(float(s.amount_ils), currency_display),
             _fmt_date(s.created_at.date() if s.created_at else None, date_format),
         ])
+
+
+def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> bytes:
+    """Generate a PDF ledger summary using ReportLab.
+
+    Produces: net balances table + transaction list.
+    Returns raw PDF bytes.
+    """
+    import io as _io
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import (
+        Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+    )
+
+    with SessionLocal() as db:
+        names = _phone_to_name_from_db(db, group_jid)
+        from app.db.models import LedgerEntry as _LedgerEntry
+        query = db.query(_LedgerEntry).filter(_LedgerEntry.group_jid == group_jid)
+        if filter_phone:
+            from sqlalchemy import or_
+            query = query.filter(or_(
+                _LedgerEntry.from_phone == filter_phone,
+                _LedgerEntry.to_phone == filter_phone,
+            ))
+        entries = query.order_by(_LedgerEntry.transaction_date.desc()).all()
+
+    styles = getSampleStyleSheet()
+    buf = _io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm,
+                            topMargin=2*cm, bottomMargin=2*cm)
+    story = []
+
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    story.append(Paragraph("<b>Family Ledger</b>", styles["Title"]))
+    story.append(Paragraph(f"Generated: {generated}", styles["Normal"]))
+    story.append(Spacer(1, 0.4*cm))
+
+    # ── Net balances ──────────────────────────────────────────────────────────
+    story.append(Paragraph("<b>Net Balances</b>", styles["Heading2"]))
+    net: dict[tuple[str, str], Decimal] = {}
+    for e in entries:
+        unsettled = e.amount_ils - (e.amount_settled_ils or Decimal("0"))
+        if unsettled > 0:
+            key = (e.from_phone, e.to_phone)
+            net[key] = net.get(key, Decimal("0")) + unsettled
+
+    if net:
+        bal_data = [["From", "To", "Amount (₪)"]]
+        for (frm, to), amt in sorted(net.items()):
+            bal_data.append([
+                names.get(frm, frm), names.get(to, to), f"₪{float(amt):,.2f}"
+            ])
+        bal_table = Table(bal_data, colWidths=[5*cm, 5*cm, 4*cm])
+        bal_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4A90D9")),
+            ("TEXTCOLOR",  (0, 0), (-1, 0), colors.white),
+            ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F5F5F5")]),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
+            ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+        ]))
+        story.append(bal_table)
+    else:
+        story.append(Paragraph("All debts settled.", styles["Normal"]))
+
+    story.append(Spacer(1, 0.4*cm))
+
+    # ── Transactions ──────────────────────────────────────────────────────────
+    story.append(Paragraph("<b>Transactions</b>", styles["Heading2"]))
+    if entries:
+        tx_data = [["Date", "From", "To", "Amount", "Settled", "Description"]]
+        for e in entries:
+            tx_data.append([
+                e.transaction_date.isoformat() if e.transaction_date else "",
+                names.get(e.from_phone, e.from_phone),
+                names.get(e.to_phone, e.to_phone),
+                f"₪{float(e.amount_ils):,.2f}",
+                f"₪{float(e.amount_settled_ils or 0):,.2f}",
+                (e.description or "")[:40],
+            ])
+        tx_table = Table(tx_data, colWidths=[2.2*cm, 2.5*cm, 2.5*cm, 2.2*cm, 2.2*cm, 4.4*cm])
+        tx_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4A90D9")),
+            ("TEXTCOLOR",  (0, 0), (-1, 0), colors.white),
+            ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE",   (0, 0), (-1, -1), 8),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F5F5F5")]),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
+            ("ALIGN", (3, 0), (4, -1), "RIGHT"),
+        ]))
+        story.append(tx_table)
+    else:
+        story.append(Paragraph("No transactions found.", styles["Normal"]))
+
+    doc.build(story)
+    return buf.getvalue()
