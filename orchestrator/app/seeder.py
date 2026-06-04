@@ -56,13 +56,24 @@ DEFAULT_BLUEPRINTS = [
 ]
 
 
+def _merge_tools(existing_json: str, canonical: list[str]) -> str:
+    """Add any tools from canonical that are missing from existing, preserving order and extras."""
+    existing = json.loads(existing_json or "[]")
+    existing_set = set(existing)
+    merged = existing + [t for t in canonical if t not in existing_set]
+    return json.dumps(merged)
+
+
 def seed(db: Session, admin_phone: str, legacy_group_jid: str | None = None) -> None:
     # Static blueprints — upsert on each startup so DB stays in sync
     for bp_data in DEFAULT_BLUEPRINTS:
         existing = db.query(Blueprint).filter_by(id=bp_data["id"]).first()
         if existing:
             existing.model = bp_data["model"]
-            # NOTE: do NOT overwrite tools_enabled — admin UI changes must persist across restarts
+            # Merge: add new canonical tools without removing admin-added ones
+            existing.tools_enabled = _merge_tools(
+                existing.tools_enabled, json.loads(bp_data["tools_enabled"])
+            )
         else:
             db.add(Blueprint(**bp_data))
 
@@ -71,8 +82,9 @@ def seed(db: Session, admin_phone: str, legacy_group_jid: str | None = None) -> 
     fa_bp = db.query(Blueprint).filter_by(id="family_accounting").first()
     if fa_bp:
         fa_bp.system_prompt = FAMILY_ACCOUNTING_SYSTEM_PROMPT
-        # NOTE: do NOT overwrite tools_enabled — admin UI changes must persist across restarts
         fa_bp.model = "claude-haiku-4-5"
+        # Merge: add new canonical tools without removing admin-added ones
+        fa_bp.tools_enabled = _merge_tools(fa_bp.tools_enabled, FAMILY_ACCOUNTING_TOOLS)
     else:
         db.add(Blueprint(
             id="family_accounting",
