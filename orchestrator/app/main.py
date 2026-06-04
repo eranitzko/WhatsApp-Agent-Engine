@@ -30,6 +30,7 @@ from app.utils.rate_limiter import rate_limiter
 from app.logging_config import configure_logging
 from app.admin.router import router as admin_router, get_static_dir
 from fastapi.staticfiles import StaticFiles
+from app import bridge_client
 
 configure_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
@@ -77,8 +78,7 @@ def _verify_webhook_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-# NOTE: These action functions call _send(), which is defined later in this module.
-# Python resolves names at call time, so this is safe at runtime.
+# NOTE: These action functions use bridge_client, which includes authorization headers.
 async def _balance_summary_action(group_jid: str, db, config: dict) -> None:
     """Automation action: send an open-debt summary to the group."""
     from app.db.models import LedgerEntry
@@ -89,7 +89,7 @@ async def _balance_summary_action(group_jid: str, db, config: dict) -> None:
         if (e.amount_ils - (e.amount_settled_ils or Decimal("0"))) > 0
     ]
     if not open_debts:
-        await _send(group_jid, "Balance summary: No open debts — all settled! ✅")
+        await bridge_client.send_message(group_jid, "Balance summary: No open debts — all settled! ✅")
         return
     lines = [
         f"• {e.from_phone} → {e.to_phone}: "
@@ -97,7 +97,7 @@ async def _balance_summary_action(group_jid: str, db, config: dict) -> None:
         f" ({e.description})"
         for e in open_debts
     ]
-    await _send(group_jid, "Balance summary:\n" + "\n".join(lines))
+    await bridge_client.send_message(group_jid, "Balance summary:\n" + "\n".join(lines))
 
 
 async def _monthly_invoice_report_action(group_jid: str, db, config: dict) -> None:
@@ -113,14 +113,14 @@ async def _monthly_invoice_report_action(group_jid: str, db, config: dict) -> No
     )
     month_label = today.strftime("%B %Y")
     if not invoices:
-        await _send(group_jid, f"Monthly report ({month_label}): No invoices this month.")
+        await bridge_client.send_message(group_jid, f"Monthly report ({month_label}): No invoices this month.")
         return
     total = sum(float(inv.amount_ils or 0) for inv in invoices)
     lines = [
         f"• {inv.vendor or 'Unknown'}: ₪{float(inv.amount_ils or 0):.2f}"
         for inv in invoices
     ]
-    await _send(
+    await bridge_client.send_message(
         group_jid,
         f"Monthly report ({month_label}) — {len(invoices)} invoices, ₪{total:.2f} total:\n"
         + "\n".join(lines),
