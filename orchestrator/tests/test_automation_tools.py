@@ -555,3 +555,62 @@ async def test_workflow_stops_at_failed_step(db):
         await executor.execute(rule, db)  # must not raise
 
     assert call_count == 1  # stopped after first failure
+
+
+# ── workflow create_automation tests ─────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_workflow_automation_saves_rule(db):
+    """create_automation with action_type='workflow' saves a valid rule."""
+    _seed_group(db)
+    tools = get_automation_tools()
+
+    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+        result = await tools["create_automation"]["executor"](
+            {
+                "name": "Monthly PDF then email",
+                "rule_type": "recurring",
+                "schedule_cron": "0 10 2 * *",
+                "action_type": "workflow",
+                "action_config": {
+                    "steps": [
+                        {"tool": "export_report", "params": {"format": "pdf", "delivery": "group"}},
+                        {
+                            "tool": "request_confirmation",
+                            "params": {
+                                "action": "export_report",
+                                "params": {"format": "pdf", "delivery": "email"},
+                                "description": "PDF sent to group. Email it?",
+                            },
+                        },
+                    ]
+                },
+            },
+            group_jid="123@g.us",
+        )
+
+    assert "Monthly PDF then email" in result
+    rule = db.query(AutomationRule).filter_by(group_jid="123@g.us").first()
+    assert rule is not None
+    assert rule.action_type == "workflow"
+    config = json.loads(rule.action_config)
+    assert len(config["steps"]) == 2
+    assert config["steps"][0]["tool"] == "export_report"
+
+
+@pytest.mark.asyncio
+async def test_create_automation_rejects_invalid_action_type(db):
+    """action_type='nonsense' is rejected with an error message."""
+    tools = get_automation_tools()
+    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+        result = await tools["create_automation"]["executor"](
+            {
+                "name": "bad",
+                "rule_type": "recurring",
+                "schedule_cron": "0 9 * * 1",
+                "action_type": "nonsense",
+                "action_config": {},
+            },
+            group_jid="123@g.us",
+        )
+    assert "invalid" in result.lower()

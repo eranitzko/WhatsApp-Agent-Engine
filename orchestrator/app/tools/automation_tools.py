@@ -17,7 +17,7 @@ from app.db.models import AutomationRule
 logger = logging.getLogger(__name__)
 
 _VALID_RULE_TYPES = {"one_off", "recurring", "inactivity", "threshold", "event_trigger"}
-_VALID_ACTION_TYPES = {"send_message", "run_agent_action"}
+_VALID_ACTION_TYPES = {"send_message", "run_agent_action", "workflow"}
 _VALID_OPS = {">", "<", ">=", "<="}
 _VALID_METRICS = {
     "monthly_invoice_total",
@@ -43,6 +43,10 @@ def _describe_rule(rule: AutomationRule) -> str:
     if rule.action_type == "send_message":
         preview = config.get("message", "")[:60]
         parts.append(f"Sends: \"{preview}\"")
+    elif rule.action_type == "workflow":
+        steps = config.get("steps", [])
+        tool_names = " → ".join(s.get("tool", "?") for s in steps)
+        parts.append(f"Workflow: {tool_names}")
     else:
         parts.append(f"Runs: {config.get('action', '?')}")
     return " | ".join(parts)
@@ -217,15 +221,17 @@ _SCHEMAS: dict[str, dict] = {
                 },
                 "action_type": {
                     "type": "string",
-                    "enum": ["send_message", "run_agent_action"],
+                    "enum": ["send_message", "run_agent_action", "workflow"],
                     "description": "What to do when the rule fires",
                 },
                 "action_config": {
                     "type": "object",
                     "description": (
-                        "For send_message: {\"message\": \"...\", \"mentions\": [\"972500000001\"]} "
-                        "For run_agent_action: {\"action\": \"balance_summary\"} or "
-                        "{\"action\": \"monthly_invoice_report\"}"
+                        "For send_message: {\"message\": \"...\", \"mentions\": [...]}. "
+                        "For run_agent_action: {\"action\": \"<tool_name>\", ...params}. "
+                        "For workflow: {\"steps\": [{\"tool\": \"<tool_name>\", \"params\": {...}}, ...]}. "
+                        "Steps run in order. Use request_confirmation as a step to pause for user "
+                        "approval — the next action is queued until the user says yes."
                     ),
                 },
             },
