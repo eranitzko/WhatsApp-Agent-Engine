@@ -39,7 +39,7 @@ DEFAULT_BLUEPRINTS = [
         "id": "invoice_curator",
         "display_name": "Invoice Curator",
         "system_prompt": INVOICE_CURATOR_SYSTEM_PROMPT,
-        "model": "claude-haiku-4-5",
+        "model": "claude-sonnet-4-6",
         "tools_enabled": json.dumps(INVOICE_CURATOR_TOOLS),
         "max_tool_turns": 6,
         "context_window": 8,
@@ -84,7 +84,7 @@ def seed(db: Session, admin_phone: str, legacy_group_jid: str | None = None) -> 
     fa_bp = db.query(Blueprint).filter_by(id="family_accounting").first()
     if fa_bp:
         fa_bp.system_prompt = FAMILY_ACCOUNTING_SYSTEM_PROMPT
-        fa_bp.model = "claude-haiku-4-5"
+        fa_bp.model = "claude-sonnet-4-6"
         # Merge: add new canonical tools without removing admin-added ones
         fa_bp.tools_enabled = _merge_tools(fa_bp.tools_enabled, FAMILY_ACCOUNTING_TOOLS)
     else:
@@ -92,7 +92,7 @@ def seed(db: Session, admin_phone: str, legacy_group_jid: str | None = None) -> 
             id="family_accounting",
             display_name="Family Accounting",
             system_prompt=FAMILY_ACCOUNTING_SYSTEM_PROMPT,
-            model="claude-haiku-4-5",
+            model="claude-sonnet-4-6",
             tools_enabled=json.dumps(FAMILY_ACCOUNTING_TOOLS),
             max_tool_turns=5,
             context_window=8,
