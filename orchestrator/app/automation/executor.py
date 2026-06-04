@@ -49,6 +49,8 @@ class AutomationExecutor:
         )
 
     async def _run_tool(self, group_jid: str, config: dict) -> None:
+        from app.agent.confirmation import confirmation_store as _store
+
         tool_name = config.get("action", "")
         params = {k: v for k, v in config.items() if k != "action"}
 
@@ -67,7 +69,7 @@ class AutomationExecutor:
             )
             return
 
-        result = await reg.execute(tool_name, params, group_jid=group_jid, is_admin=True, sender="")
+        result = await reg.execute(tool_name, params, group_jid=group_jid, is_admin=True, sender="", confirmation_store=_store)
         logger.info("Automation tool %r returned for %s: %s", tool_name, group_jid, result)
 
     async def _run_workflow(self, group_jid: str, config: dict) -> None:

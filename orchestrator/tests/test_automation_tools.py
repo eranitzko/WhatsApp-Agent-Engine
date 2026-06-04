@@ -120,9 +120,15 @@ async def test_executor_send_message_with_mentions(db):
 async def test_executor_run_agent_action_calls_registry_tool(db):
     from unittest.mock import AsyncMock, MagicMock, patch
 
+    received_ctx = {}
+
+    async def capture_ctx(tool_name, params, **ctx):
+        received_ctx.update(ctx)
+        return "ok"
+
     mock_registry = MagicMock()
     mock_registry.has_tool.return_value = True
-    mock_registry.execute = AsyncMock(return_value="ok")
+    mock_registry.execute = AsyncMock(side_effect=capture_ctx)
 
     executor = AutomationExecutor()
     rule = _make_rule("run_agent_action", {"action": "get_balance", "phone": "972501234567"})
@@ -131,10 +137,14 @@ async def test_executor_run_agent_action_calls_registry_tool(db):
         mock_ref.get_registry.return_value = mock_registry
         await executor.execute(rule, db)
 
-    mock_registry.execute.assert_called_once_with(
-        "get_balance", {"phone": "972501234567"},
-        group_jid="123@g.us", is_admin=True, sender="",
-    )
+    mock_registry.execute.assert_called_once()
+    call_args = mock_registry.execute.call_args
+    assert call_args.args[0] == "get_balance"
+    assert call_args.args[1] == {"phone": "972501234567"}
+    assert call_args.kwargs["group_jid"] == "123@g.us"
+    assert call_args.kwargs["is_admin"] is True
+    assert call_args.kwargs["sender"] == ""
+    assert "confirmation_store" in received_ctx
 
 
 @pytest.mark.asyncio
