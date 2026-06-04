@@ -93,7 +93,7 @@ WhatsApp Agent Engine/
 - [ ] **Step 1: Initialize git repo**
 
 ```bash
-cd "C:\Users\Eranitzkovitch\Documents\Software Projects\WhatsApp Agent Engine"
+cd "G:\My Drive\Software Projects\WhatsApp Agent Engine"
 git init
 ```
 
@@ -213,14 +213,14 @@ git commit -m "chore: project scaffold with gitignore, env template, compose ske
 - [ ] **Step 1: Copy the bridge**
 
 ```bash
-cp -r "C:\Users\Eranitzkovitch\Documents\Software Projects\Invoice Curator\bridge" "C:\Users\Eranitzkovitch\Documents\Software Projects\WhatsApp Agent Engine\bridge"
+cp -r "C:\Users\Eranitzkovitch\Documents\Software Projects\Invoice Curator\bridge" "G:\My Drive\Software Projects\WhatsApp Agent Engine\bridge"
 ```
 
 - [ ] **Step 2: Copy the orchestrator Python source**
 
 ```bash
-cp -r "C:\Users\Eranitzkovitch\Documents\Software Projects\Invoice Curator\app" "C:\Users\Eranitzkovitch\Documents\Software Projects\WhatsApp Agent Engine\orchestrator\app"
-cp "C:\Users\Eranitzkovitch\Documents\Software Projects\Invoice Curator\requirements.txt" "C:\Users\Eranitzkovitch\Documents\Software Projects\WhatsApp Agent Engine\orchestrator\requirements.txt"
+cp -r "C:\Users\Eranitzkovitch\Documents\Software Projects\Invoice Curator\app" "G:\My Drive\Software Projects\WhatsApp Agent Engine\orchestrator\app"
+cp "C:\Users\Eranitzkovitch\Documents\Software Projects\Invoice Curator\requirements.txt" "G:\My Drive\Software Projects\WhatsApp Agent Engine\orchestrator\requirements.txt"
 ```
 
 - [ ] **Step 3: Add new dependencies to orchestrator/requirements.txt**
