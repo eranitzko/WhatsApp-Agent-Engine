@@ -219,3 +219,108 @@ def test_accounting_generator_build_pdf_returns_bytes():
         result = gen.build_pdf()
 
     assert result == (b"%PDF", "ledger.pdf")
+
+
+# ── export_report tool tests ──────────────────────────────────────────────────
+
+from app.db.models import Blueprint, GroupRegistry
+
+
+def _seed_bp_group(db, blueprint_id: str, group_jid: str = "123@g.us"):
+    if not db.get(Blueprint, blueprint_id):
+        db.add(Blueprint(id=blueprint_id, display_name=blueprint_id,
+                         system_prompt="p", tools_enabled="[]"))
+    if not db.query(GroupRegistry).filter_by(group_jid=group_jid).first():
+        db.add(GroupRegistry(group_jid=group_jid, blueprint_id=blueprint_id))
+    db.commit()
+
+
+class _CM2:
+    def __init__(self, s): self._s = s
+    def __enter__(self): return self._s
+    def __exit__(self, *a): pass
+
+
+@pytest.mark.asyncio
+async def test_export_report_invoice_pdf_to_group(db):
+    _seed_bp_group(db, "invoice_curator")
+    from app.export.tool import _exec_export_report
+
+    mock_gen = MagicMock()
+    mock_gen.build_pdf.return_value = (b"pdf", "invoices_May_2026.pdf")
+    mock_deliver = AsyncMock()
+
+    with patch("app.export.tool.SessionLocal", return_value=_CM2(db)), \
+         patch("app.export.tool.InvoiceGenerator", return_value=mock_gen), \
+         patch("app.export.tool.deliver_files", mock_deliver):
+        result = await _exec_export_report(
+            {"format": "pdf", "delivery": "group"},
+            group_jid="123@g.us", is_admin=True,
+        )
+
+    assert "sent" in result.lower() or "ok" in result.lower()
+    mock_deliver.assert_called_once()
+    call_kwargs = mock_deliver.call_args.kwargs
+    assert call_kwargs["delivery"] == "group"
+    assert call_kwargs["files"][0][0] == "invoices_May_2026.pdf"
+
+
+@pytest.mark.asyncio
+async def test_export_report_accounting_xlsx_by_email(db):
+    _seed_bp_group(db, "family_accounting")
+    from app.export.tool import _exec_export_report
+    from app.config import settings
+
+    mock_gen = MagicMock()
+    mock_gen.build_xlsx.return_value = (b"xlsx", "ledger.xlsx")
+    mock_deliver = AsyncMock()
+
+    with patch("app.export.tool.SessionLocal", return_value=_CM2(db)), \
+         patch("app.export.tool.AccountingGenerator", return_value=mock_gen), \
+         patch("app.export.tool.deliver_files", mock_deliver), \
+         patch.object(settings, "default_report_email", "admin@example.com"):
+        result = await _exec_export_report(
+            {"format": "xlsx", "delivery": "email"},
+            group_jid="123@g.us", is_admin=True,
+        )
+
+    mock_deliver.assert_called_once()
+    call_kwargs = mock_deliver.call_args.kwargs
+    assert call_kwargs["delivery"] == "email"
+    assert call_kwargs["email"] == "admin@example.com"
+
+
+@pytest.mark.asyncio
+async def test_export_report_non_admin_rejected(db):
+    _seed_bp_group(db, "family_accounting")
+    from app.export.tool import _exec_export_report
+
+    with patch("app.export.tool.SessionLocal", return_value=_CM2(db)):
+        result = await _exec_export_report(
+            {"format": "pdf", "delivery": "group"},
+            group_jid="123@g.us", is_admin=False,
+        )
+
+    assert "admin" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_export_report_unknown_blueprint_returns_error(db):
+    _seed_bp_group(db, "notion_assistant")
+    from app.export.tool import _exec_export_report
+
+    with patch("app.export.tool.SessionLocal", return_value=_CM2(db)):
+        result = await _exec_export_report(
+            {"format": "pdf", "delivery": "group"},
+            group_jid="123@g.us", is_admin=True,
+        )
+
+    assert "not supported" in result.lower()
+
+
+def test_get_export_tools_returns_one_tool():
+    from app.export.tool import get_export_tools
+    tools = get_export_tools()
+    assert "export_report" in tools
+    assert "schema" in tools["export_report"]
+    assert "executor" in tools["export_report"]
