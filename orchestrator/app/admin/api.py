@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from app.admin.auth import require_auth
 from app.config import settings
-from app.db.models import AdminNumbers, Blueprint, GroupRegistry
+from app.db.models import AdminNumbers, Blueprint, GroupRegistry, SystemConfig
 from app.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -193,7 +193,128 @@ def list_blueprints():
                 "id": b.id,
                 "display_name": b.display_name,
                 "tools_count": tools_count,
+                "tools_list": b.tools_enabled or "[]",
                 "system_prompt": b.system_prompt or "",
                 "system_prompt_preview": b.system_prompt[:100] if b.system_prompt else "",
             })
         return result
+
+
+# -- Tools -------------------------------------------------------------------
+
+@router.get("/tools", dependencies=[Depends(require_auth)])
+def list_tools():
+    """Return all tools registered in the live ToolRegistry."""
+    import json as _json
+    from app import registry_ref as _ref
+
+    try:
+        reg = _ref.get_registry()
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="Tool registry not yet initialised")
+
+    with SessionLocal() as db:
+        disabled_row = db.get(SystemConfig, "disabled_tools")
+        disabled = set(_json.loads(disabled_row.value)) if disabled_row and disabled_row.value else set()
+
+        tool_to_bps: dict[str, list[str]] = {}
+        for bp in db.query(Blueprint).all():
+            try:
+                for t in _json.loads(bp.tools_enabled or "[]"):
+                    tool_to_bps.setdefault(t, []).append(bp.id)
+            except _json.JSONDecodeError:
+                pass
+
+    result = []
+    for name, entry in reg._tools.items():
+        schema = entry["schema"]
+        result.append({
+            "name": name,
+            "description": schema.get("description", ""),
+            "category": schema.get("category", "other"),
+            "blueprints_using": tool_to_bps.get(name, []),
+            "globally_enabled": name not in disabled,
+        })
+    return sorted(result, key=lambda x: x["name"])
+
+
+class UpdateBlueprintToolsRequest(BaseModel):
+    tools_enabled: list[str]
+
+
+@router.patch("/blueprints/{blueprint_id}/tools", dependencies=[Depends(require_auth)])
+def update_blueprint_tools(blueprint_id: str, body: UpdateBlueprintToolsRequest):
+    """Update tools_enabled for a blueprint. Validates all names against live registry."""
+    import json as _json
+    from app import registry_ref as _ref
+
+    try:
+        reg = _ref.get_registry()
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="Tool registry not yet initialised")
+
+    unknown = [t for t in body.tools_enabled if not reg.has_tool(t)]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown tools: {unknown}")
+
+    with SessionLocal() as db:
+        bp = db.get(Blueprint, blueprint_id)
+        if not bp:
+            raise HTTPException(status_code=404, detail="Blueprint not found")
+        bp.tools_enabled = _json.dumps(body.tools_enabled)
+        db.commit()
+    return {"ok": True}
+
+
+class UpdateToolEnabledRequest(BaseModel):
+    enabled: bool
+
+
+@router.patch("/tools/{tool_name}/enabled", dependencies=[Depends(require_auth)])
+def update_tool_enabled(tool_name: str, body: UpdateToolEnabledRequest):
+    """Globally enable or disable a tool via SystemConfig['disabled_tools']."""
+    import json as _json
+    from app import registry_ref as _ref
+
+    try:
+        reg = _ref.get_registry()
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="Tool registry not yet initialised")
+
+    if not reg.has_tool(tool_name):
+        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not in registry")
+
+    with SessionLocal() as db:
+        row = db.get(SystemConfig, "disabled_tools")
+        disabled = set(_json.loads(row.value)) if row and row.value else set()
+
+        if body.enabled:
+            disabled.discard(tool_name)
+        else:
+            disabled.add(tool_name)
+
+        new_value = _json.dumps(sorted(disabled))
+        if row:
+            row.value = new_value
+        else:
+            db.add(SystemConfig(key="disabled_tools", value=new_value))
+        db.commit()
+    return {"ok": True}
+
+
+@router.delete("/tools/{tool_name}/blueprints", dependencies=[Depends(require_auth)])
+def remove_tool_from_blueprints(tool_name: str):
+    """Remove a tool from every blueprint's tools_enabled list."""
+    import json as _json
+    updated: list[str] = []
+    with SessionLocal() as db:
+        for bp in db.query(Blueprint).all():
+            try:
+                tools = _json.loads(bp.tools_enabled or "[]")
+            except _json.JSONDecodeError:
+                continue
+            if tool_name in tools:
+                bp.tools_enabled = _json.dumps([t for t in tools if t != tool_name])
+                updated.append(bp.id)
+        db.commit()
+    return {"ok": True, "blueprints_updated": updated}
