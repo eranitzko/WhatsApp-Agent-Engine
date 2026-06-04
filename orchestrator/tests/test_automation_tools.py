@@ -423,3 +423,125 @@ async def test_cancel_automation_wrong_group_rejected(db):
     assert "different group" in result.lower()
     db.expire_all()
     assert db.get(AutomationRule, rule_id) is not None  # rule still exists
+
+
+# ── workflow executor tests ───────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_workflow_executes_steps_in_order(db):
+    """Each step is called via ToolRegistry in sequence."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    call_order = []
+
+    async def fake_execute(tool_name, params, **ctx):
+        call_order.append(tool_name)
+        return "ok"
+
+    mock_registry = MagicMock()
+    mock_registry.has_tool.return_value = True
+    mock_registry.execute = AsyncMock(side_effect=fake_execute)
+
+    rule = _make_rule(
+        "workflow",
+        {
+            "steps": [
+                {"tool": "export_report", "params": {"format": "pdf", "delivery": "group"}},
+                {"tool": "export_report", "params": {"format": "pdf", "delivery": "email"}},
+            ]
+        },
+    )
+
+    executor = AutomationExecutor()
+    with patch("app.automation.executor.registry_ref") as mock_ref:
+        mock_ref.get_registry.return_value = mock_registry
+        await executor.execute(rule, db)
+
+    assert call_order == ["export_report", "export_report"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_passes_confirmation_store_in_ctx(db):
+    """confirmation_store is injected into ctx so request_confirmation works."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    received_ctx = {}
+
+    async def capture_ctx(tool_name, params, **ctx):
+        received_ctx.update(ctx)
+        return "ok"
+
+    mock_registry = MagicMock()
+    mock_registry.has_tool.return_value = True
+    mock_registry.execute = AsyncMock(side_effect=capture_ctx)
+
+    rule = _make_rule(
+        "workflow",
+        {"steps": [{"tool": "export_report", "params": {}}]},
+    )
+
+    executor = AutomationExecutor()
+    with patch("app.automation.executor.registry_ref") as mock_ref:
+        mock_ref.get_registry.return_value = mock_registry
+        await executor.execute(rule, db)
+
+    assert "confirmation_store" in received_ctx
+
+
+@pytest.mark.asyncio
+async def test_workflow_sends_error_for_unknown_tool(db):
+    """If a step tool is not in registry, group gets an error message."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_registry = MagicMock()
+    mock_registry.has_tool.return_value = False
+    mock_send = AsyncMock()
+
+    rule = _make_rule(
+        "workflow",
+        {"steps": [{"tool": "nonexistent_tool", "params": {}}]},
+    )
+
+    executor = AutomationExecutor()
+    with patch("app.automation.executor.registry_ref") as mock_ref, \
+         patch("app.automation.executor.send_message", mock_send):
+        mock_ref.get_registry.return_value = mock_registry
+        await executor.execute(rule, db)
+
+    mock_send.assert_called_once()
+    assert "nonexistent_tool" in mock_send.call_args.args[1]
+    assert "administrator" in mock_send.call_args.args[1].lower()
+
+
+@pytest.mark.asyncio
+async def test_workflow_stops_at_failed_step(db):
+    """Exception in a step stops the workflow; remaining steps are not called."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    call_count = 0
+
+    async def failing_execute(tool_name, params, **ctx):
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError("step failed")
+
+    mock_registry = MagicMock()
+    mock_registry.has_tool.return_value = True
+    mock_registry.execute = AsyncMock(side_effect=failing_execute)
+
+    rule = _make_rule(
+        "workflow",
+        {
+            "steps": [
+                {"tool": "export_report", "params": {}},
+                {"tool": "export_report", "params": {}},
+            ]
+        },
+    )
+
+    executor = AutomationExecutor()
+    with patch("app.automation.executor.registry_ref") as mock_ref:
+        mock_ref.get_registry.return_value = mock_registry
+        await executor.execute(rule, db)  # must not raise
+
+    assert call_count == 1  # stopped after first failure
