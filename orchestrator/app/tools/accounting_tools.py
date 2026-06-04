@@ -546,13 +546,16 @@ async def _exec_export_ledger(params: dict, **ctx) -> str:
     email = params.get("email", "").strip()
     format_name = params.get("format_name", "").strip() or None
 
-    # Resolve email: param → saved profile → error
+    # Resolve email: param → saved profile → default_report_email → gmail_user → error
     if not email:
         with SessionLocal() as db:
             profile = db.get(UserProfile, sender_phone)
         if profile and profile.email:
             email = profile.email
         else:
+            from app.config import settings as _s
+            email = _s.default_report_email or _s.gmail_user
+        if not email:
             return "No email address provided and none saved. Use save_email first or provide an email."
 
     # Load report format config if specified

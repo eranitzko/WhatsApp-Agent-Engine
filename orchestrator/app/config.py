@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # Example: "boss@company.com,accountant@company.com"
     report_email_allowlist: str = ""
 
+    # Default recipient for "send to my email" when the sender has no saved email.
+    # Falls back to GMAIL_USER if not set.
+    default_report_email: str = ""
+
     # App behaviour
     image_max_px: int = 1920
     image_jpeg_quality: int = 85
