@@ -148,3 +148,78 @@ def test_db_metric_integer_formatted(db):
         ctx = WorkflowContext("123@g.us", {}, db=db)
         result = ctx.resolve("{{invoice_count_this_month}}")
     assert result == "7"
+
+
+# ── Executor integration ──────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_workflow_resolves_templates_in_params(db):
+    """Params containing {{variables}} are resolved before tool execution."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.automation.executor import AutomationExecutor
+    import json
+
+    received_params = {}
+
+    async def capture(tool_name, params, **ctx):
+        received_params.update(params)
+        return "ok"
+
+    mock_reg = MagicMock()
+    mock_reg.has_tool.return_value = True
+    mock_reg.execute = AsyncMock(side_effect=capture)
+
+    from app.db.models import AutomationRule
+    rule = AutomationRule(
+        group_jid="123@g.us", name="t", rule_type="recurring",
+        action_type="workflow",
+        action_config=json.dumps({"steps": [
+            {"tool": "send_email", "params": {"body": "Month: {{previous_month}}", "to": "a@b.com", "subject": "x"}}
+        ]}),
+    )
+    rule.id = "r1"
+
+    executor = AutomationExecutor()
+    with patch("app.automation.executor.registry_ref") as mock_ref:
+        mock_ref.get_registry.return_value = mock_reg
+        await executor.execute(rule, db)
+
+    # previous_month should have been resolved to an actual value
+    assert "{{previous_month}}" not in received_params.get("body", "")
+    assert len(received_params.get("body", "")) > 5
+
+
+@pytest.mark.asyncio
+async def test_workflow_stores_output_key_for_later_steps(db):
+    """output_key stores step result for {{key}} in later steps."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.automation.executor import AutomationExecutor
+    import json
+
+    step_params = []
+
+    async def capture(tool_name, params, **ctx):
+        step_params.append(dict(params))
+        return "computed_value_42"
+
+    mock_reg = MagicMock()
+    mock_reg.has_tool.return_value = True
+    mock_reg.execute = AsyncMock(side_effect=capture)
+
+    from app.db.models import AutomationRule
+    rule = AutomationRule(
+        group_jid="123@g.us", name="t", rule_type="recurring",
+        action_type="workflow",
+        action_config=json.dumps({"steps": [
+            {"tool": "tool_a", "params": {}, "output_key": "result_a"},
+            {"tool": "tool_b", "params": {"message": "Got: {{result_a}}"}},
+        ]}),
+    )
+    rule.id = "r1"
+
+    executor = AutomationExecutor()
+    with patch("app.automation.executor.registry_ref") as mock_ref:
+        mock_ref.get_registry.return_value = mock_reg
+        await executor.execute(rule, db)
+
+    assert step_params[1]["message"] == "Got: computed_value_42"

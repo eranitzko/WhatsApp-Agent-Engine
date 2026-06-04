@@ -35,7 +35,7 @@ class AutomationExecutor:
             elif rule.action_type == "run_agent_action":
                 await self._run_tool(rule.group_jid, config)
             elif rule.action_type == "workflow":
-                await self._run_workflow(rule.group_jid, config)
+                await self._run_workflow(rule.group_jid, config, db=db)
             else:
                 logger.error("Unknown action_type %r for rule %s", rule.action_type, rule.id)
         except Exception:
@@ -72,14 +72,16 @@ class AutomationExecutor:
         result = await reg.execute(tool_name, params, group_jid=group_jid, is_admin=True, sender="", confirmation_store=_store)
         logger.info("Automation tool %r returned for %s: %s", tool_name, group_jid, result)
 
-    async def _run_workflow(self, group_jid: str, config: dict) -> None:
-        """Execute a sequence of tool steps in order.
+    async def _run_workflow(self, group_jid: str, config: dict, db: "Session | None" = None) -> None:
+        """Execute a sequence of tool steps with shared WorkflowContext.
 
-        Passes confirmation_store in ctx so request_confirmation can queue
-        the next action — which the webhook flow picks up when the user replies.
-        Stops at the first step that raises or uses an unknown tool.
+        - Resolves {{variable}} templates in all step params before execution.
+        - Stores step outputs under output_key for use in later steps.
+        - Passes confirmation_store in ctx so request_confirmation works.
+        - Stops at the first step that raises or uses an unknown tool.
         """
         from app.agent.confirmation import confirmation_store as _store
+        from app.automation.context import WorkflowContext
 
         steps = config.get("steps", [])
         if not steps:
@@ -92,9 +94,12 @@ class AutomationExecutor:
             logger.error("AutomationExecutor: tool registry not available for workflow")
             return
 
+        ctx = WorkflowContext(group_jid, db=db)
+
         for i, step in enumerate(steps):
             tool_name = step.get("tool", "")
-            params = step.get("params", {})
+            output_key = step.get("output_key")
+            params = ctx.resolve_dict(step.get("params", {}))
 
             if not reg.has_tool(tool_name):
                 logger.warning(
@@ -121,6 +126,8 @@ class AutomationExecutor:
                     "Automation workflow step %d (%r) returned for %s: %s",
                     i, tool_name, group_jid, result,
                 )
+                if output_key and isinstance(result, str):
+                    ctx.store(output_key, result)
             except Exception:
                 logger.exception(
                     "Automation workflow stopped at step %d (%r) for group %s",
