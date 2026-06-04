@@ -70,6 +70,7 @@ def _net_owed(db, group_jid: str, from_phone: str, to_phone: str) -> Decimal:
 _SCHEMAS: dict[str, dict] = {
     "record_transaction": {
         "name": "record_transaction",
+        "category": "accounting",
         "description": (
             "Record that someone paid for others. Claude extracts payer, participants, "
             "amount, currency, description, and date from natural language."
@@ -96,6 +97,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "record_payment": {
         "name": "record_payment",
+        "category": "accounting",
         "description": "Record a debt repayment. Applies FIFO settlement to open debt legs.",
         "input_schema": {
             "type": "object",
@@ -113,6 +115,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "get_balance": {
         "name": "get_balance",
+        "category": "accounting",
         "description": (
             "Get net balance. Non-admins automatically see only their own balances. "
             "With phone_a only: all open balances for that person. "
@@ -129,6 +132,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "get_history": {
         "name": "get_history",
+        "category": "accounting",
         "description": (
             "Get itemized transaction history. Non-admins automatically see only their own transactions. "
             "Optionally filtered by person and/or date range."
@@ -145,6 +149,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "export_ledger": {
         "name": "export_ledger",
+        "category": "accounting",
         "description": (
             "Generate an XLSX ledger report and email it. Non-admins receive only their own data. "
             "If no email is given, uses the sender's saved email address."
@@ -160,6 +165,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "set_reminder": {
         "name": "set_reminder",
+        "category": "accounting",
         "description": (
             "Schedule a reminder WhatsApp message for the sender at a future time. "
             "Only the sender can set their own reminders."
@@ -175,6 +181,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "save_email": {
         "name": "save_email",
+        "category": "accounting",
         "description": "Save the sender's email address so it can be used for ledger exports.",
         "input_schema": {
             "type": "object",
@@ -186,6 +193,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "rename_participant": {
         "name": "rename_participant",
+        "category": "accounting",
         "description": (
             "Set or clear the display name for a group participant. "
             "Pass empty string to revert to their WhatsApp push name. Admin only."
@@ -201,6 +209,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "set_household": {
         "name": "set_household",
+        "category": "accounting",
         "description": (
             "Mark or unmark a participant as part of the shared household (shown as 'Parents'). "
             "Admin only."
@@ -216,6 +225,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "correct_transaction": {
         "name": "correct_transaction",
+        "category": "accounting",
         "description": (
             "Propose a correction to an existing transaction (date, amount, or participants). "
             "Admin only. Returns a diff for confirmation. Corrections with any settled amount "
@@ -241,6 +251,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "create_report_format": {
         "name": "create_report_format",
+        "category": "accounting",
         "description": "Create or update a named report format for XLSX ledger exports. Admin only.",
         "input_schema": {
             "type": "object",
@@ -262,11 +273,13 @@ _SCHEMAS: dict[str, dict] = {
     },
     "list_report_formats": {
         "name": "list_report_formats",
+        "category": "accounting",
         "description": "List all saved report formats for this group. Admin only.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     "delete_report_format": {
         "name": "delete_report_format",
+        "category": "accounting",
         "description": "Delete a named report format. Admin only.",
         "input_schema": {
             "type": "object",
@@ -278,6 +291,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "apply_correction": {
         "name": "apply_correction",
+        "category": "accounting",
         "description": "Internal: apply a staged ledger correction by token. Called by the confirmation flow.",
         "input_schema": {
             "type": "object",

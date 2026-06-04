@@ -51,3 +51,21 @@ def _seed(db):
         tools_enabled=json.dumps(["tool_b", "tool_c"]),
     ))
     db.commit()
+
+
+def test_all_tools_have_category_field():
+    from app.tools.automation_tools import get_automation_tools
+    from app.tools.accounting_tools import get_accounting_tools
+    from app.tools.invoice_tools import get_invoice_tools
+
+    for name, entry in get_automation_tools().items():
+        assert "category" in entry["schema"], f"automation tool {name} missing category"
+        assert entry["schema"]["category"] == "automation"
+
+    for name, entry in get_accounting_tools().items():
+        assert "category" in entry["schema"], f"accounting tool {name} missing category"
+        assert entry["schema"]["category"] == "accounting"
+
+    for name, entry in get_invoice_tools().items():
+        assert "category" in entry["schema"], f"invoice tool {name} missing category"
+        assert entry["schema"]["category"] == "invoices"

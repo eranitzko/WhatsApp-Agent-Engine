@@ -168,6 +168,7 @@ async def _exec_cancel_automation(params: dict, **ctx) -> str:
 _SCHEMAS: dict[str, dict] = {
     "create_automation": {
         "name": "create_automation",
+        "category": "automation",
         "description": (
             "Create a new automation rule for this group. The rule is saved as pending_confirm "
             "and must be activated with confirm_automation after user confirms. "
@@ -233,6 +234,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "confirm_automation": {
         "name": "confirm_automation",
+        "category": "automation",
         "description": "Activate a pending automation rule after the user confirms.",
         "input_schema": {
             "type": "object",
@@ -244,6 +246,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "list_automations": {
         "name": "list_automations",
+        "category": "automation",
         "description": "List all active and paused automation rules for this group.",
         "input_schema": {
             "type": "object",
@@ -253,6 +256,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "pause_automation": {
         "name": "pause_automation",
+        "category": "automation",
         "description": "Pause an active automation rule. It will not fire while paused.",
         "input_schema": {
             "type": "object",
@@ -264,6 +268,7 @@ _SCHEMAS: dict[str, dict] = {
     },
     "cancel_automation": {
         "name": "cancel_automation",
+        "category": "automation",
         "description": "Permanently delete an automation rule.",
         "input_schema": {
             "type": "object",

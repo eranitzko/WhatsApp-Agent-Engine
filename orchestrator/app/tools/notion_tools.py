@@ -97,6 +97,7 @@ def get_notion_tools(api_key: str, tasks_database_id: str) -> dict[str, dict]:
         "search_pages": {
             "schema": {
                 "name": "search_pages",
+                "category": "notion",
                 "description": "Search for pages in the Notion workspace by keyword.",
                 "input_schema": {
                     "type": "object",
@@ -111,6 +112,7 @@ def get_notion_tools(api_key: str, tasks_database_id: str) -> dict[str, dict]:
         "create_task": {
             "schema": {
                 "name": "create_task",
+                "category": "notion",
                 "description": "Create a new task in the Notion tasks database.",
                 "input_schema": {
                     "type": "object",
@@ -126,6 +128,7 @@ def get_notion_tools(api_key: str, tasks_database_id: str) -> dict[str, dict]:
         "append_to_page": {
             "schema": {
                 "name": "append_to_page",
+                "category": "notion",
                 "description": "Append text content to an existing Notion page.",
                 "input_schema": {
                     "type": "object",
@@ -141,6 +144,7 @@ def get_notion_tools(api_key: str, tasks_database_id: str) -> dict[str, dict]:
         "list_database_items": {
             "schema": {
                 "name": "list_database_items",
+                "category": "notion",
                 "description": "List items from a Notion database. Defaults to the tasks database.",
                 "input_schema": {
                     "type": "object",

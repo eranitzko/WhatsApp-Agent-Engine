@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # responsible for applying prompt-cache hints at the Claude call site.
 
 _SCHEMA_BY_NAME: dict[str, dict] = {
-    s["name"]: {k: v for k, v in s.items() if k != "cache_control"}
+    s["name"]: ({k: v for k, v in s.items() if k != "cache_control"} | {"category": "invoices"})
     for s in _orig.TOOL_SCHEMAS
 }
 
