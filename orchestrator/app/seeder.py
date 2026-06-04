@@ -9,10 +9,11 @@ from app.prompts.family_accounting import FAMILY_ACCOUNTING_SYSTEM_PROMPT
 AUTOMATION_TOOLS = [
     "create_automation", "confirm_automation", "list_automations",
     "pause_automation", "cancel_automation",
+    "export_report",
 ]
 
 INVOICE_CURATOR_TOOLS = [
-    "get_status", "list_invoices", "get_preview", "generate_report",
+    "get_status", "list_invoices", "get_preview",
     "flag_invoice", "unflag_invoice", "set_invoice_date", "set_invoice_amount",
     "add_date_format", "update_config", "request_confirmation",
     *AUTOMATION_TOOLS,
@@ -24,7 +25,7 @@ NOTION_ASSISTANT_TOOLS = [
 
 FAMILY_ACCOUNTING_TOOLS = [
     "record_transaction", "record_payment", "get_balance",
-    "get_history", "export_ledger", "set_reminder",
+    "get_history", "set_reminder",
     "save_email", "rename_participant", "set_household",
     "correct_transaction", "apply_correction",
     "create_report_format", "list_report_formats", "delete_report_format",
