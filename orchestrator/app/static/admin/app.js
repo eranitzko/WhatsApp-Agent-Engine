@@ -27,6 +27,7 @@ async function route() {
   if (hash === 'groups') await renderGroups(app);
   else if (hash === 'admins') await renderAdmins(app);
   else if (hash === 'blueprints') await renderBlueprints(app);
+  else if (hash === 'tools') await renderTools(app);
   else await renderGroups(app);
 }
 
@@ -40,6 +41,7 @@ function layout(page, content) {
     { hash: 'groups',     icon: '🏠', label: 'Groups' },
     { hash: 'admins',     icon: '👥', label: 'Admins' },
     { hash: 'blueprints', icon: '📋', label: 'Blueprints' },
+    { hash: 'tools',      icon: '🔧', label: 'Tools' },
   ];
   return `
     <div class="layout">
@@ -259,40 +261,98 @@ async function deleteAdmin(phone) {
   renderAdmins(document.getElementById('app'));
 }
 
-// ── Blueprints ────────────────────────────────────────────────────────────────
+// ── Blueprints (enhanced with tool editor) ────────────────────────────────────
 
 async function renderBlueprints(app) {
   app.innerHTML = layout('blueprints', '<p style="color:var(--muted)">Loading...</p>');
-  const res = await apiFetch('/blueprints');
-  if (!res) return;
-  const blueprints = await res.json();
+  const [bpRes, toolsRes] = await Promise.all([
+    apiFetch('/blueprints'),
+    apiFetch('/tools'),
+  ]);
+  if (!bpRes || !toolsRes) return;
+  const blueprints = await bpRes.json();
+  const allTools   = await toolsRes.json();
 
-  const rows = blueprints.map((b, i) => `
-    <tr>
-      <td><strong>${escHtml(b.display_name)}</strong><br><span style="font-size:11px;color:var(--muted)">${escHtml(b.id)}</span></td>
-      <td><span class="badge">${b.tools_count} tools</span></td>
-      <td>
-        <div class="bp-expand-wrap" id="bp-wrap-${i}">
-          <div class="bp-prompt bp-collapsed" id="bp-prompt-${i}"
-               onclick="expandPrompt(${i})"
-               title="Click to expand">
-            ${escHtml(b.system_prompt_preview)}…
+  const rows = blueprints.map((b, i) => {
+    const enabledSet = new Set(JSON.parse(b.tools_list || '[]'));
+    const chipsHtml = allTools.map(t => {
+      const on = enabledSet.has(t.name);
+      return `<div class="chip ${on ? 'on' : 'off'}" data-tool="${escAttr(t.name)}" onclick="toggleChip(this)">
+        <span class="chip-dot"></span>${escHtml(t.name)}
+      </div>`;
+    }).join('');
+
+    return `
+      <tr>
+        <td>
+          <strong>${escHtml(b.display_name)}</strong><br>
+          <span style="font-size:11px;color:var(--muted)">${escHtml(b.id)}</span>
+        </td>
+        <td><span class="badge">${b.tools_count} tools</span></td>
+        <td>
+          <div class="bp-expand-wrap" id="bp-wrap-${i}">
+            <div class="bp-prompt bp-collapsed" id="bp-prompt-${i}"
+                 onclick="expandPrompt(${i})" title="Click to expand">
+              ${escHtml(b.system_prompt_preview)}…
+            </div>
+            <textarea class="bp-full" id="bp-full-${i}" readonly
+              onblur="collapsePrompt(${i})" style="display:none">${escHtml(b.system_prompt)}</textarea>
           </div>
-          <textarea class="bp-full" id="bp-full-${i}"
-            readonly
-            onblur="collapsePrompt(${i})"
-            style="display:none"
-          >${escHtml(b.system_prompt)}</textarea>
-        </div>
-      </td>
-    </tr>`).join('');
+        </td>
+        <td style="text-align:right">
+          <button class="btn btn-primary" style="font-size:12px;padding:5px 12px"
+            onclick="toggleToolEditor(${i})">🔧 Edit tools</button>
+        </td>
+      </tr>
+      <tr class="expand-row" id="tool-editor-${i}" style="display:none">
+        <td colspan="4">
+          <div class="expand-inner">
+            <h4>Enabled tools — ${escHtml(b.id)}</h4>
+            <div class="tool-chips" id="chips-${i}">
+              ${chipsHtml}
+            </div>
+            <div class="chip-save-row">
+              <button class="btn btn-primary" style="font-size:12px;padding:5px 12px"
+                onclick="saveBlueprintTools('${escAttr(b.id)}', ${i})">Save changes</button>
+              <span class="hint">Click chips to toggle · Blue = enabled · Grey = disabled</span>
+            </div>
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
 
   app.innerHTML = layout('blueprints', `
     <div class="page-header"><h2>Blueprints</h2></div>
     <div class="table-wrap"><table class="table">
-      <thead><tr><th>Blueprint</th><th>Tools</th><th>System Prompt</th></tr></thead>
+      <thead>
+        <tr><th>Blueprint</th><th>Tools</th><th>System Prompt</th><th></th></tr>
+      </thead>
       <tbody>${rows}</tbody>
     </table></div>`);
+}
+
+function toggleChip(el) {
+  el.classList.toggle('on');
+  el.classList.toggle('off');
+}
+
+function toggleToolEditor(i) {
+  const row = document.getElementById('tool-editor-' + i);
+  row.style.display = row.style.display === 'none' ? '' : 'none';
+}
+
+async function saveBlueprintTools(blueprintId, i) {
+  const chips = document.querySelectorAll(`#chips-${i} .chip.on`);
+  const tools = Array.from(chips).map(c => c.dataset.tool);
+  const res = await apiFetch('/blueprints/' + encodeURIComponent(blueprintId) + '/tools', {
+    method: 'PATCH',
+    body: JSON.stringify({ tools_enabled: tools }),
+  });
+  if (res && res.ok) {
+    renderBlueprints(document.getElementById('app'));
+  } else {
+    alert('Failed to save tools. Check that all tool names are valid.');
+  }
 }
 
 function expandPrompt(i) {
@@ -305,6 +365,147 @@ function expandPrompt(i) {
 function collapsePrompt(i) {
   document.getElementById('bp-full-' + i).style.display = 'none';
   document.getElementById('bp-prompt-' + i).style.display = '';
+}
+
+// ── Tools Registry ─────────────────────────────────────────────────────────────
+
+let _toolsData = [];
+let _toolsSortCol = 0;
+let _toolsSortDir = 1;
+let _toolsFilter  = 'all';
+
+async function renderTools(app) {
+  app.innerHTML = layout('tools', '<p style="color:var(--muted)">Loading...</p>');
+  const res = await apiFetch('/tools');
+  if (!res) return;
+  _toolsData = await res.json();
+  _toolsSortCol = 0; _toolsSortDir = 1; _toolsFilter = 'all';
+
+  const cats = [...new Set(_toolsData.map(t => t.category))].sort();
+  const tabsHtml = `
+    <div class="tab-bar">
+      <div class="tab active" onclick="toolsFilterCat('all', this)">All (${_toolsData.length})</div>
+      ${cats.map(c => {
+        const n = _toolsData.filter(t => t.category === c).length;
+        return `<div class="tab" onclick="toolsFilterCat('${escAttr(c)}', this)">${escHtml(c)} (${n})</div>`;
+      }).join('')}
+    </div>`;
+
+  app.innerHTML = layout('tools', `
+    <div class="page-header"><h2>Tools Registry</h2></div>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 16px">
+      All tools registered in the engine. Toggle global availability or see which blueprints use each.
+      Changes take effect immediately — no restart needed.
+    </p>
+    ${tabsHtml}
+    <div id="tools-table-wrap"></div>`);
+
+  _renderToolsTable();
+}
+
+function _renderToolsTable() {
+  let rows = _toolsData.filter(t => _toolsFilter === 'all' || t.category === _toolsFilter);
+
+  rows.sort((a, b) => {
+    let av, bv;
+    switch (_toolsSortCol) {
+      case 0: av = a.name;                    bv = b.name; break;
+      case 1: av = a.category;                bv = b.category; break;
+      case 2: av = a.blueprints_using.join(); bv = b.blueprints_using.join(); break;
+      case 3: av = a.globally_enabled ? 1 : 0; bv = b.globally_enabled ? 1 : 0; break;
+      default: av = a.name; bv = b.name;
+    }
+    return (av > bv ? 1 : av < bv ? -1 : 0) * _toolsSortDir;
+  });
+
+  function thCls(col) {
+    if (_toolsSortCol !== col) return 'sortable';
+    return 'sortable ' + (_toolsSortDir === 1 ? 'sort-asc' : 'sort-desc');
+  }
+
+  const tableHtml = `
+    <table class="table">
+      <thead><tr>
+        <th class="${thCls(0)}" onclick="toolsSort(0)"><span class="sort-icon">Tool name</span></th>
+        <th class="${thCls(1)}" onclick="toolsSort(1)"><span class="sort-icon">Category</span></th>
+        <th class="${thCls(2)}" onclick="toolsSort(2)"><span class="sort-icon">Used by</span></th>
+        <th class="${thCls(3)}" style="text-align:center" onclick="toolsSort(3)"><span class="sort-icon">Enabled</span></th>
+        <th></th>
+      </tr></thead>
+      <tbody>
+        ${rows.map(t => `
+          <tr style="${t.globally_enabled ? '' : 'opacity:0.55'}">
+            <td>
+              <strong>${escHtml(t.name)}</strong><br>
+              <span style="font-size:11px;color:var(--muted)">${escHtml(t.description)}</span>
+            </td>
+            <td><span class="badge">${escHtml(t.category)}</span></td>
+            <td><div class="group-pills">${t.blueprints_using.map(b =>
+              `<span class="group-pill">${escHtml(b)}</span>`).join('')}</div></td>
+            <td style="text-align:center">
+              <label class="toggle">
+                <input type="checkbox" ${t.globally_enabled ? 'checked' : ''}
+                  onchange="toggleToolEnabled('${escAttr(t.name)}', this.checked)">
+                <span class="slider"></span>
+              </label>
+            </td>
+            <td style="text-align:right">
+              <button class="btn btn-danger"
+                onclick="removeToolFromAllBlueprints('${escAttr(t.name)}')">Remove</button>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+    <p style="font-size:11px;color:var(--muted);margin-top:12px">
+      ${rows.length} tool${rows.length !== 1 ? 's' : ''} shown${_toolsFilter !== 'all' ? ` in "${_toolsFilter}"` : ''}.
+    </p>`;
+
+  document.getElementById('tools-table-wrap').innerHTML = tableHtml;
+}
+
+function toolsSort(col) {
+  if (_toolsSortCol === col) _toolsSortDir *= -1;
+  else { _toolsSortCol = col; _toolsSortDir = 1; }
+  _renderToolsTable();
+}
+
+function toolsFilterCat(cat, tab) {
+  _toolsFilter = cat;
+  document.querySelectorAll('.tab-bar .tab').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  _renderToolsTable();
+}
+
+async function toggleToolEnabled(toolName, enabled) {
+  const res = await apiFetch('/tools/' + encodeURIComponent(toolName) + '/enabled', {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  });
+  if (res && res.ok) {
+    const t = _toolsData.find(x => x.name === toolName);
+    if (t) t.globally_enabled = enabled;
+    _renderToolsTable();
+  } else {
+    alert('Failed to update tool status.');
+    _renderToolsTable();
+  }
+}
+
+async function removeToolFromAllBlueprints(toolName) {
+  if (!confirm(`Remove "${toolName}" from all blueprints? This cannot be undone from the UI.`)) return;
+  const res = await apiFetch('/tools/' + encodeURIComponent(toolName) + '/blueprints', {
+    method: 'DELETE',
+  });
+  if (res && res.ok) {
+    const data = await res.json();
+    const updated = data.blueprints_updated;
+    alert(`Removed from ${updated.length} blueprint${updated.length !== 1 ? 's' : ''}: ${updated.join(', ')}`);
+    const fresh = await apiFetch('/tools');
+    if (fresh) _toolsData = await fresh.json();
+    _renderToolsTable();
+  } else {
+    alert('Failed to remove tool.');
+  }
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
