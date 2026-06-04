@@ -77,6 +77,8 @@ def _verify_webhook_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+# NOTE: These action functions call _send(), which is defined later in this module.
+# Python resolves names at call time, so this is safe at runtime.
 async def _balance_summary_action(group_jid: str, db, config: dict) -> None:
     """Automation action: send an open-debt summary to the group."""
     from app.db.models import LedgerEntry
@@ -333,6 +335,9 @@ def _pipeline_result_to_message(result: dict) -> str:
 
 
 async def _send(jid: str, text: str, *, mentions: list[str] | None = None) -> None:
+    if _http_client is None:
+        logger.error("_send called before http client is initialised (jid=%s)", jid)
+        return
     try:
         payload: dict = {"jid": jid, "text": text}
         if mentions:
