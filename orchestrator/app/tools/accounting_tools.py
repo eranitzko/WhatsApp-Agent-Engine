@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import uuid
@@ -15,7 +14,6 @@ from app.db.models import (
     LedgerEntry, LedgerSettlement, ScheduledMessage, UserProfile, ReportFormat,
 )
 from app.db.session import SessionLocal
-from app.tools.accounting_export import generate_ledger_xlsx
 from app.tools.accounting_fifo import DebtLeg, apply_payment
 from app.tools.accounting_fx import to_ils
 from app.agent.correction_queue import correction_queue
@@ -143,22 +141,6 @@ _SCHEMAS: dict[str, dict] = {
                 "phone": {"type": "string", "description": "Filter to transactions involving this phone (optional; ignored for non-admins)"},
                 "from_date": {"type": "string", "description": "Start date YYYY-MM-DD (optional)"},
                 "to_date": {"type": "string", "description": "End date YYYY-MM-DD (optional)"},
-            },
-            "required": [],
-        },
-    },
-    "export_ledger": {
-        "name": "export_ledger",
-        "category": "accounting",
-        "description": (
-            "Generate an XLSX ledger report and email it. Non-admins receive only their own data. "
-            "If no email is given, uses the sender's saved email address."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "email": {"type": "string", "description": "Email address to send the export to (optional if saved)"},
-                "format_name": {"type": "string", "description": "Named report format to use (optional)"},
             },
             "required": [],
         },
@@ -539,59 +521,6 @@ async def _exec_get_history(params: dict, **ctx) -> str:
     return "\n".join(lines)
 
 
-async def _exec_export_ledger(params: dict, **ctx) -> str:
-    group_jid = ctx.get("group_jid", "")
-    is_admin = ctx.get("is_admin", False)
-    sender_phone = _sender_phone(ctx)
-    email = params.get("email", "").strip()
-    format_name = params.get("format_name", "").strip() or None
-
-    # Resolve email: param → saved profile → default_report_email → gmail_user → error
-    if not email:
-        with SessionLocal() as db:
-            profile = db.get(UserProfile, sender_phone)
-        if profile and profile.email:
-            email = profile.email
-        else:
-            from app.config import settings as _s
-            email = _s.default_report_email or _s.gmail_user
-        if not email:
-            return "No email address provided and none saved. Use save_email first or provide an email."
-
-    # Load report format config if specified
-    fmt_config: dict = {}
-    if format_name:
-        with SessionLocal() as db:
-            row = db.query(ReportFormat).filter_by(group_jid=group_jid, name=format_name).first()
-        if row is None:
-            return f"Report format '{format_name}' not found. Use list_report_formats to see available formats."
-        fmt_config = row.config()
-
-    # Non-admins get only their own data
-    filter_phone = None if is_admin else sender_phone
-
-    try:
-        xlsx_bytes = generate_ledger_xlsx(group_jid, filter_phone=filter_phone, fmt_config=fmt_config)
-    except Exception as exc:
-        logger.exception("export_ledger: XLSX generation failed")
-        return f"Failed to generate report: {exc}"
-
-    try:
-        from app.mailer.gmail import send_report_email
-        await asyncio.to_thread(
-            send_report_email,
-            to=email,
-            subject="Family Ledger Export",
-            body="Your family ledger export is attached.",
-            attachments=[("ledger.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", xlsx_bytes)],
-        )
-    except Exception as exc:
-        logger.exception("export_ledger: email failed")
-        return f"Report generated but failed to send email: {exc}"
-
-    return f"Ledger exported and sent to {email}."
-
-
 async def _exec_set_reminder(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
     to_phone = _sender_phone(ctx)
@@ -955,7 +884,6 @@ def get_accounting_tools() -> dict[str, dict]:
             ("record_payment",       _exec_record_payment),
             ("get_balance",          _exec_get_balance),
             ("get_history",          _exec_get_history),
-            ("export_ledger",        _exec_export_ledger),
             ("set_reminder",         _exec_set_reminder),
             ("save_email",           _exec_save_email),
             ("rename_participant",   _exec_rename_participant),

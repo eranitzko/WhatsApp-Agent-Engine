@@ -82,26 +82,6 @@ TOOL_SCHEMAS: list[dict] = [
         },
     },
     {
-        "name": "generate_report",
-        "description": (
-            "Generate a monthly invoice report and send it to the group. Admin only. "
-            "For email delivery, use request_confirmation first, then send_report_by_email."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "month":         {"type": "integer", "description": "Month 1–12. Defaults to current month. Ignored if start_date/end_date provided."},
-                "year":          {"type": "integer", "description": "4-digit year. Defaults to current year. Ignored if start_date/end_date provided."},
-                "start_date":    {"type": "string", "description": "Range start date YYYY-MM-DD (optional). Use instead of month/year for custom periods."},
-                "end_date":      {"type": "string", "description": "Range end date YYYY-MM-DD (optional, inclusive). Required when start_date is set."},
-                "format":        {"type": "string", "enum": ["pdf", "excel", "both"], "description": "Report format. Default: pdf."},
-                "attach_images": {"type": "boolean", "description": "Embed invoice images in PDF appendix. Default: false."},
-                "dual_currency": {"type": "boolean", "description": "Force dual currency columns. Null = auto-detect."},
-            },
-            "required": [],
-        },
-    },
-    {
         "name": "flag_invoice",
         "description": "Flag an invoice for manual review. Admin only.",
         "input_schema": {

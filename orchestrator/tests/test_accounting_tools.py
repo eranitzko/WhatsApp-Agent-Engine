@@ -10,7 +10,7 @@ from app.tools.accounting_tools import get_accounting_tools
 
 EXPECTED_TOOLS = [
     "record_transaction", "record_payment", "get_balance",
-    "get_history", "export_ledger", "set_reminder",
+    "get_history", "set_reminder",
     "save_email", "rename_participant", "set_household",
     "correct_transaction", "apply_correction",
     "create_report_format", "list_report_formats", "delete_report_format",

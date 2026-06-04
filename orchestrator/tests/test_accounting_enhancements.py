@@ -4,7 +4,7 @@ import json
 import pytest
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from app.db.models import (
     Blueprint, GroupRegistry, GroupParticipant, AdminNumbers,
@@ -444,38 +444,3 @@ async def test_delete_report_format(db):
     assert db.query(ReportFormat).filter_by(group_jid="123@g.us", name="monthly").first() is None
 
 
-@pytest.mark.asyncio
-async def test_export_ledger_uses_saved_email(db):
-    _seed(db)
-    db.add(UserProfile(phone="972500000001", email="eran@example.com"))
-    db.commit()
-    _add_entry(db, "123@g.us", "A", "B", Decimal("100"))
-
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)), \
-         patch("app.tools.accounting_tools.generate_ledger_xlsx", return_value=b"xlsx"), \
-         patch("app.tools.accounting_tools.asyncio.to_thread", new=AsyncMock(return_value=None)):
-        from app.tools.accounting_tools import get_accounting_tools
-        tools = get_accounting_tools()
-        result = await tools["export_ledger"]["executor"](
-            {},  # no email param
-            group_jid="123@g.us",
-            sender="972500000001@s.whatsapp.net",
-            is_admin=True,
-        )
-    assert "eran@example.com" in result
-
-
-@pytest.mark.asyncio
-async def test_export_ledger_no_email_returns_error(db):
-    _seed(db)
-
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
-        from app.tools.accounting_tools import get_accounting_tools
-        tools = get_accounting_tools()
-        result = await tools["export_ledger"]["executor"](
-            {},
-            group_jid="123@g.us",
-            sender="999@s.whatsapp.net",
-            is_admin=False,
-        )
-    assert "save_email" in result.lower() or "no email" in result.lower()

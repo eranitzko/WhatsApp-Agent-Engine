@@ -125,7 +125,6 @@ def get_invoice_tools(db_session_factory=None, **kwargs) -> dict[str, dict]:
         ("list_invoices",      _orig.exec_list_invoices),
         ("get_preview",        _orig.exec_get_preview),
         ("update_config",      _orig.exec_update_config),
-        ("generate_report",    _orig.exec_generate_report),
         ("flag_invoice",       _orig.exec_flag_invoice),
         ("unflag_invoice",     _orig.exec_unflag_invoice),
         ("set_invoice_date",   _orig.exec_set_invoice_date),
