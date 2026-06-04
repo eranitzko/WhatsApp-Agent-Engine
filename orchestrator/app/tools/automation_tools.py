@@ -73,7 +73,13 @@ async def _exec_create_automation(params: dict, **ctx) -> str:
             return f"Invalid operator '{threshold_raw.get('op')}'. Must be one of: >, <, >=, <="
         threshold_json = json.dumps(threshold_raw)
 
-    action_config_json = json.dumps(params.get("action_config", {}))
+    action_config_raw = params.get("action_config", {})
+    if isinstance(action_config_raw, str):
+        try:
+            action_config_raw = json.loads(action_config_raw)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    action_config_json = json.dumps(action_config_raw)
 
     rule = AutomationRule(
         group_jid=group_jid,
