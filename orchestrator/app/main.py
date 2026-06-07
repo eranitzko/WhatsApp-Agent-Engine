@@ -18,7 +18,7 @@ from app.command_handler import CommandHandler
 from app.agent.context import ContextStore
 from app.agent.confirmation import confirmation_store
 from app.agent.multi_confirmation import multi_confirmation_store
-from app.db.models import GroupParticipant, CrossGroupConfirmation, SplitTransaction, UserAccount
+from app.db.models import GroupParticipant, CrossGroupConfirmation, SplitTransaction
 from app.accounting.account_service import AccountService
 from app.accounting.group_registration import GroupRegistrationHandler
 from app.participants import build_participant_block
