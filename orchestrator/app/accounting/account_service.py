@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app import bridge_client
@@ -147,3 +148,104 @@ class AccountService:
 
         db.commit()
         return True
+
+    # ── Transaction processing ────────────────────────────────────────────────
+
+    def _is_first_party(self, reporter_phone: str, debtor_phone: str) -> bool:
+        """True when reporter is voluntarily taking on debt (1st-party action)."""
+        return reporter_phone == debtor_phone
+
+    async def process_transaction(
+        self,
+        db: Session,
+        reporter_phone: str,
+        reporter_group_jid: str,
+        payer_phone: str,
+        debtor_phone: str,
+        amount_ils: Decimal,
+        description: str,
+        transaction_date,
+        split_transaction_id: str | None = None,
+    ) -> str:
+        from app.db.models import LedgerEntry
+        import uuid as _uuid_mod
+
+        payer_name = self.get_display_name(db, payer_phone)
+        debtor_name = self.get_display_name(db, debtor_phone)
+
+        if self._is_first_party(reporter_phone, debtor_phone):
+            # Debtor is self-reporting → write immediately
+            entry = LedgerEntry(
+                transaction_id=str(_uuid_mod.uuid4()),
+                group_jid=reporter_group_jid,
+                from_phone=debtor_phone,
+                to_phone=payer_phone,
+                amount_ils=amount_ils,
+                description=description,
+                transaction_date=transaction_date,
+            )
+            db.add(entry)
+            db.commit()
+
+            notify_msg = (
+                f"{debtor_name} acknowledged a ₪{float(amount_ils):.2f} debt to you "
+                f"({description}). Your balance has been updated."
+            )
+            await self.notify_user(db, payer_phone, notify_msg)
+            return f"Recorded. {payer_name} has been notified."
+        else:
+            # Reporter is creditor claiming debt on debtor's behalf → confirmation needed
+            confirm_msg = (
+                f"{payer_name} says you owe ₪{float(amount_ils):.2f} ({description}). "
+                f"Confirm? (yes / no)"
+            )
+            await self.request_confirmation(
+                db=db,
+                initiator_phone=reporter_phone,
+                initiator_group_jid=reporter_group_jid,
+                target_phone=debtor_phone,
+                action_type="record_expense",
+                action_payload={
+                    "group_jid": reporter_group_jid,
+                    "payer_phone": payer_phone,
+                    "debtor_phone": debtor_phone,
+                    "amount_ils": str(amount_ils),
+                    "description": description,
+                    "transaction_date": str(transaction_date),
+                    "split_transaction_id": split_transaction_id,
+                },
+                confirmation_message=confirm_msg,
+                split_transaction_id=split_transaction_id,
+            )
+            return f"Confirmation request sent to {debtor_name}. I'll notify you when they respond."
+
+    async def commit_confirmed_transaction(self, db: Session, conf: CrossGroupConfirmation) -> None:
+        """Write the ledger entry for a confirmed 2nd-party transaction."""
+        from app.db.models import LedgerEntry
+        import uuid as _uuid_mod
+        from datetime import date as _date
+
+        payload = json.loads(conf.action_payload)
+        entry = LedgerEntry(
+            transaction_id=str(_uuid_mod.uuid4()),
+            group_jid=payload["group_jid"],
+            from_phone=payload["debtor_phone"],
+            to_phone=payload["payer_phone"],
+            amount_ils=Decimal(payload["amount_ils"]),
+            description=payload["description"],
+            transaction_date=_date.fromisoformat(payload["transaction_date"]),
+        )
+        db.add(entry)
+        db.commit()
+
+        # Notify both parties
+        debtor_name = self.get_display_name(db, payload["debtor_phone"])
+        payer_name = self.get_display_name(db, payload["payer_phone"])
+        await self.notify_user(
+            db, payload["payer_phone"],
+            f"{debtor_name} confirmed the ₪{float(entry.amount_ils):.2f} debt ({payload['description']})."
+        )
+        await bridge_client.send_message(
+            conf.target_group_jid,
+            f"Confirmed. Your balance with {payer_name} has been updated."
+        )

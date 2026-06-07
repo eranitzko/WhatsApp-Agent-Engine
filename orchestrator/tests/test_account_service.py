@@ -8,13 +8,14 @@ from app.accounting.account_service import AccountService
 
 
 def _seed_blueprint(db):
-    bp = Blueprint(
-        id="family_accounting", display_name="FA",
-        system_prompt="x", model="claude-sonnet-4-6",
-        tools_enabled='["record_transaction"]',
-    )
-    db.add(bp)
-    db.commit()
+    if db.query(Blueprint).filter_by(id="family_accounting").first() is None:
+        bp = Blueprint(
+            id="family_accounting", display_name="FA",
+            system_prompt="x", model="claude-sonnet-4-6",
+            tools_enabled='["record_transaction"]',
+        )
+        db.add(bp)
+        db.commit()
 
 
 def _seed_group(db, jid: str, group_type: str = "personal") -> GroupRegistry:
@@ -208,3 +209,73 @@ def test_handle_confirmation_reply_returns_false_when_no_pending(db):
     svc = AccountService()
     result = svc.handle_confirmation_reply(db, "grp@g.us", "972500", "yes")
     assert result is False
+
+
+from decimal import Decimal
+from datetime import date
+from app.db.models import LedgerEntry
+
+
+@pytest.mark.asyncio
+async def test_process_first_party_writes_entry_and_notifies(db):
+    """Sender acknowledges own debt (1st-party) → written immediately, creditor notified."""
+    _seed_group(db, "eran_grp@g.us")
+    _seed_user(db, "972520", "eran_grp@g.us")  # Eran — creditor
+    _seed_group(db, "eden_grp@g.us")
+    _seed_user(db, "972521", "eden_grp@g.us")  # Eden — reporter/debtor
+
+    svc = AccountService()
+    with patch("app.accounting.account_service.bridge_client") as mock_bc:
+        mock_bc.send_message = AsyncMock()
+        result = await svc.process_transaction(
+            db=db,
+            reporter_phone="972521",       # Eden
+            reporter_group_jid="eden_grp@g.us",
+            payer_phone="972520",           # Eran paid → Eden owes Eran
+            debtor_phone="972521",          # Eden is the debtor
+            amount_ils=Decimal("100"),
+            description="dinner",
+            transaction_date=date.today(),
+        )
+
+    # Ledger entry written immediately
+    entry = db.query(LedgerEntry).first()
+    assert entry is not None
+    assert entry.from_phone == "972521"
+    assert entry.to_phone == "972520"
+    # Creditor (Eran) notified
+    mock_bc.send_message.assert_awaited_once()
+    assert "972520" in result or "notified" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_process_second_party_creates_confirmation(db):
+    """Sender claims credit (2nd-party) → confirmation requested from debtor."""
+    _seed_group(db, "eden_grp2@g.us")
+    _seed_user(db, "972522", "eden_grp2@g.us")  # Eden — reporter/creditor
+    _seed_group(db, "tal_grp4@g.us")
+    _seed_user(db, "972523", "tal_grp4@g.us")   # Tal — debtor
+
+    svc = AccountService()
+    with patch("app.accounting.account_service.bridge_client") as mock_bc:
+        mock_bc.send_message = AsyncMock()
+        result = await svc.process_transaction(
+            db=db,
+            reporter_phone="972522",        # Eden claims Tal owes her
+            reporter_group_jid="eden_grp2@g.us",
+            payer_phone="972522",           # Eden is the creditor/payer
+            debtor_phone="972523",          # Tal is debtor
+            amount_ils=Decimal("80"),
+            description="taxi",
+            transaction_date=date.today(),
+        )
+
+    # No ledger entry yet — waiting for confirmation
+    assert db.query(LedgerEntry).count() == 0
+    # Confirmation row created
+    conf = db.query(CrossGroupConfirmation).first()
+    assert conf is not None
+    assert conf.target_phone == "972523"
+    assert conf.status == "pending"
+    # Tal notified
+    mock_bc.send_message.assert_awaited_once()
