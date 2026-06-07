@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from app import bridge_client
 from app.db.models import (
-    AdminNumbers, CrossGroupConfirmation, GroupRegistry, UserAccount, UserProfile,
+    AdminNumbers, CrossGroupConfirmation, GroupRegistry, SplitTransaction,
+    UserAccount, UserProfile,
 )
 
 logger = logging.getLogger(__name__)
@@ -248,4 +249,148 @@ class AccountService:
         await bridge_client.send_message(
             conf.target_group_jid,
             f"Confirmed. Your balance with {payer_name} has been updated."
+        )
+
+    # ── Split transaction management ──────────────────────────────────────────
+
+    async def process_split(
+        self,
+        db: Session,
+        reporter_phone: str,
+        reporter_group_jid: str,
+        payer_phone: str,
+        shares: list[dict],       # [{"phone": str, "amount_ils": Decimal}]
+        total_amount: Decimal,
+        description: str,
+        transaction_date,
+    ) -> SplitTransaction:
+        split = SplitTransaction(
+            reporter_group_jid=reporter_group_jid,
+            reporter_phone=reporter_phone,
+            payer_phone=payer_phone,
+            total_amount=total_amount,
+            description=description,
+            status="pending",
+        )
+        db.add(split)
+        db.flush()  # get split.id
+
+        payer_name = self.get_display_name(db, payer_phone)
+
+        for share in shares:
+            phone = share["phone"]
+            amount = share["amount_ils"]
+
+            if phone == payer_phone:
+                continue  # payer's share absorbed
+
+            if self._is_first_party(reporter_phone, phone):
+                # Reporter is acknowledging their own share — held as self_confirmed
+                conf = CrossGroupConfirmation(
+                    split_transaction_id=split.id,
+                    initiator_phone=reporter_phone,
+                    initiator_group_jid=reporter_group_jid,
+                    target_phone=phone,
+                    target_group_jid=reporter_group_jid,
+                    action_type="split_share",
+                    action_payload=json.dumps({
+                        "group_jid": reporter_group_jid,
+                        "payer_phone": payer_phone,
+                        "debtor_phone": phone,
+                        "amount_ils": str(amount),
+                        "description": description,
+                        "transaction_date": str(transaction_date),
+                        "split_transaction_id": split.id,
+                    }),
+                    status="self_confirmed",
+                    expires_at=datetime.now(timezone.utc) + timedelta(hours=self._confirmation_timeout_hours(db)),
+                )
+                db.add(conf)
+            else:
+                debtor_name = self.get_display_name(db, phone)
+                confirm_msg = (
+                    f"{debtor_name}, your share of a ₪{float(total_amount):.2f} "
+                    f"{description} with {payer_name} is ₪{float(amount):.2f}. "
+                    f"Confirm? (yes / no)"
+                )
+                await self.request_confirmation(
+                    db=db,
+                    initiator_phone=reporter_phone,
+                    initiator_group_jid=reporter_group_jid,
+                    target_phone=phone,
+                    action_type="split_share",
+                    action_payload={
+                        "group_jid": reporter_group_jid,
+                        "payer_phone": payer_phone,
+                        "debtor_phone": phone,
+                        "amount_ils": str(amount),
+                        "description": description,
+                        "transaction_date": str(transaction_date),
+                        "split_transaction_id": split.id,
+                    },
+                    confirmation_message=confirm_msg,
+                    split_transaction_id=split.id,
+                )
+
+        db.commit()
+        return split
+
+    async def handle_split_decline(
+        self,
+        db: Session,
+        declined_conf: CrossGroupConfirmation,
+    ) -> None:
+        split_id = declined_conf.split_transaction_id
+        if not split_id:
+            return
+
+        split = db.query(SplitTransaction).filter_by(id=split_id).first()
+        if not split:
+            return
+
+        split.status = "suspended"
+
+        # Pause all other pending confirmations
+        db.query(CrossGroupConfirmation).filter_by(
+            split_transaction_id=split_id, status="pending"
+        ).update({"status": "paused"})
+        db.commit()
+
+        decliner_name = self.get_display_name(db, declined_conf.target_phone)
+        reporter_name = self.get_display_name(db, split.reporter_phone)
+
+        # Notify reporter
+        await bridge_client.send_message(
+            split.reporter_group_jid,
+            f"{decliner_name} declined their share of the ₪{float(split.total_amount):.2f} "
+            f"{split.description}. The split is suspended — re-submit if you agree on new amounts."
+        )
+        # Notify payer if different from reporter
+        if split.payer_phone != split.reporter_phone:
+            await self.notify_user(
+                db, split.payer_phone,
+                f"{decliner_name} declined their share of the ₪{float(split.total_amount):.2f} "
+                f"{split.description} (reported by {reporter_name}). Transaction suspended."
+            )
+
+    async def finalize_split(self, db: Session, split: SplitTransaction) -> None:
+        """Commit all ledger entries for a fully confirmed split."""
+        confs = db.query(CrossGroupConfirmation).filter_by(
+            split_transaction_id=split.id
+        ).all()
+
+        all_done = all(c.status in ("confirmed", "self_confirmed") for c in confs)
+        if not all_done:
+            return
+
+        for conf in confs:
+            await self.commit_confirmed_transaction(db, conf)
+
+        split.status = "confirmed"
+        db.commit()
+
+        await bridge_client.send_message(
+            split.reporter_group_jid,
+            f"All shares confirmed. The ₪{float(split.total_amount):.2f} "
+            f"{split.description} split has been recorded."
         )
