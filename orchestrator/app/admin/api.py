@@ -345,6 +345,7 @@ def list_people(_=Depends(require_auth)):
             result.append({
                 "phone": phone,
                 "display_name": profile.display_name if profile else None,
+                "email": profile.email if profile else None,
                 "is_admin": admin is not None,
                 "admin_label": admin.label if admin else None,
                 "group_jid": owner_acct.group_jid if owner_acct else None,
@@ -507,16 +508,50 @@ class UpdatePersonFullRequest(BaseModel):
 
 @router.patch("/people/{phone}")
 def patch_person(phone: str, body: UpdatePersonFullRequest, _=Depends(require_auth)):
+    from app.db.models import EmailAllowlist
     with SessionLocal() as db:
         if body.display_name is not None or body.email is not None:
             profile = db.query(UserProfile).filter_by(phone=phone).first()
             if profile is None:
                 profile = UserProfile(phone=phone)
                 db.add(profile)
+
+            old_email = profile.email  # capture before mutation
+
             if body.display_name is not None:
                 profile.display_name = body.display_name
             if body.email is not None:
-                profile.email = body.email
+                profile.email = body.email or None  # empty string → None
+
+            # Auto-sync email allowlist
+            if body.email is not None:
+                new_email = (body.email or "").strip().lower()
+                old_email_norm = (old_email or "").strip().lower()
+
+                # Remove old email from allowlist if it changed
+                if old_email_norm and old_email_norm != new_email:
+                    old_row = db.get(EmailAllowlist, old_email_norm)
+                    if old_row:
+                        db.delete(old_row)
+
+                if new_email:
+                    # Upsert new email
+                    display = (
+                        body.display_name
+                        or (profile.display_name if profile else None)
+                        or phone
+                    )
+                    existing = db.get(EmailAllowlist, new_email)
+                    if existing:
+                        existing.display_name = display
+                    else:
+                        db.add(EmailAllowlist(email=new_email, display_name=display))
+                else:
+                    # Email cleared — remove from allowlist
+                    if old_email_norm:
+                        old_row = db.get(EmailAllowlist, old_email_norm)
+                        if old_row:
+                            db.delete(old_row)
 
         if body.is_admin is not None:
             existing_admin = db.query(AdminNumbers).filter_by(phone_number=phone).first()
@@ -572,6 +607,52 @@ def update_setting(key: str, body: UpdateSettingRequest, _=Depends(require_auth)
             row.value = body.value
         db.commit()
         return {"key": key, "value": body.value}
+
+
+# -- Email Allowlist ---------------------------------------------------------
+
+class AddAllowlistRequest(BaseModel):
+    email: str
+    display_name: str | None = None
+
+
+@router.get("/settings/email-allowlist", dependencies=[Depends(require_auth)])
+def list_email_allowlist():
+    from app.db.models import EmailAllowlist
+    with SessionLocal() as db:
+        rows = db.query(EmailAllowlist).order_by(EmailAllowlist.created_at).all()
+        return [
+            {
+                "email": r.email,
+                "display_name": r.display_name,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
+
+
+@router.post("/settings/email-allowlist", dependencies=[Depends(require_auth)])
+def add_email_allowlist(body: AddAllowlistRequest):
+    from app.db.models import EmailAllowlist
+    email = body.email.strip().lower()
+    with SessionLocal() as db:
+        if db.get(EmailAllowlist, email):
+            raise HTTPException(status_code=409, detail="Email already in allowlist")
+        db.add(EmailAllowlist(email=email, display_name=body.display_name or None))
+        db.commit()
+    return {"ok": True}
+
+
+@router.delete("/settings/email-allowlist/{email:path}", dependencies=[Depends(require_auth)])
+def delete_email_allowlist(email: str):
+    from app.db.models import EmailAllowlist
+    with SessionLocal() as db:
+        row = db.get(EmailAllowlist, email.strip().lower())
+        if not row:
+            raise HTTPException(status_code=404, detail="Email not in allowlist")
+        db.delete(row)
+        db.commit()
+    return {"ok": True}
 
 
 # -- Request logs ------------------------------------------------------------
