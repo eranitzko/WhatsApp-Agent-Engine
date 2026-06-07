@@ -116,34 +116,35 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple
     bottom: 0; left: 0; right: 0;
     background: var(--surface);
     border-top: 1px solid var(--border);
-    padding: 8px 4px env(safe-area-inset-bottom, 4px);
-    gap: 2px;
+    padding: 6px 2px env(safe-area-inset-bottom, 4px);
+    gap: 0;
     z-index: 50;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
   }
-  .bottom-nav::-webkit-scrollbar { display: none; }
   .bottom-nav-item {
-    flex: 0 0 auto;
-    min-width: 56px;
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 3px;
+    gap: 2px;
     cursor: pointer;
+    padding: 0 1px;
   }
   .bottom-nav-item .bnav-icon {
-    border-radius: 12px;
-    padding: 4px 14px;
-    font-size: 18px;
+    border-radius: 10px;
+    padding: 3px 8px;
+    font-size: 16px;
     transition: background 0.15s;
   }
   .bottom-nav-item.active .bnav-icon { background: var(--surface2); }
   .bottom-nav-item .bnav-label {
-    font-size: 10px;
+    font-size: 9px;
     color: var(--muted);
     font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
   }
   .bottom-nav-item.active .bnav-label { color: var(--accent); }
 }
