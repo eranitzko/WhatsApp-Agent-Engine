@@ -20,6 +20,18 @@ from app.agent.correction_queue import correction_queue
 
 logger = logging.getLogger(__name__)
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.accounting.account_service import AccountService
+
+_account_service: "AccountService | None" = None
+
+
+def set_account_service(service: "AccountService | None") -> None:
+    global _account_service
+    _account_service = service
+
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
@@ -290,6 +302,52 @@ _SCHEMAS: dict[str, dict] = {
 # ── Executors ─────────────────────────────────────────────────────────────────
 
 async def _exec_record_transaction(params: dict, **ctx) -> str:
+    from datetime import date as _date
+    group_jid = ctx.get("group_jid", "")
+    sender = ctx.get("sender", "")
+    sender_phone = sender.split("@")[0].split(":")[0]
+
+    payer_phone: str = params["payer_phone"]
+    participant_phones: list[str] = params["participant_phones"]
+    amount: float = params["amount"]
+    currency: str = params.get("currency", "ILS")
+    description: str = params.get("description", "")
+    tx_date_str: str | None = params.get("transaction_date")
+    transaction_date = (
+        _date.fromisoformat(tx_date_str) if tx_date_str else _date.today()
+    )
+
+    if not participant_phones:
+        return "Error: participant_phones must not be empty."
+
+    with SessionLocal() as db:
+        try:
+            amount_ils = await to_ils(Decimal(str(amount)), currency, transaction_date)
+        except RuntimeError as exc:
+            return str(exc)
+
+        if _account_service:
+            # New cross-group routing path
+            results = []
+            for debtor_phone in participant_phones:
+                msg = await _account_service.process_transaction(
+                    db=db,
+                    reporter_phone=sender_phone,
+                    reporter_group_jid=group_jid,
+                    payer_phone=payer_phone,
+                    debtor_phone=debtor_phone,
+                    amount_ils=amount_ils,
+                    description=description,
+                    transaction_date=transaction_date,
+                )
+                results.append(msg)
+            return " ".join(results)
+
+    # Legacy same-group path (other blueprints or when no AccountService)
+    return await _legacy_record_transaction(params, **ctx)
+
+
+async def _legacy_record_transaction(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
     sender = ctx.get("sender", "")
     sender_phone = sender.split("@")[0].split(":")[0]

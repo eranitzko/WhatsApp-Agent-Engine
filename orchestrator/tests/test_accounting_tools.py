@@ -164,3 +164,36 @@ async def test_set_reminder_rejects_past_datetime(db):
             confirmation_store=None,
         )
     assert "future" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_record_transaction_uses_account_service_when_injected(db):
+    """When AccountService is set, record_transaction delegates routing to it."""
+    from unittest.mock import MagicMock
+    import app.tools.accounting_tools as at_module
+
+    mock_svc = MagicMock()
+    mock_svc.process_transaction = AsyncMock(return_value="Confirmation sent to Tal.")
+    at_module.set_account_service(mock_svc)
+
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)), \
+         patch("app.tools.accounting_tools.to_ils", new=AsyncMock(return_value=Decimal("100"))):
+        tools = get_accounting_tools()
+        result = await tools["record_transaction"]["executor"](
+            {
+                "payer_phone": "972500000001",
+                "participant_phones": ["972500000002"],
+                "amount": 100,
+                "currency": "ILS",
+                "description": "dinner",
+            },
+            group_jid="123@g.us",
+            sender="972500000001@s.whatsapp.net",
+            is_admin=False,
+            multi_confirmation_store=None,
+        )
+
+    mock_svc.process_transaction.assert_awaited_once()
+    assert "Confirmation" in result or "recorded" in result.lower()
+
+    at_module.set_account_service(None)  # clean up
