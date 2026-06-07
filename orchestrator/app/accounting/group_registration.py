@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone, timedelta
-from typing import TYPE_CHECKING
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -15,7 +14,6 @@ from app.db.models import (
 
 logger = logging.getLogger(__name__)
 
-_REGISTRATION_TIMEOUT_HOURS = 24
 _DEFAULT_BLUEPRINT_ID = "family_accounting"
 
 
