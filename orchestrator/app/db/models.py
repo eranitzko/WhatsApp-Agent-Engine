@@ -4,7 +4,7 @@ from datetime import datetime, timezone, date as date_type
 from decimal import Decimal
 
 from sqlalchemy import (
-    Boolean, Column, Date, DateTime, Float, Index, Integer, String, Text, Numeric, ForeignKey
+    Boolean, Column, Date, DateTime, Float, Index, Integer, String, Text, Numeric, ForeignKey, UniqueConstraint
 )
 from sqlalchemy.orm import DeclarativeBase
 
@@ -216,6 +216,10 @@ class UserAccount(Base):
     created_at = Column(DateTime(timezone=True), nullable=False,
                         default=lambda: datetime.now(timezone.utc))
 
+    __table_args__ = (
+        UniqueConstraint("phone", "group_jid", name="uq_user_accounts_phone_group"),
+    )
+
 
 class SplitTransaction(Base):
     __tablename__ = "split_transactions"
@@ -246,6 +250,10 @@ class CrossGroupConfirmation(Base):
     expires_at           = Column(DateTime(timezone=True), nullable=False)
     created_at           = Column(DateTime(timezone=True), nullable=False,
                                   default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_cross_group_confirmations_target_phone_status", "target_phone", "status"),
+    )
 
 
 class UserProfile(Base):
