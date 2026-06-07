@@ -10,7 +10,7 @@ a fresh DB session. This means the tool works correctly whether called:
   - Directly from a workflow step (templates may already be resolved)
   - As a confirmed action after request_confirmation (resolves from DB fresh)
 
-Admin only. Validates recipient against REPORT_EMAIL_ALLOWLIST.
+Admin only. Validates recipient against the email_allowlist DB table.
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ async def _exec_send_email(params: dict, **ctx) -> str:
     if not _is_allowed(to):
         return (
             f"Email address '{to}' is not in the allowed recipient list. "
-            f"Add it to REPORT_EMAIL_ALLOWLIST to permit it."
+            f"Ask an admin to add it via the Settings panel."
         )
 
     try:
