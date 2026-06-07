@@ -6,6 +6,7 @@ Create Date: 2026-06-04
 """
 from typing import Sequence, Union
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "011"
@@ -18,7 +19,7 @@ def upgrade() -> None:
     # group_type on existing group_registry
     op.add_column(
         "group_registry",
-        sa.Column("group_type", sa.String(), nullable=True, server_default="personal"),
+        sa.Column("group_type", sa.String(), nullable=True, server_default=sa.text("'personal'")),
     )
 
     # display_name on existing user_profiles
@@ -33,7 +34,7 @@ def upgrade() -> None:
         sa.Column("id", sa.String(36), nullable=False),
         sa.Column("phone", sa.String(), nullable=False),
         sa.Column("group_jid", sa.String(), nullable=False),
-        sa.Column("role", sa.String(), nullable=False, server_default="owner"),
+        sa.Column("role", sa.String(), nullable=False, server_default=sa.text("'owner'")),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
                   server_default=sa.func.now()),
         sa.PrimaryKeyConstraint("id"),
@@ -52,11 +53,12 @@ def upgrade() -> None:
         sa.Column("payer_phone", sa.String(), nullable=False),
         sa.Column("total_amount", sa.Numeric(18, 4), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
-        sa.Column("status", sa.String(), nullable=False, server_default="pending"),
+        sa.Column("status", sa.String(), nullable=False, server_default=sa.text("'pending'")),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
                   server_default=sa.func.now()),
         sa.PrimaryKeyConstraint("id"),
     )
+    op.create_index("ix_split_transactions_status", "split_transactions", ["status"])
 
     # cross_group_confirmations: persistent 2nd-party and split confirmations
     op.create_table(
@@ -69,7 +71,7 @@ def upgrade() -> None:
         sa.Column("target_group_jid", sa.String(), nullable=False),
         sa.Column("action_type", sa.String(), nullable=False),
         sa.Column("action_payload", sa.Text(), nullable=False),
-        sa.Column("status", sa.String(), nullable=False, server_default="pending"),
+        sa.Column("status", sa.String(), nullable=False, server_default=sa.text("'pending'")),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
                   server_default=sa.func.now()),
@@ -79,15 +81,16 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
-        "ix_cgc_target_phone_status",
+        "ix_cross_group_confirmations_target_phone_status",
         "cross_group_confirmations",
         ["target_phone", "status"],
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_cgc_target_phone_status", table_name="cross_group_confirmations")
+    op.drop_index("ix_cross_group_confirmations_target_phone_status", table_name="cross_group_confirmations")
     op.drop_table("cross_group_confirmations")
+    op.drop_index("ix_split_transactions_status", table_name="split_transactions")
     op.drop_table("split_transactions")
     op.drop_index("ix_user_accounts_group_jid", table_name="user_accounts")
     op.drop_index("ix_user_accounts_phone", table_name="user_accounts")
