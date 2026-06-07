@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from app.admin.auth import require_auth
 from app.config import settings
-from app.db.models import AdminNumbers, Blueprint, GroupRegistry, SystemConfig
+from app.db.models import AdminNumbers, Blueprint, GroupRegistry, SystemConfig, UserAccount, UserProfile
 from app.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -318,3 +318,89 @@ def remove_tool_from_blueprints(tool_name: str):
                 updated.append(bp.id)
         db.commit()
     return {"ok": True, "blueprints_updated": updated}
+
+
+# -- Users -------------------------------------------------------------------
+
+@router.get("/users")
+def list_users(_=Depends(require_auth)):
+    with SessionLocal() as db:
+        accounts = db.query(UserAccount).filter_by(role="owner").all()
+        result = []
+        for acct in accounts:
+            profile = db.query(UserProfile).filter_by(phone=acct.phone).first()
+            result.append({
+                "phone": acct.phone,
+                "display_name": profile.display_name if profile else None,
+                "group_jid": acct.group_jid,
+                "created_at": acct.created_at.isoformat() if acct.created_at else None,
+            })
+        return result
+
+
+class UpdateUserRequest(BaseModel):
+    display_name: str
+
+
+@router.put("/users/{phone}")
+def update_user(phone: str, body: UpdateUserRequest, _=Depends(require_auth)):
+    with SessionLocal() as db:
+        profile = db.query(UserProfile).filter_by(phone=phone).first()
+        if profile is None:
+            profile = UserProfile(phone=phone, display_name=body.display_name)
+            db.add(profile)
+        else:
+            profile.display_name = body.display_name
+        db.commit()
+        return {"phone": phone, "display_name": body.display_name}
+
+
+@router.delete("/users/{phone}")
+def delete_user(phone: str, _=Depends(require_auth)):
+    with SessionLocal() as db:
+        db.query(UserAccount).filter_by(phone=phone).delete()
+        db.commit()
+        return {"deleted": phone}
+
+
+# -- Settings ----------------------------------------------------------------
+
+_EDITABLE_SETTINGS = {
+    "cross_group_confirmation_timeout_hours",
+    "group_registration_timeout_hours",
+}
+
+
+@router.get("/settings")
+def get_settings(_=Depends(require_auth)):
+    with SessionLocal() as db:
+        rows = db.query(SystemConfig).filter(
+            SystemConfig.key.in_(_EDITABLE_SETTINGS)
+        ).all()
+        result = {r.key: r.value for r in rows}
+        defaults = {
+            "cross_group_confirmation_timeout_hours": "24",
+            "group_registration_timeout_hours": "24",
+        }
+        for k, v in defaults.items():
+            result.setdefault(k, v)
+        return result
+
+
+class UpdateSettingRequest(BaseModel):
+    value: str
+
+
+@router.put("/settings/{key}")
+def update_setting(key: str, body: UpdateSettingRequest, _=Depends(require_auth)):
+    if key not in _EDITABLE_SETTINGS:
+        raise HTTPException(status_code=400, detail=f"Unknown setting: {key}")
+    with SessionLocal() as db:
+        row = db.query(SystemConfig).filter_by(key=key).first()
+        if row is None:
+            row = SystemConfig(key=key, value=body.value)
+            db.add(row)
+        else:
+            row.value = body.value
+        db.commit()
+        return {"key": key, "value": body.value}

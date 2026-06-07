@@ -28,6 +28,8 @@ async function route() {
   else if (hash === 'admins') await renderAdmins(app);
   else if (hash === 'blueprints') await renderBlueprints(app);
   else if (hash === 'tools') await renderTools(app);
+  else if (hash === 'users') await renderUsers(app);
+  else if (hash === 'settings') await renderSettings(app);
   else await renderGroups(app);
 }
 
@@ -42,6 +44,8 @@ function layout(page, content) {
     { hash: 'admins',     icon: '👥', label: 'Admins' },
     { hash: 'blueprints', icon: '📋', label: 'Blueprints' },
     { hash: 'tools',      icon: '🔧', label: 'Tools' },
+    { hash: 'users',      icon: '👤', label: 'Users' },
+    { hash: 'settings',   icon: '⚙️', label: 'Settings' },
   ];
   return `
     <div class="layout">
@@ -506,6 +510,82 @@ async function removeToolFromAllBlueprints(toolName) {
   } else {
     alert('Failed to remove tool.');
   }
+}
+
+// ── Users page ──────────────────────────────────────────────────────────────
+async function renderUsers(app) {
+  const res = await apiFetch('/users');
+  if (!res) return;
+  const users = await res.json();
+  app.innerHTML = layout('users', `
+    <h2>Users</h2>
+    <table class="data-table">
+      <thead><tr><th>Phone</th><th>Display Name</th><th>Group JID</th><th>Registered</th><th></th></tr></thead>
+      <tbody>
+        ${users.map(u => `
+          <tr>
+            <td>${u.phone}</td>
+            <td>
+              <input id="name-${u.phone}" value="${u.display_name || ''}"
+                     onblur="saveDisplayName('${u.phone}')" style="width:140px">
+            </td>
+            <td style="font-size:0.8em">${u.group_jid}</td>
+            <td>${u.created_at ? u.created_at.slice(0,10) : ''}</td>
+            <td><button onclick="deleteUser('${u.phone}')">Remove</button></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`);
+}
+
+async function saveDisplayName(phone) {
+  const name = document.getElementById(`name-${phone}`).value;
+  await apiFetch(`/users/${phone}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ display_name: name }),
+  });
+}
+
+async function deleteUser(phone) {
+  if (!confirm(`Remove user ${phone}? This will unregister their account.`)) return;
+  await apiFetch(`/users/${phone}`, { method: 'DELETE' });
+  location.reload();
+}
+
+// ── Settings page ────────────────────────────────────────────────────────────
+async function renderSettings(app) {
+  const res = await apiFetch('/settings');
+  if (!res) return;
+  const settings = await res.json();
+  const labels = {
+    cross_group_confirmation_timeout_hours: 'Cross-group confirmation timeout (hours)',
+    group_registration_timeout_hours: 'Group registration approval timeout (hours)',
+  };
+  app.innerHTML = layout('settings', `
+    <h2>Settings</h2>
+    <table class="data-table">
+      <tbody>
+        ${Object.entries(settings).map(([k, v]) => `
+          <tr>
+            <td>${labels[k] || k}</td>
+            <td>
+              <input id="setting-${k}" type="number" min="1" max="168" value="${v}"
+                     style="width:80px">
+              <button onclick="saveSetting('${k}')">Save</button>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`);
+}
+
+async function saveSetting(key) {
+  const value = document.getElementById(`setting-${key}`).value;
+  await apiFetch(`/settings/${key}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  });
+  alert('Saved.');
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
