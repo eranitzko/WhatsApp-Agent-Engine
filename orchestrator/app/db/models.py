@@ -206,6 +206,24 @@ class AutomationRule(Base):
                               default=lambda: datetime.now(timezone.utc))
 
 
+class RequestLog(Base):
+    __tablename__ = "request_logs"
+
+    id              = Column(String(36), primary_key=True, default=_uuid)
+    group_jid       = Column(String, nullable=False, index=True)
+    blueprint_id    = Column(String, nullable=False)
+    sender_phone    = Column(String, nullable=True)
+    history_pairs   = Column(Integer, nullable=False, default=0)
+    tool_count      = Column(Integer, nullable=False, default=0)
+    tool_names      = Column(Text, nullable=True)       # JSON array
+    stop_reason     = Column(String, nullable=True)
+    tool_calls_made = Column(Text, nullable=True)       # JSON array of {name, preview}
+    error           = Column(Text, nullable=True)
+    duration_ms     = Column(Integer, nullable=True)
+    created_at      = Column(DateTime(timezone=True), nullable=False,
+                             default=lambda: datetime.now(timezone.utc))
+
+
 class UserAccount(Base):
     __tablename__ = "user_accounts"
 

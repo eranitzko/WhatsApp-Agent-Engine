@@ -29,6 +29,7 @@ async function route() {
   else if (hash === 'blueprints') await renderBlueprints(app);
   else if (hash === 'tools') await renderTools(app);
   else if (hash === 'settings') await renderSettings(app);
+  else if (hash === 'logs') await renderLogs(app);
   else await renderGroups(app);
 }
 
@@ -44,6 +45,7 @@ function layout(page, content) {
     { hash: 'blueprints', icon: '📋', label: 'Blueprints' },
     { hash: 'tools',      icon: '🔧', label: 'Tools' },
     { hash: 'settings',   icon: '⚙️', label: 'Settings' },
+    { hash: 'logs',       icon: '📋', label: 'Logs' },
   ];
   return `
     <div class="layout">
@@ -653,6 +655,44 @@ async function saveSetting(key) {
     body: JSON.stringify({ value }),
   });
   alert('Saved.');
+}
+
+// ── Logs page ────────────────────────────────────────────────────────────────
+
+async function renderLogs(app) {
+  app.innerHTML = layout('logs', '<p style="color:var(--muted)">Loading...</p>');
+  const res = await apiFetch('/logs?limit=100');
+  if (!res) return;
+  const logs = await res.json();
+
+  const stopColor = s => ({
+    end_turn: 'color:#16a34a', tool_use: 'color:var(--accent)',
+    max_tokens: 'color:#d97706', max_tool_turns: 'color:#dc2626',
+  }[s] || 'color:var(--muted)');
+
+  const rows = logs.length
+    ? logs.map(l => `
+        <tr>
+          <td style="font-size:0.75em;color:var(--muted);white-space:nowrap">${l.created_at ? l.created_at.slice(0,19).replace('T',' ') : ''}</td>
+          <td style="font-size:0.8em">${escHtml((l.group_jid || '').slice(0,20))}</td>
+          <td><span class="badge">${escHtml(l.blueprint_id || '')}</span></td>
+          <td style="${stopColor(l.stop_reason)};font-size:0.85em;font-weight:500">${escHtml(l.stop_reason || '—')}</td>
+          <td style="font-size:0.8em">${l.history_pairs}p / ${l.tool_count}t</td>
+          <td style="font-size:0.8em">${(l.tool_calls_made || []).map(t => escHtml(t.name)).join(', ') || '—'}</td>
+          <td style="font-size:0.8em;color:var(--muted)">${l.duration_ms != null ? l.duration_ms + 'ms' : '—'}</td>
+          <td style="color:#dc2626;font-size:0.75em">${l.error ? '⚠ ' + escHtml(l.error.slice(0,60)) : ''}</td>
+        </tr>`).join('')
+    : '<tr><td colspan="8" class="empty">No logs yet.</td></tr>';
+
+  app.innerHTML = layout('logs', `
+    <div class="page-header"><h2>Request Logs</h2></div>
+    <div class="table-wrap"><table class="table">
+      <thead><tr>
+        <th>Time</th><th>Group</th><th>Blueprint</th><th>Stop</th>
+        <th>Ctx/Tools</th><th>Tools Called</th><th>Duration</th><th>Error</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`);
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────

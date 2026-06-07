@@ -572,3 +572,31 @@ def update_setting(key: str, body: UpdateSettingRequest, _=Depends(require_auth)
             row.value = body.value
         db.commit()
         return {"key": key, "value": body.value}
+
+
+# -- Request logs ------------------------------------------------------------
+
+@router.get("/logs")
+def get_logs(limit: int = 100, group_jid: str | None = None, _=Depends(require_auth)):
+    from app.db.models import RequestLog
+    with SessionLocal() as db:
+        q = db.query(RequestLog).order_by(RequestLog.created_at.desc())
+        if group_jid:
+            q = q.filter(RequestLog.group_jid == group_jid)
+        rows = q.limit(min(limit, 500)).all()
+        return [
+            {
+                "id": r.id,
+                "group_jid": r.group_jid,
+                "blueprint_id": r.blueprint_id,
+                "sender_phone": r.sender_phone,
+                "history_pairs": r.history_pairs,
+                "tool_count": r.tool_count,
+                "stop_reason": r.stop_reason,
+                "tool_calls_made": json.loads(r.tool_calls_made) if r.tool_calls_made else [],
+                "error": r.error,
+                "duration_ms": r.duration_ms,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]

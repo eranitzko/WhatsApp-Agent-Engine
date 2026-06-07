@@ -1,10 +1,12 @@
 import json
 import logging
+import time
+import uuid
 from datetime import datetime, timezone
 
 import anthropic
 
-from app.db.models import Blueprint, SystemConfig
+from app.db.models import Blueprint, RequestLog, SystemConfig
 from app.db.session import SessionLocal
 from app.tool_registry import ToolRegistry
 
@@ -29,6 +31,7 @@ class AgentRunner:
         custom_instructions: str | None = None,
         participant_block: str | None = None,
     ) -> str:
+        start_ms = time.monotonic()
         allowed_tools = blueprint.tools_list()
 
         # Filter globally disabled tools (stored in SystemConfig["disabled_tools"])
@@ -105,7 +108,6 @@ class AgentRunner:
             },
         ]
         if participant_block:
-            # Cache participant block — it changes rarely and can be large
             system.append({
                 "type": "text",
                 "text": participant_block,
@@ -117,57 +119,128 @@ class AgentRunner:
                 "text": f"Group-specific instructions:\n{custom_instructions}",
                 "cache_control": {"type": "ephemeral"},
             })
-        # Ephemeral runtime context — not cached (changes every message)
         system.append({
             "type": "text",
             "text": f"Today's date: {datetime.now(timezone.utc).date()}. Sender is_admin: {is_admin}. Sender phone: {sender_phone}.",
         })
         tool_schemas = self.registry.get_schemas(allowed_tools)
 
-        for _ in range(blueprint.max_tool_turns):
-            response = await self.client.messages.create(
-                model=blueprint.model,
-                max_tokens=1024,  # WhatsApp replies are short; saves tokens and reduces latency
-                system=system,
-                tools=tool_schemas,
-                messages=messages,
+        logger.info(
+            "AgentRunner turn | group=%s blueprint=%s sender=%s history_pairs=%d tools=%d [%s]",
+            group_jid, blueprint.id, sender_phone, len(history) // 2,
+            len(tool_schemas), ", ".join(allowed_tools),
+        )
+
+        tool_calls_made: list[dict] = []
+        final_stop_reason: str | None = None
+        error_text: str | None = None
+
+        try:
+            for _ in range(blueprint.max_tool_turns):
+                response = await self.client.messages.create(
+                    model=blueprint.model,
+                    max_tokens=4096,
+                    temperature=0,
+                    system=system,
+                    tools=tool_schemas,
+                    messages=messages,
+                )
+                final_stop_reason = response.stop_reason
+
+                if response.stop_reason == "end_turn":
+                    text = next(
+                        (b.text for b in response.content if hasattr(b, "text") and b.type == "text"),
+                        "",
+                    )
+                    context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
+                    context.add(group_jid, "assistant", text, max_pairs=blueprint.context_window)
+                    return text
+
+                if response.stop_reason == "max_tokens":
+                    logger.warning(
+                        "AgentRunner hit max_tokens | group=%s blueprint=%s turn_tools=%s",
+                        group_jid, blueprint.id, [b.type for b in response.content],
+                    )
+
+                if response.stop_reason == "tool_use":
+                    tc_list = [b for b in response.content if b.type == "tool_use"]
+                    messages.append({"role": "assistant", "content": response.content})
+                    tool_results = []
+                    for tc in tc_list:
+                        if tc.name not in allowed_tools:
+                            result_text = f"Tool '{tc.name}' is not permitted for this agent."
+                            logger.warning(
+                                "Tool not permitted | group=%s tool=%s allowed=%s",
+                                group_jid, tc.name, allowed_tools,
+                            )
+                        else:
+                            raw = await self.registry.execute(
+                                tc.name, tc.input,
+                                group_jid=group_jid, sender=sender, is_admin=is_admin,
+                                confirmation_store=confirmation_store,
+                                multi_confirmation_store=multi_confirmation_store,
+                            )
+                            result_text = raw if isinstance(raw, str) else json.dumps(raw)
+                        tool_calls_made.append({
+                            "name": tc.name,
+                            "preview": result_text[:120],
+                        })
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tc.id,
+                            "content": result_text,
+                        })
+                    messages.append({"role": "user", "content": tool_results})
+
+            final_stop_reason = "max_tool_turns"
+            fallback = "I reached my processing limit. Please try a simpler request."
+            context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
+            context.add(group_jid, "assistant", fallback, max_pairs=blueprint.context_window)
+            return fallback
+
+        except Exception as exc:
+            error_text = str(exc)
+            logger.exception("AgentRunner error | group=%s blueprint=%s", group_jid, blueprint.id)
+            raise
+
+        finally:
+            duration_ms = int((time.monotonic() - start_ms) * 1000)
+            logger.info(
+                "AgentRunner done | group=%s stop=%s tools_called=%s duration_ms=%d",
+                group_jid, final_stop_reason,
+                [t["name"] for t in tool_calls_made], duration_ms,
+            )
+            self._write_log(
+                group_jid=group_jid,
+                blueprint_id=blueprint.id,
+                sender_phone=sender_phone,
+                history_pairs=len(history) // 2,
+                tool_count=len(tool_schemas),
+                tool_names=allowed_tools,
+                stop_reason=final_stop_reason,
+                tool_calls_made=tool_calls_made,
+                error=error_text,
+                duration_ms=duration_ms,
             )
 
-            if response.stop_reason == "end_turn":
-                text = next(
-                    (b.text for b in response.content if hasattr(b, "text") and b.type == "text"),
-                    "",
-                )
-                context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
-                context.add(group_jid, "assistant", text, max_pairs=blueprint.context_window)
-                return text
-
-            if response.stop_reason == "tool_use":
-                tool_calls = [b for b in response.content if b.type == "tool_use"]
-                messages.append({"role": "assistant", "content": response.content})
-                tool_results = []
-                for tc in tool_calls:
-                    if tc.name not in allowed_tools:
-                        result_text = f"Tool '{tc.name}' is not permitted for this agent."
-                    else:
-                        raw = await self.registry.execute(
-                            tc.name, tc.input,
-                            group_jid=group_jid, sender=sender, is_admin=is_admin,
-                            confirmation_store=confirmation_store,
-                            multi_confirmation_store=multi_confirmation_store,
-                        )
-                        result_text = raw if isinstance(raw, str) else json.dumps(raw)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tc.id,
-                        "content": result_text,
-                    })
-                messages.append({"role": "user", "content": tool_results})
-
-        fallback = "I reached my processing limit. Please try a simpler request."
-        context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
-        context.add(group_jid, "assistant", fallback, max_pairs=blueprint.context_window)
-        return fallback
+    def _write_log(self, **kwargs) -> None:
+        try:
+            with SessionLocal() as db:
+                db.add(RequestLog(
+                    group_jid=kwargs["group_jid"],
+                    blueprint_id=kwargs["blueprint_id"],
+                    sender_phone=kwargs["sender_phone"],
+                    history_pairs=kwargs["history_pairs"],
+                    tool_count=kwargs["tool_count"],
+                    tool_names=json.dumps(kwargs["tool_names"]),
+                    stop_reason=kwargs["stop_reason"],
+                    tool_calls_made=json.dumps(kwargs["tool_calls_made"]),
+                    error=kwargs["error"],
+                    duration_ms=kwargs["duration_ms"],
+                ))
+                db.commit()
+        except Exception:
+            logger.warning("Failed to write request log", exc_info=True)
 
     async def _commit_pending(self, mc) -> str:
         """Write a confirmed multi-party transaction to DB."""
@@ -205,7 +278,6 @@ class AgentRunner:
                     ))
                 db.commit()
 
-            n = len(participants)
             return (
                 f"Transaction recorded: {payer} paid for {', '.join(participants)} — "
                 f"{per_person:.2f} ILS each. (tx: {transaction_id[:8]})"
