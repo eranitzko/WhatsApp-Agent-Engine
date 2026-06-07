@@ -102,3 +102,109 @@ def test_get_group_type(db):
 def test_get_group_type_unknown_returns_unregistered(db):
     svc = AccountService()
     assert svc.get_group_type(db, "unknown@g.us") == "unregistered"
+
+
+import pytest
+from unittest.mock import AsyncMock, patch
+from datetime import datetime, timezone, timedelta
+from app.db.models import CrossGroupConfirmation
+
+
+@pytest.mark.asyncio
+async def test_notify_user_sends_to_personal_group(db):
+    _seed_group(db, "eden_grp@g.us")
+    _seed_user(db, "972510", "eden_grp@g.us")
+    svc = AccountService()
+    with patch("app.accounting.account_service.bridge_client") as mock_bc:
+        mock_bc.send_message = AsyncMock()
+        await svc.notify_user(db, "972510", "Hello")
+    mock_bc.send_message.assert_awaited_once_with("eden_grp@g.us", "Hello")
+
+
+@pytest.mark.asyncio
+async def test_notify_user_silent_when_no_group(db):
+    svc = AccountService()
+    with patch("app.accounting.account_service.bridge_client") as mock_bc:
+        mock_bc.send_message = AsyncMock()
+        await svc.notify_user(db, "999999", "Hello")
+    mock_bc.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_request_confirmation_creates_row(db):
+    _seed_group(db, "tal_grp@g.us")
+    _seed_user(db, "972511", "tal_grp@g.us")
+    svc = AccountService()
+    with patch("app.accounting.account_service.bridge_client") as mock_bc:
+        mock_bc.send_message = AsyncMock()
+        conf = await svc.request_confirmation(
+            db=db,
+            initiator_phone="972500",
+            initiator_group_jid="eden_grp@g.us",
+            target_phone="972511",
+            action_type="record_expense",
+            action_payload={"amount_ils": "100.00"},
+            confirmation_message="Tal, Eden says you owe ₪100. Confirm?",
+        )
+    assert conf.id is not None
+    assert conf.status == "pending"
+    assert conf.target_phone == "972511"
+    assert conf.target_group_jid == "tal_grp@g.us"
+    mock_bc.send_message.assert_awaited_once_with(
+        "tal_grp@g.us",
+        "Tal, Eden says you owe ₪100. Confirm?",
+    )
+
+
+def test_handle_confirmation_reply_yes_flips_status(db):
+    _seed_group(db, "tal_grp2@g.us")
+    _seed_user(db, "972512", "tal_grp2@g.us")
+    now = datetime.now(timezone.utc)
+    conf = CrossGroupConfirmation(
+        initiator_phone="972500",
+        initiator_group_jid="eden_grp@g.us",
+        target_phone="972512",
+        target_group_jid="tal_grp2@g.us",
+        action_type="record_expense",
+        action_payload='{"amount_ils": "50.00"}',
+        status="pending",
+        expires_at=now + timedelta(hours=24),
+    )
+    db.add(conf)
+    db.commit()
+
+    svc = AccountService()
+    resolved = svc.handle_confirmation_reply(db, "tal_grp2@g.us", "972512", "yes")
+    assert resolved is True
+    db.refresh(conf)
+    assert conf.status == "confirmed"
+
+
+def test_handle_confirmation_reply_no_flips_status(db):
+    _seed_group(db, "tal_grp3@g.us")
+    _seed_user(db, "972513", "tal_grp3@g.us")
+    now = datetime.now(timezone.utc)
+    conf = CrossGroupConfirmation(
+        initiator_phone="972500",
+        initiator_group_jid="eden_grp@g.us",
+        target_phone="972513",
+        target_group_jid="tal_grp3@g.us",
+        action_type="record_expense",
+        action_payload='{"amount_ils": "50.00"}',
+        status="pending",
+        expires_at=now + timedelta(hours=24),
+    )
+    db.add(conf)
+    db.commit()
+
+    svc = AccountService()
+    resolved = svc.handle_confirmation_reply(db, "tal_grp3@g.us", "972513", "no")
+    assert resolved is True
+    db.refresh(conf)
+    assert conf.status == "rejected"
+
+
+def test_handle_confirmation_reply_returns_false_when_no_pending(db):
+    svc = AccountService()
+    result = svc.handle_confirmation_reply(db, "grp@g.us", "972500", "yes")
+    assert result is False
