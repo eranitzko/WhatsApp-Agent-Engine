@@ -25,10 +25,9 @@ async function route() {
   const hash = location.hash.replace('#', '') || 'groups';
   if (!getToken()) { renderLogin(app); return; }
   if (hash === 'groups') await renderGroups(app);
-  else if (hash === 'admins') await renderAdmins(app);
+  else if (hash === 'people') await renderPeople(app);
   else if (hash === 'blueprints') await renderBlueprints(app);
   else if (hash === 'tools') await renderTools(app);
-  else if (hash === 'users') await renderUsers(app);
   else if (hash === 'settings') await renderSettings(app);
   else await renderGroups(app);
 }
@@ -41,10 +40,9 @@ window.addEventListener('DOMContentLoaded', route);
 function layout(page, content) {
   const nav = [
     { hash: 'groups',     icon: '🏠', label: 'Groups' },
-    { hash: 'admins',     icon: '👥', label: 'Admins' },
+    { hash: 'people',     icon: '👥', label: 'People' },
     { hash: 'blueprints', icon: '📋', label: 'Blueprints' },
     { hash: 'tools',      icon: '🔧', label: 'Tools' },
-    { hash: 'users',      icon: '👤', label: 'Users' },
     { hash: 'settings',   icon: '⚙️', label: 'Settings' },
   ];
   return `
@@ -196,73 +194,93 @@ async function submitRegisterGroup() {
   renderGroups(document.getElementById('app'));
 }
 
-// ── Admins ────────────────────────────────────────────────────────────────────
+// ── People ───────────────────────────────────────────────────────────────────
 
-async function renderAdmins(app) {
-  app.innerHTML = layout('admins', '<p style="color:var(--muted)">Loading...</p>');
-  const res = await apiFetch('/admins');
+async function renderPeople(app) {
+  app.innerHTML = layout('people', '<p style="color:var(--muted)">Loading...</p>');
+  const res = await apiFetch('/people');
   if (!res) return;
-  const admins = await res.json();
+  const people = await res.json();
 
-  const rows = admins.length
-    ? admins.map(a => `
-        <tr id="admin-row-${escAttr(a.phone_number)}">
-          <td>${escHtml(a.phone_number)}</td>
+  const rows = people.length
+    ? people.map(p => `
+        <tr>
+          <td>${escHtml(p.phone)}</td>
           <td>
-            <span id="admin-label-${escAttr(a.phone_number)}" style="cursor:pointer;color:var(--accent)" onclick="editAdminLabel('${escAttr(a.phone_number)}','${escAttr(a.label||'')}')">
-              ${escHtml(a.label || '+ add name')}
-            </span>
+            <input id="pname-${escAttr(p.phone)}" value="${escAttr(p.display_name || '')}"
+              placeholder="— add name —"
+              onblur="savePersonName('${escAttr(p.phone)}')"
+              style="width:120px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:13px">
           </td>
-          <td><button class="btn btn-danger" onclick="deleteAdmin('${escAttr(a.phone_number)}')">Remove</button></td>
+          <td style="font-size:0.8em;color:var(--muted)">${escHtml(p.group_jid || '—')}</td>
+          <td>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+              <input type="checkbox" ${p.is_admin ? 'checked' : ''}
+                onchange="togglePersonAdmin('${escAttr(p.phone)}', this.checked)">
+              Admin
+            </label>
+          </td>
+          <td>
+            <button class="btn btn-danger" onclick="deletePerson('${escAttr(p.phone)}')">Remove</button>
+          </td>
         </tr>`).join('')
-    : '<tr><td colspan="3" class="empty">No admins configured.</td></tr>';
+    : '<tr><td colspan="5" class="empty">No people registered yet.</td></tr>';
 
-  app.innerHTML = layout('admins', `
-    <div class="page-header"><h2>Admins</h2></div>
+  app.innerHTML = layout('people', `
+    <div class="page-header"><h2>People</h2></div>
     <div class="table-wrap"><table class="table">
-      <thead><tr><th>Phone Number</th><th>Name</th><th></th></tr></thead>
+      <thead><tr><th>Phone</th><th>Display Name</th><th>Group JID</th><th>Admin</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
-    <div class="add-row">
-      <input id="new-phone" type="text" placeholder="Phone e.g. 972501234567" onkeydown="if(event.key==='Enter')document.getElementById('new-name').focus()">
-      <input id="new-name" type="text" placeholder="Name (optional)" onkeydown="if(event.key==='Enter')addAdmin()">
-      <button class="btn btn-primary" onclick="addAdmin()">+ Add Admin</button>
-    </div>`);
+    <details style="margin-top:20px">
+      <summary style="cursor:pointer;font-size:13px;color:var(--accent)">+ Add person</summary>
+      <div style="padding:16px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
+        <input id="new-person-phone" type="text" placeholder="Phone e.g. 972501234567" style="width:180px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+        <input id="new-person-name" type="text" placeholder="Display name (optional)" style="width:160px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+        <input id="new-person-jid" type="text" placeholder="Group JID (optional)" style="width:200px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+          <input type="checkbox" id="new-person-admin"> Admin
+        </label>
+        <button class="btn btn-primary" onclick="addPerson()">Add</button>
+      </div>
+    </details>`);
 }
 
-function editAdminLabel(phone, currentLabel) {
-  const span = document.getElementById('admin-label-' + phone);
-  if (!span) return;
-  span.innerHTML = `
-    <input id="edit-label-${escAttr(phone)}" type="text" value="${escAttr(currentLabel)}"
-      style="width:140px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:13px"
-      onkeydown="if(event.key==='Enter')saveAdminLabel('${escAttr(phone)}');if(event.key==='Escape')renderAdmins(document.getElementById('app'))">
-    <button class="btn btn-primary" style="padding:4px 10px;font-size:12px;margin-left:4px" onclick="saveAdminLabel('${escAttr(phone)}')">Save</button>`;
-  document.getElementById('edit-label-' + phone).focus();
-}
-
-async function saveAdminLabel(phone) {
-  const input = document.getElementById('edit-label-' + phone);
+async function savePersonName(phone) {
+  const input = document.getElementById('pname-' + phone);
   if (!input) return;
-  await apiFetch('/admins/' + encodeURIComponent(phone), {
-    method: 'PATCH',
-    body: JSON.stringify({ label: input.value.trim() || null }),
+  await apiFetch('/people/' + encodeURIComponent(phone), {
+    method: 'PUT',
+    body: JSON.stringify({ display_name: input.value.trim() }),
   });
-  renderAdmins(document.getElementById('app'));
 }
 
-async function addAdmin() {
-  const phone = document.getElementById('new-phone').value.trim();
-  const name  = document.getElementById('new-name').value.trim();
+async function togglePersonAdmin(phone, isAdmin) {
+  await apiFetch('/people/' + encodeURIComponent(phone) + '/admin', {
+    method: 'PUT',
+    body: JSON.stringify({ is_admin: isAdmin }),
+  });
+}
+
+async function addPerson() {
+  const phone = document.getElementById('new-person-phone').value.trim();
   if (!phone) return;
-  await apiFetch('/admins', { method: 'POST', body: JSON.stringify({ phone_number: phone, label: name || null }) });
-  renderAdmins(document.getElementById('app'));
+  await apiFetch('/people', {
+    method: 'POST',
+    body: JSON.stringify({
+      phone,
+      display_name: document.getElementById('new-person-name').value.trim() || null,
+      group_jid: document.getElementById('new-person-jid').value.trim() || null,
+      is_admin: document.getElementById('new-person-admin').checked,
+    }),
+  });
+  renderPeople(document.getElementById('app'));
 }
 
-async function deleteAdmin(phone) {
-  if (!confirm(`Remove admin ${phone}?`)) return;
-  await apiFetch('/admins/' + encodeURIComponent(phone), { method: 'DELETE' });
-  renderAdmins(document.getElementById('app'));
+async function deletePerson(phone) {
+  if (!confirm(`Remove ${phone}? This removes their user account (admin status unchanged).`)) return;
+  await apiFetch('/people/' + encodeURIComponent(phone), { method: 'DELETE' });
+  renderPeople(document.getElementById('app'));
 }
 
 // ── Blueprints (enhanced with tool editor) ────────────────────────────────────
@@ -510,46 +528,6 @@ async function removeToolFromAllBlueprints(toolName) {
   } else {
     alert('Failed to remove tool.');
   }
-}
-
-// ── Users page ──────────────────────────────────────────────────────────────
-async function renderUsers(app) {
-  const res = await apiFetch('/users');
-  if (!res) return;
-  const users = await res.json();
-  app.innerHTML = layout('users', `
-    <h2>Users</h2>
-    <table class="data-table">
-      <thead><tr><th>Phone</th><th>Display Name</th><th>Group JID</th><th>Registered</th><th></th></tr></thead>
-      <tbody>
-        ${users.map(u => `
-          <tr>
-            <td>${u.phone}</td>
-            <td>
-              <input id="name-${u.phone}" value="${u.display_name || ''}"
-                     onblur="saveDisplayName('${u.phone}')" style="width:140px">
-            </td>
-            <td style="font-size:0.8em">${u.group_jid}</td>
-            <td>${u.created_at ? u.created_at.slice(0,10) : ''}</td>
-            <td><button onclick="deleteUser('${u.phone}')">Remove</button></td>
-          </tr>`).join('')}
-      </tbody>
-    </table>`);
-}
-
-async function saveDisplayName(phone) {
-  const name = document.getElementById(`name-${phone}`).value;
-  await apiFetch(`/users/${phone}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ display_name: name }),
-  });
-}
-
-async function deleteUser(phone) {
-  if (!confirm(`Remove user ${phone}? This will unregister their account.`)) return;
-  await apiFetch(`/users/${phone}`, { method: 'DELETE' });
-  location.reload();
 }
 
 // ── Settings page ────────────────────────────────────────────────────────────

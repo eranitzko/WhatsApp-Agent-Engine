@@ -320,43 +320,114 @@ def remove_tool_from_blueprints(tool_name: str):
     return {"ok": True, "blueprints_updated": updated}
 
 
-# -- Users -------------------------------------------------------------------
+# -- People ------------------------------------------------------------------
 
-@router.get("/users")
-def list_users(_=Depends(require_auth)):
+@router.get("/people")
+def list_people(_=Depends(require_auth)):
+    """Unified list: everyone from admin_numbers + user_accounts."""
     with SessionLocal() as db:
-        accounts = db.query(UserAccount).filter_by(role="owner").all()
+        # Collect all unique phones
+        admin_rows = {r.phone_number: r for r in db.query(AdminNumbers).all()}
+        account_rows = db.query(UserAccount).all()
+        account_by_phone: dict[str, list] = {}
+        for acct in account_rows:
+            account_by_phone.setdefault(acct.phone, []).append(acct)
+
+        all_phones = set(admin_rows) | set(account_by_phone)
         result = []
-        for acct in accounts:
-            profile = db.query(UserProfile).filter_by(phone=acct.phone).first()
+        for phone in sorted(all_phones):
+            profile = db.query(UserProfile).filter_by(phone=phone).first()
+            admin = admin_rows.get(phone)
+            # Prefer owner account, fall back to first account
+            accounts = account_by_phone.get(phone, [])
+            owner_acct = next((a for a in accounts if a.role == "owner"), accounts[0] if accounts else None)
+            grp = db.query(GroupRegistry).filter_by(group_jid=owner_acct.group_jid).first() if owner_acct else None
             result.append({
-                "phone": acct.phone,
+                "phone": phone,
                 "display_name": profile.display_name if profile else None,
-                "group_jid": acct.group_jid,
-                "created_at": acct.created_at.isoformat() if acct.created_at else None,
+                "is_admin": admin is not None,
+                "admin_label": admin.label if admin else None,
+                "group_jid": owner_acct.group_jid if owner_acct else None,
+                "role": owner_acct.role if owner_acct else None,
+                "group_type": grp.group_type if grp else None,
+                "created_at": owner_acct.created_at.isoformat() if owner_acct and owner_acct.created_at else None,
             })
         return result
 
 
-class UpdateUserRequest(BaseModel):
+class AddPersonRequest(BaseModel):
+    phone: str
+    display_name: str | None = None
+    group_jid: str | None = None
+    role: str = "owner"
+    is_admin: bool = False
+    admin_label: str | None = None
+
+
+@router.post("/people")
+def add_person(body: AddPersonRequest, _=Depends(require_auth)):
+    with SessionLocal() as db:
+        # Display name
+        if body.display_name:
+            profile = db.query(UserProfile).filter_by(phone=body.phone).first()
+            if profile is None:
+                db.add(UserProfile(phone=body.phone, display_name=body.display_name))
+            else:
+                profile.display_name = body.display_name
+
+        # User account
+        if body.group_jid:
+            existing = db.query(UserAccount).filter_by(phone=body.phone, group_jid=body.group_jid).first()
+            if not existing:
+                db.add(UserAccount(phone=body.phone, group_jid=body.group_jid, role=body.role))
+
+        # Admin
+        if body.is_admin:
+            if not db.query(AdminNumbers).filter_by(phone_number=body.phone).first():
+                db.add(AdminNumbers(phone_number=body.phone, label=body.admin_label))
+
+        db.commit()
+        return {"ok": True}
+
+
+class UpdatePersonRequest(BaseModel):
     display_name: str
 
 
-@router.put("/users/{phone}")
-def update_user(phone: str, body: UpdateUserRequest, _=Depends(require_auth)):
+@router.put("/people/{phone}")
+def update_person(phone: str, body: UpdatePersonRequest, _=Depends(require_auth)):
     with SessionLocal() as db:
         profile = db.query(UserProfile).filter_by(phone=phone).first()
         if profile is None:
-            profile = UserProfile(phone=phone, display_name=body.display_name)
-            db.add(profile)
+            db.add(UserProfile(phone=phone, display_name=body.display_name))
         else:
             profile.display_name = body.display_name
         db.commit()
         return {"phone": phone, "display_name": body.display_name}
 
 
-@router.delete("/users/{phone}")
-def delete_user(phone: str, _=Depends(require_auth)):
+class ToggleAdminRequest(BaseModel):
+    is_admin: bool
+    label: str | None = None
+
+
+@router.put("/people/{phone}/admin")
+def toggle_admin(phone: str, body: ToggleAdminRequest, _=Depends(require_auth)):
+    with SessionLocal() as db:
+        existing = db.query(AdminNumbers).filter_by(phone_number=phone).first()
+        if body.is_admin:
+            if not existing:
+                db.add(AdminNumbers(phone_number=phone, label=body.label))
+        else:
+            if existing:
+                db.delete(existing)
+        db.commit()
+        return {"phone": phone, "is_admin": body.is_admin}
+
+
+@router.delete("/people/{phone}")
+def delete_person(phone: str, _=Depends(require_auth)):
+    """Remove user account (does not remove admin status)."""
     with SessionLocal() as db:
         db.query(UserAccount).filter_by(phone=phone).delete()
         db.commit()
