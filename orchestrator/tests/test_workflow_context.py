@@ -235,7 +235,8 @@ async def test_send_email_sends_with_resolved_templates():
     mock_mail = MagicMock()
 
     with patch("app.tools.send_email_tool.send_report_email", mock_mail), \
-         patch("app.tools.send_email_tool.asyncio.to_thread", new=AsyncMock(side_effect=lambda fn, **kw: fn(**kw))):
+         patch("app.tools.send_email_tool.asyncio.to_thread", new=AsyncMock(side_effect=lambda fn, **kw: fn(**kw))), \
+         patch("app.tools.send_email_tool._is_allowed", return_value=True):
         result = await _exec_send_email(
             {"to": "test@example.com", "subject": "Hello", "body": "World"},
             group_jid="123@g.us", is_admin=True,
@@ -263,9 +264,7 @@ async def test_send_email_rejected_if_not_admin():
 @pytest.mark.asyncio
 async def test_send_email_rejected_if_not_in_allowlist():
     from app.tools.send_email_tool import _exec_send_email
-    from app.config import settings
-    with patch.object(settings, "report_email_allowlist", "allowed@example.com"), \
-         patch.object(settings, "gmail_user", "bot@gmail.com"):
+    with patch("app.tools.send_email_tool._is_allowed", return_value=False):
         result = await _exec_send_email(
             {"to": "notallowed@example.com", "subject": "s", "body": "b"},
             group_jid="123@g.us", is_admin=True,
@@ -285,7 +284,8 @@ async def test_send_email_resolves_templates_from_context():
 
     with patch("app.tools.send_email_tool.send_report_email", mock_mail), \
          patch("app.tools.send_email_tool.asyncio.to_thread", new=AsyncMock(side_effect=lambda fn, **kw: fn(**kw))), \
-         patch("app.tools.send_email_tool.WorkflowContext", return_value=mock_ctx):
+         patch("app.tools.send_email_tool.WorkflowContext", return_value=mock_ctx), \
+         patch("app.tools.send_email_tool._is_allowed", return_value=True):
         result = await _exec_send_email(
             {"to": "x@example.com", "subject": "{{previous_month}} report", "body": "Month: {{previous_month}}"},
             group_jid="123@g.us", is_admin=True,

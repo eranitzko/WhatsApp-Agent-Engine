@@ -24,3 +24,35 @@ def test_email_allowlist_model_created(db):
     row = db.query(EmailAllowlist).filter_by(email="test@example.com").first()
     assert row is not None
     assert row.display_name == "Test User"
+
+
+# ── _is_allowed ──────────────────────────────────────────────────────────────
+
+def test_is_allowed_empty_table_permits_any(db):
+    """Empty allowlist → any address is allowed."""
+    from app.tools.send_email_tool import _is_allowed
+    assert _is_allowed("anyone@anywhere.com", db=db) is True
+
+
+def test_is_allowed_blocks_unlisted(db):
+    from app.db.models import EmailAllowlist
+    db.add(EmailAllowlist(email="boss@company.com", display_name="Boss"))
+    db.commit()
+    from app.tools.send_email_tool import _is_allowed
+    assert _is_allowed("stranger@evil.com", db=db) is False
+
+
+def test_is_allowed_permits_listed(db):
+    from app.db.models import EmailAllowlist
+    db.add(EmailAllowlist(email="boss@company.com", display_name="Boss"))
+    db.commit()
+    from app.tools.send_email_tool import _is_allowed
+    assert _is_allowed("boss@company.com", db=db) is True
+
+
+def test_is_allowed_case_insensitive(db):
+    from app.db.models import EmailAllowlist
+    db.add(EmailAllowlist(email="boss@company.com"))
+    db.commit()
+    from app.tools.send_email_tool import _is_allowed
+    assert _is_allowed("BOSS@COMPANY.COM", db=db) is True

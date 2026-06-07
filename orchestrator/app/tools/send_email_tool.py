@@ -24,13 +24,31 @@ from app.automation.context import WorkflowContext
 logger = logging.getLogger(__name__)
 
 
-def _is_allowed(to: str) -> bool:
-    from app.config import settings
-    raw = settings.report_email_allowlist.strip()
-    if not raw:
-        return True
-    allowed = {a.strip().lower() for a in raw.split(",") if a.strip()}
-    return to.strip().lower() in allowed
+def _is_allowed(to: str, db=None) -> bool:
+    """Return True if `to` is permitted to receive emails.
+
+    Reads from the email_allowlist DB table.
+    If the table is empty, any address is allowed (open by default).
+    The `db` parameter is injected in tests; production uses a fresh session.
+    """
+    from app.db.models import EmailAllowlist
+
+    def _check(session):
+        count = session.query(EmailAllowlist).count()
+        if count == 0:
+            return True
+        return (
+            session.query(EmailAllowlist)
+            .filter(EmailAllowlist.email == to.strip().lower())
+            .first()
+        ) is not None
+
+    if db is not None:
+        return _check(db)
+
+    from app.db.session import SessionLocal
+    with SessionLocal() as session:
+        return _check(session)
 
 
 async def _exec_send_email(params: dict, **ctx) -> str:
