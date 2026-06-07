@@ -222,6 +222,9 @@ async def _process(payload: WebhookPayload) -> None:
                                     for p in meta.get("participants", [])
                                     if p["jid"].split("@")[0].split(":")[0] != bot_phone
                                 ]
+                                # Persist all group members so the admin panel can show them
+                                for hp in human_phones:
+                                    _upsert_participant(db, payload.jid, hp, status="active")
                                 await group_registration_handler.on_bot_added_to_group(
                                     db, payload.jid, human_phones
                                 )

@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from app.admin.auth import require_auth
 from app.config import settings
-from app.db.models import AdminNumbers, Blueprint, GroupRegistry, SystemConfig, UserAccount, UserProfile
+from app.db.models import AdminNumbers, Blueprint, GroupParticipant, GroupRegistry, SystemConfig, UserAccount, UserProfile
 from app.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -432,6 +432,103 @@ def delete_person(phone: str, _=Depends(require_auth)):
         db.query(UserAccount).filter_by(phone=phone).delete()
         db.commit()
         return {"deleted": phone}
+
+
+# -- Pending registrations ---------------------------------------------------
+
+@router.get("/people/pending")
+def list_pending(_=Depends(require_auth)):
+    """Groups registered as 'unregistered' — awaiting approval."""
+    with SessionLocal() as db:
+        pending_groups = db.query(GroupRegistry).filter_by(group_type="unregistered").all()
+        result = []
+        for grp in pending_groups:
+            participants = db.query(GroupParticipant).filter_by(
+                group_jid=grp.group_jid, status="active"
+            ).all()
+            result.append({
+                "group_jid": grp.group_jid,
+                "human_phones": [p.phone for p in participants],
+                "candidate_type": "personal" if len(participants) == 1 else "shared",
+            })
+        return result
+
+
+class ApproveRegistrationRequest(BaseModel):
+    group_type: str = "personal"  # personal | shared
+
+
+@router.post("/people/pending/{group_jid}/approve")
+async def approve_registration(group_jid: str, body: ApproveRegistrationRequest, _=Depends(require_auth)):
+    from app import bridge_client as _bc
+    with SessionLocal() as db:
+        grp = db.query(GroupRegistry).filter_by(group_jid=group_jid).first()
+        if not grp:
+            raise HTTPException(status_code=404, detail="Group not found")
+        grp.group_type = body.group_type
+        participants = db.query(GroupParticipant).filter_by(
+            group_jid=group_jid, status="active"
+        ).all()
+        phones = [p.phone for p in participants]
+        role = "owner" if len(phones) == 1 else "member"
+        for phone in phones:
+            existing = db.query(UserAccount).filter_by(phone=phone, group_jid=group_jid).first()
+            if not existing:
+                db.add(UserAccount(phone=phone, group_jid=group_jid, role=role))
+        db.commit()
+    try:
+        await _bc.send_message(group_jid, "Your account is ready. You can start recording transactions here.")
+    except Exception:
+        pass
+    return {"ok": True, "group_jid": group_jid, "group_type": body.group_type}
+
+
+@router.post("/people/pending/{group_jid}/reject")
+async def reject_registration(group_jid: str, _=Depends(require_auth)):
+    from app import bridge_client as _bc
+    with SessionLocal() as db:
+        db.query(GroupRegistry).filter_by(group_jid=group_jid).delete()
+        db.commit()
+    try:
+        await _bc.send_message(group_jid, "This group was not approved.")
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+# -- Expanded person update --------------------------------------------------
+
+class UpdatePersonFullRequest(BaseModel):
+    display_name: str | None = None
+    email: str | None = None
+    is_admin: bool | None = None
+    admin_label: str | None = None
+
+
+@router.patch("/people/{phone}")
+def patch_person(phone: str, body: UpdatePersonFullRequest, _=Depends(require_auth)):
+    with SessionLocal() as db:
+        if body.display_name is not None or body.email is not None:
+            profile = db.query(UserProfile).filter_by(phone=phone).first()
+            if profile is None:
+                profile = UserProfile(phone=phone)
+                db.add(profile)
+            if body.display_name is not None:
+                profile.display_name = body.display_name
+            if body.email is not None:
+                profile.email = body.email
+
+        if body.is_admin is not None:
+            existing_admin = db.query(AdminNumbers).filter_by(phone_number=phone).first()
+            if body.is_admin and not existing_admin:
+                db.add(AdminNumbers(phone_number=phone, label=body.admin_label))
+            elif not body.is_admin and existing_admin:
+                db.delete(existing_admin)
+            elif body.is_admin and existing_admin and body.admin_label is not None:
+                existing_admin.label = body.admin_label
+
+        db.commit()
+        return {"ok": True}
 
 
 # -- Settings ----------------------------------------------------------------

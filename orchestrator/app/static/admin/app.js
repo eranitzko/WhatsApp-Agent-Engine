@@ -198,39 +198,60 @@ async function submitRegisterGroup() {
 
 async function renderPeople(app) {
   app.innerHTML = layout('people', '<p style="color:var(--muted)">Loading...</p>');
-  const res = await apiFetch('/people');
-  if (!res) return;
-  const people = await res.json();
+  const [peopleRes, pendingRes] = await Promise.all([
+    apiFetch('/people'),
+    apiFetch('/people/pending'),
+  ]);
+  if (!peopleRes) return;
+  const people = await peopleRes.json();
+  const pending = pendingRes ? await pendingRes.json() : [];
 
-  const rows = people.length
+  const peopleRows = people.length
     ? people.map(p => `
         <tr>
           <td>${escHtml(p.phone)}</td>
-          <td>
-            <input id="pname-${escAttr(p.phone)}" value="${escAttr(p.display_name || '')}"
-              placeholder="— add name —"
-              onblur="savePersonName('${escAttr(p.phone)}')"
-              style="width:120px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:13px">
-          </td>
+          <td>${escHtml(p.display_name || '—')}</td>
           <td style="font-size:0.8em;color:var(--muted)">${escHtml(p.group_jid || '—')}</td>
+          <td>${p.is_admin ? '<span class="badge" style="background:#eff6ff;color:var(--accent)">Admin</span>' : ''}</td>
           <td>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-              <input type="checkbox" ${p.is_admin ? 'checked' : ''}
-                onchange="togglePersonAdmin('${escAttr(p.phone)}', this.checked)">
-              Admin
-            </label>
-          </td>
-          <td>
-            <button class="btn btn-danger" onclick="deletePerson('${escAttr(p.phone)}')">Remove</button>
+            <button class="btn" style="padding:4px 10px;font-size:12px;border:1px solid var(--border)"
+              onclick="openPersonEdit(${JSON.stringify(JSON.stringify(p))})">Edit</button>
+            <button class="btn btn-danger" style="margin-left:4px" onclick="deletePerson('${escAttr(p.phone)}')">Remove</button>
           </td>
         </tr>`).join('')
     : '<tr><td colspan="5" class="empty">No people registered yet.</td></tr>';
 
+  const pendingSection = pending.length ? `
+    <h3 style="margin:28px 0 12px;font-size:15px">⏳ Pending Registrations</h3>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>Group JID</th><th>Members</th><th>Type</th><th></th></tr></thead>
+      <tbody>
+        ${pending.map(g => `
+          <tr>
+            <td style="font-size:0.8em">${escHtml(g.group_jid)}</td>
+            <td style="font-size:0.85em">${escHtml(g.human_phones.join(', ') || '—')}</td>
+            <td>
+              <select id="type-${escAttr(g.group_jid)}" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:12px">
+                <option value="personal" ${g.candidate_type === 'personal' ? 'selected' : ''}>Personal</option>
+                <option value="shared" ${g.candidate_type === 'shared' ? 'selected' : ''}>Shared</option>
+                <option value="sys_admin">Sys Admin</option>
+              </select>
+            </td>
+            <td>
+              <button class="btn btn-primary" style="padding:4px 10px;font-size:12px" onclick="approveRegistration('${escAttr(g.group_jid)}')">Approve</button>
+              <button class="btn btn-danger" style="margin-left:4px" onclick="rejectRegistration('${escAttr(g.group_jid)}')">Reject</button>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table></div>` : '';
+
   app.innerHTML = layout('people', `
     <div class="page-header"><h2>People</h2></div>
+    ${pendingSection}
+    <h3 style="margin:${pending.length ? '28px' : '0'} 0 12px;font-size:15px">Registered</h3>
     <div class="table-wrap"><table class="table">
-      <thead><tr><th>Phone</th><th>Display Name</th><th>Group JID</th><th>Admin</th><th></th></tr></thead>
-      <tbody>${rows}</tbody>
+      <thead><tr><th>Phone</th><th>Display Name</th><th>Group JID</th><th></th><th></th></tr></thead>
+      <tbody>${peopleRows}</tbody>
     </table></div>
     <details style="margin-top:20px">
       <summary style="cursor:pointer;font-size:13px;color:var(--accent)">+ Add person</summary>
@@ -243,7 +264,75 @@ async function renderPeople(app) {
         </label>
         <button class="btn btn-primary" onclick="addPerson()">Add</button>
       </div>
-    </details>`);
+    </details>
+    <div id="person-modal-wrap"></div>`);
+}
+
+function openPersonEdit(personJson) {
+  const p = JSON.parse(personJson);
+  document.getElementById('person-modal-wrap').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)closePersonModal()">
+      <div class="modal">
+        <h3>Edit Person</h3>
+        <p class="subtitle">${escHtml(p.phone)}</p>
+        <div class="form-group">
+          <label>Display Name</label>
+          <input id="edit-display-name" type="text" value="${escAttr(p.display_name || '')}">
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input id="edit-email" type="email" value="${escAttr(p.email || '')}">
+        </div>
+        <div class="form-group">
+          <label>Admin</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="edit-is-admin" ${p.is_admin ? 'checked' : ''}>
+            <span>System admin</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label>Admin Label</label>
+          <input id="edit-admin-label" type="text" value="${escAttr(p.admin_label || '')}" placeholder="e.g. owner, family">
+        </div>
+        <div class="modal-footer">
+          <button class="btn" onclick="closePersonModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="savePersonEdit('${escAttr(p.phone)}')">Save</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function closePersonModal() {
+  const wrap = document.getElementById('person-modal-wrap');
+  if (wrap) wrap.innerHTML = '';
+}
+
+async function savePersonEdit(phone) {
+  const display_name = document.getElementById('edit-display-name').value.trim();
+  const email = document.getElementById('edit-email').value.trim();
+  const is_admin = document.getElementById('edit-is-admin').checked;
+  const admin_label = document.getElementById('edit-admin-label').value.trim();
+  await apiFetch('/people/' + encodeURIComponent(phone), {
+    method: 'PATCH',
+    body: JSON.stringify({ display_name: display_name || null, email: email || null, is_admin, admin_label: admin_label || null }),
+  });
+  closePersonModal();
+  renderPeople(document.getElementById('app'));
+}
+
+async function approveRegistration(groupJid) {
+  const type = document.getElementById('type-' + groupJid)?.value || 'personal';
+  await apiFetch('/people/pending/' + encodeURIComponent(groupJid) + '/approve', {
+    method: 'POST',
+    body: JSON.stringify({ group_type: type }),
+  });
+  renderPeople(document.getElementById('app'));
+}
+
+async function rejectRegistration(groupJid) {
+  if (!confirm('Reject and remove this group?')) return;
+  await apiFetch('/people/pending/' + encodeURIComponent(groupJid) + '/reject', { method: 'POST' });
+  renderPeople(document.getElementById('app'));
 }
 
 async function savePersonName(phone) {
