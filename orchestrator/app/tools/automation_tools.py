@@ -180,12 +180,12 @@ _SCHEMAS: dict[str, dict] = {
         "name": "create_automation",
         "category": "automation",
         "description": (
-            "Create a new automation rule for this group. The rule is saved as pending_confirm "
-            "and must be activated with confirm_automation after user confirms. "
-            "For one_off: schedule_cron is an ISO 8601 datetime string (e.g. '2026-06-15T09:00:00+00:00'). "
+            "Use when a user asks to set up a scheduled, recurring, inactivity, or threshold-triggered action. "
+            "The rule is saved as pending and must be activated with confirm_automation after user confirms. "
+            "For one_off: schedule_cron is an ISO 8601 datetime (e.g. '2026-06-15T09:00:00+00:00'). "
             "For recurring: schedule_cron is a cron expression (e.g. '0 9 * * 5' = every Friday 9am). "
-            "For inactivity: supply inactivity_hours. "
-            "For threshold: supply threshold_config."
+            "For inactivity: supply inactivity_hours. For threshold: supply threshold_config. "
+            "Returns: rule ID and a human-readable summary for the user to confirm."
         ),
         "input_schema": {
             "type": "object",
@@ -247,7 +247,10 @@ _SCHEMAS: dict[str, dict] = {
     "confirm_automation": {
         "name": "confirm_automation",
         "category": "automation",
-        "description": "Activate a pending automation rule after the user confirms.",
+        "description": (
+            "Use when a user says yes to confirm a pending automation rule created with create_automation. "
+            "Returns: confirmation that the rule is now active."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -259,7 +262,10 @@ _SCHEMAS: dict[str, dict] = {
     "list_automations": {
         "name": "list_automations",
         "category": "automation",
-        "description": "List all active and paused automation rules for this group.",
+        "description": (
+            "Use when a user asks to see, list, or review their automations. "
+            "Returns: all active and paused rules with their type, schedule, and action summary."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -269,7 +275,10 @@ _SCHEMAS: dict[str, dict] = {
     "pause_automation": {
         "name": "pause_automation",
         "category": "automation",
-        "description": "Pause an active automation rule. It will not fire while paused.",
+        "description": (
+            "Use when a user wants to temporarily stop an automation rule from firing. "
+            "Returns: confirmation that the rule is paused."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -281,7 +290,10 @@ _SCHEMAS: dict[str, dict] = {
     "cancel_automation": {
         "name": "cancel_automation",
         "category": "automation",
-        "description": "Permanently delete an automation rule.",
+        "description": (
+            "Use when a user wants to permanently delete an automation rule. "
+            "Returns: confirmation that the rule was deleted."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {

@@ -82,8 +82,13 @@ _SCHEMAS: dict[str, dict] = {
         "name": "record_transaction",
         "category": "accounting",
         "description": (
-            "Record that someone paid for others. Claude extracts payer, participants, "
-            "amount, currency, description, and date from natural language."
+            "Use when a user reports that one person paid for others, or acknowledges a debt. "
+            "Examples: 'Eran paid for me ₪150', 'I owe Tal ₪200', 'I paid for Eden'. "
+            "The tool automatically handles routing: if the sender is reporting their own debt (1st-party), "
+            "the entry is recorded immediately and the creditor is notified. "
+            "If the sender is claiming credit at someone else's expense (2nd-party), "
+            "a confirmation request is sent to the other party before anything is recorded. "
+            "Returns: 'Recorded. [Name] has been notified.' or 'Confirmation request sent to [Name].'"
         ),
         "input_schema": {
             "type": "object",
@@ -108,7 +113,11 @@ _SCHEMAS: dict[str, dict] = {
     "record_payment": {
         "name": "record_payment",
         "category": "accounting",
-        "description": "Record a debt repayment. Applies FIFO settlement to open debt legs.",
+        "description": (
+            "Use when a user reports repaying a debt (e.g. 'I paid Tal back ₪200', 'Eden sent me money'). "
+            "Applies FIFO settlement to open debt legs between the two parties. "
+            "Returns: payment recorded with amount and which debt legs were settled."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -127,9 +136,9 @@ _SCHEMAS: dict[str, dict] = {
         "name": "get_balance",
         "category": "accounting",
         "description": (
-            "Get net balance. Non-admins automatically see only their own balances. "
-            "With phone_a only: all open balances for that person. "
-            "With phone_a and phone_b: net balance between them."
+            "Use when a user asks what they owe, what they are owed, or the balance between two people. "
+            "Non-admins automatically see only their own balances. "
+            "Returns: net balance per counterparty, or the net amount between two specific people."
         ),
         "input_schema": {
             "type": "object",
@@ -144,8 +153,9 @@ _SCHEMAS: dict[str, dict] = {
         "name": "get_history",
         "category": "accounting",
         "description": (
-            "Get itemized transaction history. Non-admins automatically see only their own transactions. "
-            "Optionally filtered by person and/or date range."
+            "Use when a user wants an itemized list of transactions — past expenses, payments, dates. "
+            "Non-admins see only their own transactions. Optionally filtered by person or date range. "
+            "Returns: dated list of transactions with amounts, parties, and remaining balance per entry."
         ),
         "input_schema": {
             "type": "object",
@@ -161,8 +171,9 @@ _SCHEMAS: dict[str, dict] = {
         "name": "set_reminder",
         "category": "accounting",
         "description": (
-            "Schedule a reminder WhatsApp message for the sender at a future time. "
-            "Only the sender can set their own reminders."
+            "Use when a user wants a WhatsApp reminder sent to themselves at a future time. "
+            "Self-only — cannot set reminders for other people. "
+            "Returns: confirmation with the scheduled datetime."
         ),
         "input_schema": {
             "type": "object",
@@ -176,7 +187,10 @@ _SCHEMAS: dict[str, dict] = {
     "save_email": {
         "name": "save_email",
         "category": "accounting",
-        "description": "Save the sender's email address so it can be used for ledger exports.",
+        "description": (
+            "Use when a user wants to save their email address for report delivery. "
+            "Returns: confirmation that the email was saved."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -189,8 +203,9 @@ _SCHEMAS: dict[str, dict] = {
         "name": "rename_participant",
         "category": "accounting",
         "description": (
-            "Set or clear the display name for a group participant. "
-            "Pass empty string to revert to their WhatsApp push name. Admin only."
+            "Use when an admin wants to set or clear the display name for a group participant. Admin only. "
+            "Pass empty string to revert to their WhatsApp push name. "
+            "Returns: confirmation of the new display name."
         ),
         "input_schema": {
             "type": "object",
@@ -205,8 +220,8 @@ _SCHEMAS: dict[str, dict] = {
         "name": "set_household",
         "category": "accounting",
         "description": (
-            "Mark or unmark a participant as part of the shared household (shown as 'Parents'). "
-            "Admin only."
+            "Use when an admin wants to mark or unmark a participant as part of the shared household account (shown as 'Parents'). Admin only. "
+            "Returns: confirmation of the updated household status."
         ),
         "input_schema": {
             "type": "object",
@@ -221,9 +236,8 @@ _SCHEMAS: dict[str, dict] = {
         "name": "correct_transaction",
         "category": "accounting",
         "description": (
-            "Propose a correction to an existing transaction (date, amount, or participants). "
-            "Admin only. Returns a diff for confirmation. Corrections with any settled amount "
-            "on the affected legs must be cleared first. Corrections are applied FIFO."
+            "Use when an admin wants to propose a correction to an existing transaction (date, amount, or participants). Admin only. "
+            "Returns a diff for review — the correction is only applied after the admin confirms with apply_correction."
         ),
         "input_schema": {
             "type": "object",
@@ -246,7 +260,10 @@ _SCHEMAS: dict[str, dict] = {
     "create_report_format": {
         "name": "create_report_format",
         "category": "accounting",
-        "description": "Create or update a named report format for XLSX ledger exports. Admin only.",
+        "description": (
+            "Use when an admin wants to save a named report layout for XLSX exports. Admin only. "
+            "Returns: confirmation that the format was saved."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -268,13 +285,19 @@ _SCHEMAS: dict[str, dict] = {
     "list_report_formats": {
         "name": "list_report_formats",
         "category": "accounting",
-        "description": "List all saved report formats for this group. Admin only.",
+        "description": (
+            "Use when an admin asks to see saved report formats. Admin only. "
+            "Returns: list of named formats with their settings."
+        ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     "delete_report_format": {
         "name": "delete_report_format",
         "category": "accounting",
-        "description": "Delete a named report format. Admin only.",
+        "description": (
+            "Use when an admin wants to delete a named report format. Admin only. "
+            "Returns: confirmation that the format was deleted."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -286,7 +309,11 @@ _SCHEMAS: dict[str, dict] = {
     "apply_correction": {
         "name": "apply_correction",
         "category": "accounting",
-        "description": "Internal: apply a staged ledger correction by token. Called by the confirmation flow.",
+        "description": (
+            "Use to apply a staged correction after the admin has reviewed and confirmed it. Admin only. "
+            "Requires the token returned by correct_transaction. "
+            "Returns: confirmation that the correction was applied."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {

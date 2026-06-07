@@ -30,16 +30,17 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "name": "get_status",
         "description": (
-            "Get the current bot status, group configuration, and invoice statistics. "
-            "Available to all group members."
+            "Use when a user asks for bot status, invoice statistics, or current configuration. "
+            "Returns: invoice count and total for the current month, flagged invoice count, language, header, and other group settings."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "list_invoices",
         "description": (
-            "List invoices recorded for a given month, with their IDs, dates, vendors, "
-            "amounts, and flag status. Defaults to the current month. Available to all members."
+            "Use when a user wants to see the list of invoices for a month. "
+            "Returns: each invoice's ID, vendor, date, original amount, ILS amount, and flag status. "
+            "Defaults to the current month. Available to all members."
         ),
         "input_schema": {
             "type": "object",
@@ -53,8 +54,9 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "name": "get_preview",
         "description": (
-            "Get a summary for a given month: invoice count, total in ILS, "
-            "number of flagged invoices. Defaults to current month. Available to all members."
+            "Use when a user wants a summary of invoices for a month — count, total, flagged count. "
+            "Returns: invoice count, total ILS amount, number flagged. "
+            "Defaults to the current month. Available to all members."
         ),
         "input_schema": {
             "type": "object",
@@ -68,9 +70,9 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "name": "update_config",
         "description": (
-            "Update a group configuration setting. Admin only. "
-            "Keys: 'header' (report title), 'author' (report author name), "
-            "'language' (en or he), 'dual-currency' (on or off)."
+            "Use when an admin wants to change a group setting. Admin only. "
+            "Keys: 'header' (report title), 'author' (report author), 'language' (en or he), 'dual-currency' (on or off). "
+            "Returns: confirmation of the updated setting."
         ),
         "input_schema": {
             "type": "object",
@@ -83,7 +85,10 @@ TOOL_SCHEMAS: list[dict] = [
     },
     {
         "name": "flag_invoice",
-        "description": "Flag an invoice for manual review. Admin only.",
+        "description": (
+            "Use when an admin wants to mark an invoice for manual review (e.g. suspicious amount, wrong vendor). Admin only. "
+            "Returns: confirmation that the invoice is now flagged."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -95,7 +100,10 @@ TOOL_SCHEMAS: list[dict] = [
     },
     {
         "name": "unflag_invoice",
-        "description": "Remove the review flag from an invoice. Admin only.",
+        "description": (
+            "Use when an admin wants to clear the review flag from an invoice. Admin only. "
+            "Returns: confirmation that the flag is removed."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -107,8 +115,9 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "name": "set_invoice_date",
         "description": (
-            "Correct the date on an invoice. Admin only. Use when OCR extracted the wrong date "
-            "(e.g. day/month swapped). Also re-calculates the ILS amount if the currency is not ILS."
+            "Use when an admin reports that an invoice's date was extracted incorrectly (e.g. day/month swapped). Admin only. "
+            "Prefer this over deletion when only the date is wrong. Also recalculates the ILS amount if the currency is not ILS. "
+            "Returns: confirmation of the corrected date and recalculated amount."
         ),
         "input_schema": {
             "type": "object",
@@ -122,9 +131,10 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "name": "set_invoice_amount",
         "description": (
-            "Correct the original amount on an invoice. Admin only. "
-            "Re-calculates the ILS amount using the existing exchange rate for the invoice date. "
-            "Always call request_confirmation first — never call this directly."
+            "Use when an admin reports that an invoice's amount was extracted incorrectly. Admin only. "
+            "Only execute after a confirmed request_confirmation — never call this directly. "
+            "Recalculates the ILS amount using the existing exchange rate for that invoice's date. "
+            "Returns: confirmation of the corrected amount."
         ),
         "input_schema": {
             "type": "object",
@@ -141,9 +151,10 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "name": "add_date_format",
         "description": (
-            "Register an extra date format used globally when parsing invoice dates. "
-            "Adds to existing formats — does not replace them. Admin only. "
-            "Always call request_confirmation first — never call this directly."
+            "Use when an admin wants to register a new date format for invoice date parsing (e.g. MM/DD/YYYY). Admin only. "
+            "Only execute after a confirmed request_confirmation — never call this directly. "
+            "Adds to existing formats without replacing them. "
+            "Returns: confirmation of the added format."
         ),
         "input_schema": {
             "type": "object",
@@ -162,9 +173,11 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "name": "request_confirmation",
         "description": (
-            "Request admin confirmation before executing a destructive or external action. "
-            "Use this before removing an invoice or sending a report by email. "
-            "After calling this tool, tell the user what will happen and ask them to reply 'yes' to confirm."
+            "Use before executing any destructive or external action: removing an invoice, correcting its amount, "
+            "adding a date format, or sending anything outside the group. "
+            "Call this first, then tell the user what will happen and ask them to reply yes. "
+            "The action will only execute when the user confirms. "
+            "Returns: a confirmation prompt string that you should relay to the user."
         ),
         "input_schema": {
             "type": "object",

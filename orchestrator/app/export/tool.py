@@ -134,9 +134,11 @@ _SCHEMA = {
     "name": "export_report",
     "category": "export",
     "description": (
-        "Generate a PDF and/or XLSX report for this group and deliver it to the group chat "
-        "and/or by email. Admin only. For invoice groups, PDF can include invoice images. "
-        "For accounting groups, PDF shows net balances and full transaction history."
+        "Use when a user asks for a report, export, or to send the ledger or invoice records "
+        "to the group chat or by email. Admin only. "
+        "For invoice groups: PDF can include invoice images. "
+        "For accounting groups: PDF shows net balances and full transaction history. "
+        "Returns: confirmation of what was sent and where."
     ),
     "input_schema": {
         "type": "object",
