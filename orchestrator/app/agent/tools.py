@@ -571,21 +571,16 @@ async def exec_request_confirmation(
     # we don't ask for confirmation and then fail. Also surface the exact address
     # in the confirmation text so the user sees exactly where the report is going.
     if action == "send_email":
-        from app.config import settings
-        allowlist_raw = settings.report_email_allowlist.strip()
-        if allowlist_raw:
-            allowlist = {addr.strip().lower() for addr in allowlist_raw.split(",") if addr.strip()}
-        else:
-            allowlist = {settings.gmail_user.strip().lower()} if settings.gmail_user else set()
+        from app.tools.send_email_tool import _is_allowed
 
         to_email = params.get("to_email", "").strip()
         if not to_email:
             return {"error": "No email address provided."}
-        if allowlist and to_email.lower() not in allowlist:
+        if not _is_allowed(to_email):
             return {
                 "error": (
                     f"Email address '{to_email}' is not in the allowed recipient list. "
-                    f"Configure REPORT_EMAIL_ALLOWLIST to permit additional addresses."
+                    f"Ask an admin to add it via the Settings panel."
                 )
             }
         # Append recipient to description so the user sees it in the confirmation prompt
@@ -610,15 +605,7 @@ async def exec_remove_invoice(group_id: str, invoice_id: str) -> dict:
 
 async def exec_send_email(group_id: str, params: dict) -> dict:
     from app.reports.generator import generate_and_email_report
-    from app.config import settings
-
-    # Build the effective allowlist: explicit env var or fall back to the gmail sender
-    allowlist_raw = settings.report_email_allowlist.strip()
-    if allowlist_raw:
-        allowlist = {addr.strip().lower() for addr in allowlist_raw.split(",") if addr.strip()}
-    else:
-        # No allowlist configured — only allow sending to self
-        allowlist = {settings.gmail_user.strip().lower()} if settings.gmail_user else set()
+    from app.tools.send_email_tool import _is_allowed
 
     cur_month, cur_year = _current_month_year()
     to_email = params.get("to_email", "").strip()
@@ -626,12 +613,12 @@ async def exec_send_email(group_id: str, params: dict) -> dict:
     if not to_email:
         return {"error": "No email address provided."}
 
-    if allowlist and to_email.lower() not in allowlist:
+    if not _is_allowed(to_email):
         logger.warning("Blocked email send attempt to non-allowlisted address: %s", to_email)
         return {
             "error": (
                 f"Email address '{to_email}' is not in the allowed recipient list. "
-                f"Configure REPORT_EMAIL_ALLOWLIST to permit additional addresses."
+                f"Ask an admin to add it via the Settings panel."
             )
         }
 
