@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import uuid
-from datetime import datetime, timezone, timedelta
-from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.db.models import (
-    AdminNumbers, CrossGroupConfirmation, GroupRegistry,
-    SplitTransaction, UserAccount, UserProfile,
+    AdminNumbers, GroupRegistry, UserAccount, UserProfile,
 )
 
 if TYPE_CHECKING:
