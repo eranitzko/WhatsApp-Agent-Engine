@@ -215,10 +215,10 @@ async function renderPeople(app) {
           <td>${escHtml(p.display_name || '—')}</td>
           <td style="font-size:0.8em;color:var(--muted)">${escHtml(p.group_jid || '—')}</td>
           <td>${p.is_admin ? '<span class="badge" style="background:#eff6ff;color:var(--accent)">Admin</span>' : ''}</td>
-          <td>
-            <button class="btn" style="padding:4px 10px;font-size:12px;border:1px solid var(--border)"
+          <td style="white-space:nowrap">
+            <button class="btn" style="padding:4px 8px;font-size:11px;border:1px solid var(--border)"
               onclick="openPersonEdit(${JSON.stringify(JSON.stringify(p))})">Edit</button>
-            <button class="btn btn-danger" style="margin-left:4px" onclick="deletePerson('${escAttr(p.phone)}')">Remove</button>
+            <button class="btn btn-danger" style="padding:4px 8px;font-size:11px;margin-left:3px" onclick="deletePerson('${escAttr(p.phone)}')">✕</button>
           </td>
         </tr>`).join('')
     : '<tr><td colspan="5" class="empty">No people registered yet.</td></tr>';
@@ -240,8 +240,10 @@ async function renderPeople(app) {
               </select>
             </td>
             <td>
-              <button class="btn btn-primary" style="padding:4px 10px;font-size:12px" onclick="approveRegistration('${escAttr(g.group_jid)}')">Approve</button>
-              <button class="btn btn-danger" style="margin-left:4px" onclick="rejectRegistration('${escAttr(g.group_jid)}')">Reject</button>
+              <div style="white-space:nowrap">
+                <button class="btn btn-primary" style="padding:4px 8px;font-size:11px" onclick="approveRegistration('${escAttr(g.group_jid)}')">Approve</button>
+                <button class="btn btn-danger" style="padding:4px 8px;font-size:11px;margin-left:3px" onclick="rejectRegistration('${escAttr(g.group_jid)}')">Reject</button>
+              </div>
             </td>
           </tr>`).join('')}
       </tbody>
@@ -356,13 +358,19 @@ async function togglePersonAdmin(phone, isAdmin) {
 async function addPerson() {
   const phone = document.getElementById('new-person-phone').value.trim();
   if (!phone) return;
+  const jid = document.getElementById('new-person-jid').value.trim();
+  const isAdmin = document.getElementById('new-person-admin').checked;
+  if (!jid && !isAdmin) {
+    alert('Please provide a Group JID or check "Admin" — a person must have at least one.');
+    return;
+  }
   await apiFetch('/people', {
     method: 'POST',
     body: JSON.stringify({
       phone,
       display_name: document.getElementById('new-person-name').value.trim() || null,
-      group_jid: document.getElementById('new-person-jid').value.trim() || null,
-      is_admin: document.getElementById('new-person-admin').checked,
+      group_jid: jid || null,
+      is_admin: isAdmin,
     }),
   });
   renderPeople(document.getElementById('app'));

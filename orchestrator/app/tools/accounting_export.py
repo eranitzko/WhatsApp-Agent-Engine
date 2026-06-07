@@ -199,48 +199,118 @@ def _write_settlements_sheet(ws, settlements, names, date_format, currency_displ
 
 
 def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> bytes:
-    """Generate a PDF ledger summary using ReportLab.
-
-    Produces: net balances table + transaction list.
-    Returns raw PDF bytes.
-    """
+    """Generate a PDF ledger summary. Supports Hebrew/RTL via pdf_report helpers."""
     import io as _io
     from datetime import datetime, timezone
-    from decimal import Decimal
 
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import cm
-    from reportlab.platypus import (
-        Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
-    )
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    # Import RTL/Hebrew utilities from pdf_report
+    from app.reports.pdf_report import _bidi, _font, _register_hebrew_fonts, _xml
+
+    # Detect language from group config
+    lang = "en"
+    try:
+        with SessionLocal() as _db:
+            from app.db.models import GroupConfig
+            cfg = _db.get(GroupConfig, group_jid)
+            if cfg and cfg.feedback_language:
+                lang = cfg.feedback_language
+    except Exception:
+        pass
+
+    rtl = (lang == "he")
+    if rtl:
+        _register_hebrew_fonts()
+
+    LABELS = {
+        "en": {
+            "title": "Family Ledger",
+            "generated": "Generated",
+            "net_balances": "Net Balances",
+            "transactions": "Transactions",
+            "from": "From",
+            "to": "To",
+            "amount": "Amount (₪)",
+            "date": "Date",
+            "settled": "Settled",
+            "description": "Description",
+            "all_settled": "All debts settled.",
+            "no_transactions": "No transactions found.",
+        },
+        "he": {
+            "title": "ספר חשבונות משפחתי",
+            "generated": "הופק",
+            "net_balances": "יתרות נטו",
+            "transactions": "עסקאות",
+            "from": "מ",
+            "to": "ל",
+            "amount": "סכום (₪)",
+            "date": "תאריך",
+            "settled": "שולם",
+            "description": "תיאור",
+            "all_settled": "כל החובות סולקו.",
+            "no_transactions": "לא נמצאו עסקאות.",
+        },
+    }
+    L = LABELS.get(lang, LABELS["en"])
+
+    def _t(text: str) -> str:
+        return _bidi(_xml(text)) if rtl else _xml(text)
+
+    font_n = _font(lang, bold=False)
+    font_b = _font(lang, bold=True)
+
+    from reportlab.lib.enums import TA_RIGHT, TA_LEFT
+    align_enum = TA_RIGHT if rtl else TA_LEFT
+
+    styles = getSampleStyleSheet()
+    normal_style = ParagraphStyle("LN", fontName=font_n, fontSize=9, leading=11, alignment=align_enum)
+    bold_style   = ParagraphStyle("LB", fontName=font_b, fontSize=9, leading=11, alignment=align_enum)
+    title_style  = ParagraphStyle("LT", fontName=font_b, fontSize=14, leading=18,
+                                  alignment=2 if rtl else 0, textColor=colors.HexColor("#1a3c5e"))
+    meta_style   = ParagraphStyle("LM", fontName=font_n, fontSize=8, leading=10,
+                                  alignment=2 if rtl else 0, textColor=colors.HexColor("#555555"))
+    h2_style     = ParagraphStyle("LH2", fontName=font_b, fontSize=11, leading=14,
+                                  alignment=2 if rtl else 0, spaceBefore=8, spaceAfter=4)
+
+    def _p(text: str, style=None) -> Paragraph:
+        return Paragraph(_t(text), style or normal_style)
+
+    def _pb(text: str) -> Paragraph:
+        return Paragraph(_t(text), bold_style)
 
     with SessionLocal() as db:
         names = _phone_to_name_from_db(db, group_jid)
-        from app.db.models import LedgerEntry as _LedgerEntry
-        query = db.query(_LedgerEntry).filter(_LedgerEntry.group_jid == group_jid)
+        from app.db.models import LedgerEntry as _LE
+        query = db.query(_LE).filter(_LE.group_jid == group_jid)
         if filter_phone:
             from sqlalchemy import or_
             query = query.filter(or_(
-                _LedgerEntry.from_phone == filter_phone,
-                _LedgerEntry.to_phone == filter_phone,
+                _LE.from_phone == filter_phone,
+                _LE.to_phone == filter_phone,
             ))
-        entries = query.order_by(_LedgerEntry.transaction_date.desc()).all()
+        entries = query.order_by(_LE.transaction_date.desc()).all()
 
-    styles = getSampleStyleSheet()
     buf = _io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm,
-                            topMargin=2*cm, bottomMargin=2*cm)
+    MARGIN = 2.0 * cm
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=MARGIN, rightMargin=MARGIN,
+                            topMargin=MARGIN, bottomMargin=MARGIN)
     story = []
 
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    story.append(Paragraph("<b>Family Ledger</b>", styles["Title"]))
-    story.append(Paragraph(f"Generated: {generated}", styles["Normal"]))
-    story.append(Spacer(1, 0.4*cm))
+    story.append(Paragraph(_t(L["title"]), title_style))
+    story.append(Paragraph(_t(f"{L['generated']}: {generated}"), meta_style))
+    story.append(Spacer(1, 0.5 * cm))
 
     # ── Net balances ──────────────────────────────────────────────────────────
-    story.append(Paragraph("<b>Net Balances</b>", styles["Heading2"]))
+    story.append(Paragraph(_t(L["net_balances"]), h2_style))
+
     net: dict[tuple[str, str], Decimal] = {}
     for e in entries:
         unsettled = e.amount_ils - (e.amount_settled_ils or Decimal("0"))
@@ -248,53 +318,101 @@ def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> byte
             key = (e.from_phone, e.to_phone)
             net[key] = net.get(key, Decimal("0")) + unsettled
 
+    HDR_BG = colors.HexColor("#1a3c5e")
+    ALT_BG = colors.HexColor("#f0f4f8")
+
     if net:
-        bal_data = [["From", "To", "Amount (₪)"]]
+        if rtl:
+            hdrs = [_pb(L["amount"]), _pb(L["to"]), _pb(L["from"])]
+        else:
+            hdrs = [_pb(L["from"]), _pb(L["to"]), _pb(L["amount"])]
+        bal_rows = [hdrs]
         for (frm, to), amt in sorted(net.items()):
-            bal_data.append([
-                names.get(frm, frm), names.get(to, to), f"₪{float(amt):,.2f}"
-            ])
-        bal_table = Table(bal_data, colWidths=[5*cm, 5*cm, 4*cm])
+            frm_name = _p(names.get(frm, frm))
+            to_name  = _p(names.get(to, to))
+            amt_p    = Paragraph(f"₪{float(amt):,.2f}", ParagraphStyle("R", fontName=font_n, fontSize=9, alignment=2))
+            if rtl:
+                bal_rows.append([amt_p, to_name, frm_name])
+            else:
+                bal_rows.append([frm_name, to_name, amt_p])
+        avail = A4[0] - 2 * MARGIN
+        col_w = [avail * 0.35, avail * 0.35, avail * 0.30]
+        if rtl:
+            col_w = list(reversed(col_w))
+        bal_table = Table(bal_rows, colWidths=col_w)
         bal_table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4A90D9")),
-            ("TEXTCOLOR",  (0, 0), (-1, 0), colors.white),
-            ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F5F5F5")]),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
-            ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+            ("BACKGROUND",    (0, 0), (-1, 0),  HDR_BG),
+            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, ALT_BG]),
+            ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#c0ccd8")),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 5),
         ]))
         story.append(bal_table)
     else:
-        story.append(Paragraph("All debts settled.", styles["Normal"]))
+        story.append(Paragraph(_t(L["all_settled"]), normal_style))
 
-    story.append(Spacer(1, 0.4*cm))
+    story.append(Spacer(1, 0.5 * cm))
 
     # ── Transactions ──────────────────────────────────────────────────────────
-    story.append(Paragraph("<b>Transactions</b>", styles["Heading2"]))
+    story.append(Paragraph(_t(L["transactions"]), h2_style))
+
     if entries:
-        tx_data = [["Date", "From", "To", "Amount", "Settled", "Description"]]
+        if rtl:
+            tx_hdrs = [_pb(L["description"]), _pb(L["settled"]), _pb(L["amount"]), _pb(L["to"]), _pb(L["from"]), _pb(L["date"])]
+        else:
+            tx_hdrs = [_pb(L["date"]), _pb(L["from"]), _pb(L["to"]), _pb(L["amount"]), _pb(L["settled"]), _pb(L["description"])]
+
+        tx_rows = [tx_hdrs]
         for e in entries:
-            tx_data.append([
-                e.transaction_date.isoformat() if e.transaction_date else "",
-                names.get(e.from_phone, e.from_phone),
-                names.get(e.to_phone, e.to_phone),
-                f"₪{float(e.amount_ils):,.2f}",
-                f"₪{float(e.amount_settled_ils or 0):,.2f}",
-                (e.description or "")[:40],
-            ])
-        tx_table = Table(tx_data, colWidths=[2.2*cm, 2.5*cm, 2.5*cm, 2.2*cm, 2.2*cm, 4.4*cm])
+            date_s = e.transaction_date.isoformat() if e.transaction_date else "—"
+            frm_s  = names.get(e.from_phone, e.from_phone)
+            to_s   = names.get(e.to_phone, e.to_phone)
+            amt_s  = f"₪{float(e.amount_ils):,.2f}"
+            set_s  = f"₪{float(e.amount_settled_ils or 0):,.2f}"
+            desc_s = (e.description or "")[:50]
+
+            right_p = ParagraphStyle("RP", fontName=font_n, fontSize=7, alignment=2)
+            if rtl:
+                tx_rows.append([
+                    Paragraph(_t(desc_s), ParagraphStyle("TD", fontName=font_n, fontSize=7, alignment=2)),
+                    Paragraph(set_s, right_p),
+                    Paragraph(amt_s, right_p),
+                    _p(to_s,   ParagraphStyle("TN", fontName=font_n, fontSize=7, alignment=2)),
+                    _p(frm_s,  ParagraphStyle("TN2", fontName=font_n, fontSize=7, alignment=2)),
+                    Paragraph(date_s, ParagraphStyle("TDT", fontName=font_n, fontSize=7, alignment=2)),
+                ])
+            else:
+                tx_rows.append([
+                    Paragraph(date_s, ParagraphStyle("TDT", fontName=font_n, fontSize=7, alignment=0)),
+                    Paragraph(_t(frm_s), ParagraphStyle("TN", fontName=font_n, fontSize=7, alignment=0)),
+                    Paragraph(_t(to_s),  ParagraphStyle("TN2", fontName=font_n, fontSize=7, alignment=0)),
+                    Paragraph(amt_s, right_p),
+                    Paragraph(set_s, right_p),
+                    Paragraph(_t(desc_s), ParagraphStyle("TD", fontName=font_n, fontSize=7, alignment=0)),
+                ])
+
+        avail = A4[0] - 2 * MARGIN
+        col_w = [avail*0.12, avail*0.14, avail*0.14, avail*0.12, avail*0.12, avail*0.36]
+        if rtl:
+            col_w = list(reversed(col_w))
+        tx_table = Table(tx_rows, colWidths=col_w, repeatRows=1)
         tx_table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4A90D9")),
-            ("TEXTCOLOR",  (0, 0), (-1, 0), colors.white),
-            ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE",   (0, 0), (-1, -1), 8),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F5F5F5")]),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
-            ("ALIGN", (3, 0), (4, -1), "RIGHT"),
+            ("BACKGROUND",    (0, 0), (-1, 0),  HDR_BG),
+            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, ALT_BG]),
+            ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#c0ccd8")),
+            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 4),
+            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
         ]))
         story.append(tx_table)
     else:
-        story.append(Paragraph("No transactions found.", styles["Normal"]))
+        story.append(Paragraph(_t(L["no_transactions"]), normal_style))
 
     doc.build(story)
     return buf.getvalue()
