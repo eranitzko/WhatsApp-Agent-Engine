@@ -5,17 +5,12 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import TYPE_CHECKING
-
 from sqlalchemy.orm import Session
 
 from app import bridge_client
 from app.db.models import (
     AdminNumbers, CrossGroupConfirmation, GroupRegistry, UserAccount, UserProfile,
 )
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
