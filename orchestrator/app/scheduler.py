@@ -14,6 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.config import settings
 from app.db.session import SessionLocal
 from app.automation.evaluators import ThresholdEvaluator
+from app import bridge_client
 
 if TYPE_CHECKING:
     from app.automation.executor import AutomationExecutor
@@ -255,6 +256,82 @@ async def _evaluate_thresholds() -> None:
             )
 
 
+async def _expire_cross_group_confirmations() -> None:
+    """Flip pending cross-group confirmations past their expiry to timed_out and notify parties."""
+    from app.db.models import CrossGroupConfirmation, SplitTransaction
+
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        expired = (
+            db.query(CrossGroupConfirmation)
+            .filter(
+                CrossGroupConfirmation.status == "pending",
+                CrossGroupConfirmation.expires_at <= now,
+            )
+            .all()
+        )
+        for conf in expired:
+            conf.status = "timed_out"
+        db.commit()
+
+        for conf in expired:
+            # If part of a split, check if we should suspend it
+            if conf.split_transaction_id:
+                split = db.query(SplitTransaction).filter_by(
+                    id=conf.split_transaction_id, status="pending"
+                ).first()
+                if split:
+                    split.status = "suspended"
+                    db.query(CrossGroupConfirmation).filter_by(
+                        split_transaction_id=split.id, status="pending"
+                    ).update({"status": "paused"})
+                    db.commit()
+                    msg = (
+                        f"The split ({split.description}, ₪{float(split.total_amount):.2f}) "
+                        f"was not confirmed in time and has been suspended."
+                    )
+                    try:
+                        await bridge_client.send_message(split.reporter_group_jid, msg)
+                    except Exception:
+                        logger.exception("Failed to notify split reporter %s", split.reporter_group_jid)
+            else:
+                # Standalone 2-party confirmation timeout
+                msg = (
+                    f"A transaction confirmation timed out and was not recorded "
+                    f"({conf.action_type})."
+                )
+                for jid in {conf.initiator_group_jid, conf.target_group_jid}:
+                    try:
+                        await bridge_client.send_message(jid, msg)
+                    except Exception:
+                        logger.exception("Failed to send timeout notice to %s", jid)
+
+
+async def _expire_split_transactions() -> None:
+    """Suspend pending splits where all confirmations have timed out."""
+    from app.db.models import CrossGroupConfirmation, SplitTransaction
+
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        pending_splits = db.query(SplitTransaction).filter_by(status="pending").all()
+        for split in pending_splits:
+            confs = db.query(CrossGroupConfirmation).filter_by(
+                split_transaction_id=split.id
+            ).all()
+            all_resolved = all(
+                c.status in ("confirmed", "self_confirmed", "rejected", "timed_out", "paused")
+                for c in confs
+            )
+            if not all_resolved:
+                continue
+            any_timed_out = any(
+                c.status == "timed_out" for c in confs
+            )
+            if any_timed_out:
+                split.status = "suspended"
+        db.commit()
+
+
 # ── Scheduler lifecycle ───────────────────────────────────────────────────────
 
 def start_scheduler() -> None:
@@ -271,8 +348,14 @@ def start_scheduler() -> None:
     _scheduler.add_job(
         _evaluate_thresholds, "interval", minutes=60, id="evaluate_thresholds"
     )
+    _scheduler.add_job(
+        _expire_cross_group_confirmations, "interval", minutes=60, id="expire_cross_group_confirmations"
+    )
+    _scheduler.add_job(
+        _expire_split_transactions, "interval", minutes=60, id="expire_split_transactions"
+    )
     _scheduler.start()
-    logger.info("APScheduler started — 2 × 60s jobs, 3 × 60min automation jobs")
+    logger.info("APScheduler started — 2 × 60s jobs, 5 × 60min automation jobs")
 
 
 def stop_scheduler() -> None:
