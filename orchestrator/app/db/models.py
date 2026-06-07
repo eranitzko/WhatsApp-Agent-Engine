@@ -119,6 +119,7 @@ class GroupRegistry(Base):
     trigger_prefix = Column(String, nullable=True)
     bound_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     custom_instructions = Column(Text, nullable=True)
+    group_type = Column(String, nullable=True, default="personal")  # personal|shared|sys_admin|unregistered
 
 
 class GroupParticipant(Base):
@@ -205,13 +206,56 @@ class AutomationRule(Base):
                               default=lambda: datetime.now(timezone.utc))
 
 
+class UserAccount(Base):
+    __tablename__ = "user_accounts"
+
+    id         = Column(String(36), primary_key=True, default=_uuid)
+    phone      = Column(String, nullable=False, index=True)
+    group_jid  = Column(String, ForeignKey("group_registry.group_jid"), nullable=False, index=True)
+    role       = Column(String, nullable=False, default="owner")   # owner | member
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+
+
+class SplitTransaction(Base):
+    __tablename__ = "split_transactions"
+
+    id                 = Column(String(36), primary_key=True, default=_uuid)
+    reporter_group_jid = Column(String, nullable=False)
+    reporter_phone     = Column(String, nullable=False)
+    payer_phone        = Column(String, nullable=False)
+    total_amount       = Column(Numeric(18, 4), nullable=False)
+    description        = Column(Text, nullable=True)
+    status             = Column(String, nullable=False, default="pending")  # pending|confirmed|suspended|cancelled
+    created_at         = Column(DateTime(timezone=True), nullable=False,
+                                default=lambda: datetime.now(timezone.utc))
+
+
+class CrossGroupConfirmation(Base):
+    __tablename__ = "cross_group_confirmations"
+
+    id                   = Column(String(36), primary_key=True, default=_uuid)
+    split_transaction_id = Column(String(36), ForeignKey("split_transactions.id", ondelete="CASCADE"), nullable=True)
+    initiator_phone      = Column(String, nullable=False)
+    initiator_group_jid  = Column(String, nullable=False)
+    target_phone         = Column(String, nullable=False)
+    target_group_jid     = Column(String, nullable=False)
+    action_type          = Column(String, nullable=False)   # record_expense|record_payment|split_share
+    action_payload       = Column(Text, nullable=False)     # JSON
+    status               = Column(String, nullable=False, default="pending")  # pending|confirmed|rejected|timed_out
+    expires_at           = Column(DateTime(timezone=True), nullable=False)
+    created_at           = Column(DateTime(timezone=True), nullable=False,
+                                  default=lambda: datetime.now(timezone.utc))
+
+
 class UserProfile(Base):
     __tablename__ = "user_profiles"
 
-    phone      = Column(String, primary_key=True)
-    email      = Column(String, nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False,
-                        default=lambda: datetime.now(timezone.utc))
+    phone        = Column(String, primary_key=True)
+    email        = Column(String, nullable=True)
+    display_name = Column(String, nullable=True)
+    created_at   = Column(DateTime(timezone=True), nullable=False,
+                          default=lambda: datetime.now(timezone.utc))
 
 
 class ReportFormat(Base):
