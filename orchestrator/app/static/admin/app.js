@@ -652,7 +652,66 @@ async function renderSettings(app) {
             </td>
           </tr>`).join('')}
       </tbody>
-    </table>`);
+    </table>
+    <div id="allowlist-section" style="margin-top:32px"></div>`);
+  await renderAllowlistSection();
+}
+
+async function renderAllowlistSection() {
+  const section = document.getElementById('allowlist-section');
+  if (!section) return;
+
+  const res = await apiFetch('/settings/email-allowlist');
+  if (!res) return;
+  const entries = await res.json();
+
+  const rows = entries.length === 0
+    ? `<tr><td colspan="3" class="empty">No addresses — all recipients are permitted.</td></tr>`
+    : entries.map(e => `
+        <tr>
+          <td>${escHtml(e.display_name || '—')}</td>
+          <td>${escHtml(e.email)}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-danger" onclick="removeAllowlistEntry('${escAttr(e.email)}')">✕</button>
+          </td>
+        </tr>`).join('');
+
+  section.innerHTML = `
+    <h3 style="margin:0 0 12px;font-size:15px">Email Allowlist</h3>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Display Name</th>
+            <th>Email</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="add-row" style="padding:12px;border-top:1px solid var(--border)">
+        <input id="al-name" type="text" placeholder="Display name (optional)" style="flex:1;min-width:0">
+        <input id="al-email" type="email" placeholder="Email address" style="flex:1.5;min-width:0">
+        <button class="btn btn-primary" onclick="addAllowlistEntry()">Add</button>
+      </div>
+    </div>`;
+}
+
+async function addAllowlistEntry() {
+  const email = document.getElementById('al-email').value.trim();
+  const display_name = document.getElementById('al-name').value.trim() || null;
+  if (!email) return;
+  await apiFetch('/settings/email-allowlist', {
+    method: 'POST',
+    body: JSON.stringify({ email, display_name }),
+  });
+  await renderAllowlistSection();
+}
+
+async function removeAllowlistEntry(email) {
+  if (!confirm(`Remove ${email} from the allowlist?`)) return;
+  await apiFetch('/settings/email-allowlist/' + encodeURIComponent(email), { method: 'DELETE' });
+  await renderAllowlistSection();
 }
 
 async function saveSetting(key) {
