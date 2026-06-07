@@ -546,12 +546,6 @@ def patch_person(phone: str, body: UpdatePersonFullRequest, _=Depends(require_au
                         existing.display_name = display
                     else:
                         db.add(EmailAllowlist(email=new_email, display_name=display))
-                else:
-                    # Email cleared — remove from allowlist
-                    if old_email_norm:
-                        old_row = db.get(EmailAllowlist, old_email_norm)
-                        if old_row:
-                            db.delete(old_row)
 
         if body.is_admin is not None:
             existing_admin = db.query(AdminNumbers).filter_by(phone_number=phone).first()
