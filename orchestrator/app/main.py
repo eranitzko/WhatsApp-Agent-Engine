@@ -18,10 +18,15 @@ from app.command_handler import CommandHandler
 from app.agent.context import ContextStore
 from app.agent.confirmation import confirmation_store
 from app.agent.multi_confirmation import multi_confirmation_store
-from app.db.models import GroupParticipant
+from app.db.models import GroupParticipant, CrossGroupConfirmation, SplitTransaction, UserAccount
+from app.accounting.account_service import AccountService
+from app.accounting.group_registration import GroupRegistrationHandler
 from app.participants import build_participant_block
 from app.tools.invoice_tools import get_invoice_tools
 from app.tools.accounting_tools import get_accounting_tools
+from app.tools.accounting_tools import set_account_service
+from app.tools.split_tools import get_split_tools
+from app.tools.split_tools import set_account_service as set_split_account_service
 from app.tools.automation_tools import get_automation_tools
 from app.export.tool import get_export_tools
 from app.tools.send_email_tool import get_send_email_tools
@@ -88,6 +93,8 @@ command_handler = CommandHandler(bridge_url=settings.bridge_url)
 context_store = ContextStore()
 tool_registry = ToolRegistry()
 agent_runner: AgentRunner | None = None
+account_service: AccountService = AccountService()
+group_registration_handler: GroupRegistrationHandler = GroupRegistrationHandler()
 _http_client: Optional[httpx.AsyncClient] = None
 
 
@@ -131,6 +138,9 @@ async def lifespan(_app: FastAPI):
 
     tool_registry.register(get_invoice_tools())
     tool_registry.register(get_accounting_tools())
+    set_account_service(account_service)
+    set_split_account_service(account_service)
+    tool_registry.register(get_split_tools())
     tool_registry.register(get_automation_tools())
     tool_registry.register(get_export_tools())
     tool_registry.register(get_send_email_tools())
@@ -196,12 +206,29 @@ async def _process(payload: WebhookPayload) -> None:
         if payload.type == "participant_update":
             if payload.participants and payload.action in ("add", "remove", "leave"):
                 from datetime import datetime, timezone
+                bot_phone = settings.bot_phone_number or ""
                 for jid_str in payload.participants:
                     phone = jid_str.split("@")[0].split(":")[0]
                     if not phone:
                         continue
                     if payload.action == "add":
                         _upsert_participant(db, payload.jid, phone, status="active")
+                        # Check if the bot itself was added to a new group
+                        if bot_phone and phone == bot_phone:
+                            try:
+                                meta = await bridge_client.fetch_group_meta(payload.jid)
+                                human_phones = [
+                                    p["jid"].split("@")[0].split(":")[0]
+                                    for p in meta.get("participants", [])
+                                    if p["jid"].split("@")[0].split(":")[0] != bot_phone
+                                ]
+                                await group_registration_handler.on_bot_added_to_group(
+                                    db, payload.jid, human_phones
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "Failed to handle bot-join for group %s", payload.jid
+                                )
                     else:
                         _upsert_participant(db, payload.jid, phone,
                                             status="removed",
@@ -217,6 +244,55 @@ async def _process(payload: WebhookPayload) -> None:
             if reply:
                 await _send(payload.jid, reply)
             return
+
+        # Intercept sys-admin registration approvals
+        if text.strip().lower() in ("yes", "no", "כן", "לא", "y", "n"):
+            sender_phone = payload.sender.split("@")[0].split(":")[0]
+            group_type = account_service.get_group_type(db, payload.jid)
+            if group_type == "sys_admin":
+                if group_registration_handler.is_pending_reply(db, payload.jid, text):
+                    handled = await group_registration_handler.handle_admin_reply(
+                        db, payload.jid, text
+                    )
+                    if handled:
+                        return
+
+        # Intercept cross-group confirmation replies (yes/no to 2nd-party transactions)
+        if text.strip().lower() in ("yes", "no", "כן", "לא", "y", "n", "אישור", "ביטול"):
+            sender_phone = payload.sender.split("@")[0].split(":")[0]
+            resolved = account_service.handle_confirmation_reply(
+                db, payload.jid, sender_phone, text
+            )
+            if resolved:
+                # Find the confirmation we just resolved (most recent for this user)
+                conf = (
+                    db.query(CrossGroupConfirmation)
+                    .filter(
+                        CrossGroupConfirmation.target_phone == sender_phone,
+                        CrossGroupConfirmation.target_group_jid == payload.jid,
+                        CrossGroupConfirmation.status.in_(["confirmed", "rejected"]),
+                    )
+                    .order_by(CrossGroupConfirmation.created_at.desc())
+                    .first()
+                )
+                if conf and conf.status == "confirmed":
+                    if conf.split_transaction_id:
+                        split = db.query(SplitTransaction).filter_by(
+                            id=conf.split_transaction_id
+                        ).first()
+                        if split:
+                            await account_service.finalize_split(db, split)
+                    else:
+                        await account_service.commit_confirmed_transaction(db, conf)
+                elif conf and conf.status == "rejected":
+                    if conf.split_transaction_id:
+                        await account_service.handle_split_decline(db, conf)
+                    else:
+                        await bridge_client.send_message(
+                            conf.initiator_group_jid,
+                            "Your transaction was declined by the other party."
+                        )
+                return
 
         blueprint, entry = router.resolve(db, payload.jid)
         if blueprint is None:
