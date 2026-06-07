@@ -291,7 +291,8 @@ class EmailAllowlist(Base):
     email        = Column(String, primary_key=True)
     display_name = Column(String, nullable=True)
     created_at   = Column(DateTime(timezone=True), nullable=False,
-                          server_default=sa.func.now())
+                          server_default=sa.func.now(),
+                          default=lambda: datetime.now(timezone.utc))
 
 
 class ReportFormat(Base):
