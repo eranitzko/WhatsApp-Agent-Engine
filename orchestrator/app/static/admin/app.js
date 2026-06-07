@@ -701,16 +701,25 @@ async function addAllowlistEntry() {
   const email = document.getElementById('al-email').value.trim();
   const display_name = document.getElementById('al-name').value.trim() || null;
   if (!email) return;
-  await apiFetch('/settings/email-allowlist', {
+  const res = await apiFetch('/settings/email-allowlist', {
     method: 'POST',
     body: JSON.stringify({ email, display_name }),
   });
+  if (!res) return;
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    alert(body.detail || 'Failed to add entry.');
+    return;
+  }
+  document.getElementById('al-email').value = '';
+  document.getElementById('al-name').value = '';
   await renderAllowlistSection();
 }
 
 async function removeAllowlistEntry(email) {
   if (!confirm(`Remove ${email} from the allowlist?`)) return;
-  await apiFetch('/settings/email-allowlist/' + encodeURIComponent(email), { method: 'DELETE' });
+  const res = await apiFetch('/settings/email-allowlist/' + encodeURIComponent(email), { method: 'DELETE' });
+  if (!res || !res.ok) return;
   await renderAllowlistSection();
 }
 
