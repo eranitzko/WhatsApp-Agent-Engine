@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from app.admin.auth import require_auth
 from app.config import settings
-from app.db.models import AdminNumbers, Blueprint, GroupParticipant, GroupRegistry, SystemConfig, UserAccount, UserProfile
+from app.db.models import AdminNumbers, Blueprint, EmailAllowlist, GroupParticipant, GroupRegistry, SystemConfig, UserAccount, UserProfile
 from app.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -508,7 +508,6 @@ class UpdatePersonFullRequest(BaseModel):
 
 @router.patch("/people/{phone}")
 def patch_person(phone: str, body: UpdatePersonFullRequest, _=Depends(require_auth)):
-    from app.db.models import EmailAllowlist
     with SessionLocal() as db:
         if body.display_name is not None or body.email is not None:
             profile = db.query(UserProfile).filter_by(phone=phone).first()
@@ -528,7 +527,9 @@ def patch_person(phone: str, body: UpdatePersonFullRequest, _=Depends(require_au
                 new_email = (body.email or "").strip().lower()
                 old_email_norm = (old_email or "").strip().lower()
 
-                # Remove old email from allowlist if it changed
+                # Remove old email from allowlist when email changes or is cleared.
+                # Note: `new_email != old_email_norm` is True even when new_email="",
+                # so the cleared case is handled here (no separate else branch needed).
                 if old_email_norm and old_email_norm != new_email:
                     old_row = db.get(EmailAllowlist, old_email_norm)
                     if old_row:
@@ -612,7 +613,6 @@ class AddAllowlistRequest(BaseModel):
 
 @router.get("/settings/email-allowlist", dependencies=[Depends(require_auth)])
 def list_email_allowlist():
-    from app.db.models import EmailAllowlist
     with SessionLocal() as db:
         rows = db.query(EmailAllowlist).order_by(EmailAllowlist.created_at).all()
         return [
@@ -627,7 +627,6 @@ def list_email_allowlist():
 
 @router.post("/settings/email-allowlist", dependencies=[Depends(require_auth)])
 def add_email_allowlist(body: AddAllowlistRequest):
-    from app.db.models import EmailAllowlist
     email = body.email.strip().lower()
     with SessionLocal() as db:
         if db.get(EmailAllowlist, email):
@@ -639,7 +638,6 @@ def add_email_allowlist(body: AddAllowlistRequest):
 
 @router.delete("/settings/email-allowlist/{email:path}", dependencies=[Depends(require_auth)])
 def delete_email_allowlist(email: str):
-    from app.db.models import EmailAllowlist
     with SessionLocal() as db:
         row = db.get(EmailAllowlist, email.strip().lower())
         if not row:

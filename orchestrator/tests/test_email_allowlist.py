@@ -9,13 +9,6 @@ from app.admin.auth import require_auth
 from app.db.models import EmailAllowlist
 
 
-def _make_app(db):
-    app = FastAPI()
-    app.include_router(api_router, prefix="/admin/api")
-    app.dependency_overrides[require_auth] = lambda: None
-    return app
-
-
 # ── ORM ──────────────────────────────────────────────────────────────────────
 
 def test_email_allowlist_model_created(db):
