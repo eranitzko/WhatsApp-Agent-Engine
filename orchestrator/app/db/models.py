@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone, date as date_type
 from decimal import Decimal
 
+import sqlalchemy as sa
 from sqlalchemy import (
     Boolean, Column, Date, DateTime, Float, Index, Integer, String, Text, Numeric, ForeignKey, UniqueConstraint
 )
@@ -282,6 +283,15 @@ class UserProfile(Base):
     display_name = Column(String, nullable=True)
     created_at   = Column(DateTime(timezone=True), nullable=False,
                           default=lambda: datetime.now(timezone.utc))
+
+
+class EmailAllowlist(Base):
+    __tablename__ = "email_allowlist"
+
+    email        = Column(String, primary_key=True)
+    display_name = Column(String, nullable=True)
+    created_at   = Column(DateTime(timezone=True), nullable=False,
+                          server_default=sa.func.now())
 
 
 class ReportFormat(Base):
