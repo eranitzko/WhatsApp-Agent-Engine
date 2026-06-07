@@ -31,7 +31,14 @@ class PendingAction:
 
 
 class ConfirmationStore:
-    """One pending action per group at a time."""
+    """One pending action per group at a time.
+
+    NOTE: State is in-memory only. A server restart between request_confirmation
+    and the user's "yes" will silently lose the pending action.
+    This is intentional for the short 5-min TTL — the window is too narrow to
+    justify DB persistence. Cross-group accounting confirmations use the
+    CrossGroupConfirmation table (persistent) instead.
+    """
 
     def __init__(self) -> None:
         self._store: dict[str, PendingAction] = {}
