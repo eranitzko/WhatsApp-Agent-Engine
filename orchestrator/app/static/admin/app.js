@@ -145,8 +145,10 @@ async function renderGroups(app) {
                             <span style="font-weight:500">${escHtml(m.name)}</span>
                             ${m.phone ? `<span style="color:var(--muted);margin-left:6px;font-size:11px">${escHtml(m.phone)}</span>` : ''}
                           </div>`
-                       : `<div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:12px;color:var(--muted)">
-                            Unknown member
+                       : `<div style="background:var(--bg);border:1px dashed var(--border);border-radius:6px;padding:4px 10px;font-size:12px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:5px"
+                              onclick="event.stopPropagation();openAddPersonFromGroup('${escAttr(m.phone)}','${escAttr(g.group_jid)}')"
+                              title="Click to add this person">
+                            <span style="color:var(--accent);font-size:14px;line-height:1">+</span>${escHtml(m.phone)}
                           </div>`
                      ).join('')}
                    </div>`
@@ -182,6 +184,60 @@ async function deleteGroup(jid) {
     alert('Failed to remove group: ' + (body?.detail || 'Unknown error'));
     return;
   }
+  renderGroups(document.getElementById('app'));
+}
+
+function openAddPersonFromGroup(phone, groupJid) {
+  document.getElementById('modal-container').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+      <div class="modal">
+        <h3>Add Person</h3>
+        <p class="subtitle">From group: <span style="font-family:monospace;font-size:12px">${escHtml(groupJid)}</span></p>
+        <div class="form-group">
+          <label>Phone number</label>
+          <input id="ap-phone" type="text" value="${escAttr(phone)}"
+            placeholder="e.g. 972501234567">
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">
+            Correct this if what's shown is a WhatsApp internal ID, not a real number
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Display name (optional)</label>
+          <input id="ap-name" type="text" placeholder="e.g. Sivan">
+        </div>
+        <div class="form-group" style="display:flex;align-items:center;gap:8px">
+          <input type="checkbox" id="ap-admin">
+          <label for="ap-admin" style="cursor:pointer;margin:0">System admin</label>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" style="background:transparent;color:var(--muted)" onclick="closeModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="submitAddPersonFromGroup('${escAttr(groupJid)}')">Add person</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('ap-name').focus();
+}
+
+async function submitAddPersonFromGroup(groupJid) {
+  const phone = document.getElementById('ap-phone').value.trim();
+  if (!phone) { alert('Phone number is required.'); return; }
+  const name  = document.getElementById('ap-name').value.trim();
+  const isAdmin = document.getElementById('ap-admin').checked;
+  const res = await apiFetch('/people', {
+    method: 'POST',
+    body: JSON.stringify({
+      phone,
+      display_name: name || null,
+      group_jid: groupJid,
+      is_admin: isAdmin,
+    }),
+  });
+  if (!res || !res.ok) {
+    const body = await res?.json().catch(() => ({}));
+    alert('Failed to add person: ' + (body?.detail || 'Unknown error'));
+    return;
+  }
+  closeModal();
   renderGroups(document.getElementById('app'));
 }
 
