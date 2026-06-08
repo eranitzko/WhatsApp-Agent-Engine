@@ -147,6 +147,17 @@ _SCHEMAS: dict[str, dict] = {
             "required": ["phone_a"],
         },
     },
+    "get_debt_summary": {
+        "name": "get_debt_summary",
+        "category": "accounting",
+        "description": (
+            "Returns a human-readable list of who owes what to whom. "
+            "Non-admins see only debts involving themselves. "
+            "Admins see the full group debt table. "
+            "Returns: each open debt with debtor phone, creditor phone, net ILS owed, and oldest open date."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
     "get_history": {
         "name": "get_history",
         "category": "accounting",
@@ -628,6 +639,51 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
             elif net < Decimal("0"):
                 lines.append(f"{lp} owes {la}: {(-net):.2f} ILS")
         return "\n".join(lines) if lines else f"No open balances for {label(phone_a)}."
+
+
+async def _exec_get_debt_summary(params: dict, **ctx) -> str:
+    from collections import defaultdict
+    group_jid = ctx.get("group_jid", "")
+    is_admin = ctx.get("is_admin", False)
+    sender_phone = _sender_phone(ctx)
+
+    with SessionLocal() as db:
+        q = db.query(LedgerEntry).filter(
+            LedgerEntry.group_jid == group_jid,
+            LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
+        )
+        if not is_admin and sender_phone:
+            q = q.filter(
+                or_(
+                    LedgerEntry.from_phone == sender_phone,
+                    LedgerEntry.to_phone == sender_phone,
+                )
+            )
+        rows = q.order_by(LedgerEntry.transaction_date).all()
+
+    if not rows:
+        return "No open debts." if is_admin else "You have no open debts."
+
+    # Aggregate net per (debtor, creditor) pair
+    net: dict = defaultdict(Decimal)
+    oldest: dict = {}
+    for r in rows:
+        key = (r.from_phone, r.to_phone)
+        net[key] += r.amount_ils - (r.amount_settled_ils or Decimal("0"))
+        if key not in oldest or r.transaction_date < oldest[key]:
+            oldest[key] = r.transaction_date
+
+    lines = []
+    for (debtor, creditor), amount in sorted(net.items(), key=lambda x: -x[1]):
+        if amount <= Decimal("0"):
+            continue
+        lines.append(
+            f"{debtor} owes {creditor}: ₪{float(amount):,.2f} "
+            f"(since {oldest[(debtor, creditor)]})"
+        )
+    if not lines:
+        return "No open debts." if is_admin else "You have no open debts."
+    return "\n".join(lines)
 
 
 async def _exec_get_history(params: dict, **ctx) -> str:
@@ -1145,6 +1201,7 @@ def get_accounting_tools() -> dict[str, dict]:
             ("record_expense",       _exec_record_transaction),
             ("record_payment",       _exec_record_payment),
             ("get_balance",          _exec_get_balance),
+            ("get_debt_summary",     _exec_get_debt_summary),
             ("get_history",          _exec_get_history),
             ("get_transaction",      _exec_get_transaction),
             ("set_reminder",         _exec_set_reminder),

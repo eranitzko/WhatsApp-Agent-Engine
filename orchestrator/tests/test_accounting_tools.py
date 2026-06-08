@@ -9,7 +9,7 @@ from app.db.models import LedgerEntry, ScheduledMessage
 from app.tools.accounting_tools import get_accounting_tools
 
 EXPECTED_TOOLS = [
-    "record_expense", "record_payment", "get_balance",
+    "record_expense", "record_payment", "get_balance", "get_debt_summary",
     "get_history", "set_reminder", "list_reminders", "cancel_reminder",
     "set_report_email", "rename_participant", "set_household", "list_participants",
     "get_transaction", "correct_transaction", "commit_correction",
@@ -393,3 +393,43 @@ async def test_get_transaction_admin_only(db):
             is_admin=False,
         )
     assert "admin" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_get_debt_summary_shows_open_debts(db):
+    import uuid
+    from app.tools.accounting_tools import get_accounting_tools
+    from app.db.models import LedgerEntry
+    from decimal import Decimal
+    from datetime import date
+
+    db.add(LedgerEntry(
+        id=str(uuid.uuid4()),
+        transaction_id=str(uuid.uuid4()),
+        group_jid="g@g.us",
+        from_phone="972502222222",
+        to_phone="972501111111",
+        amount_ils=Decimal("200.00"),
+        amount_settled_ils=Decimal("0"),
+        description="Groceries",
+        transaction_date=date(2026, 4, 1),
+    ))
+    db.commit()
+
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+        tools = get_accounting_tools()
+        result = await tools["get_debt_summary"]["executor"](
+            {}, group_jid="g@g.us", sender="972501111111@s.whatsapp.net", is_admin=False
+        )
+    assert "200" in result
+    assert "972502222222" in result or "972501111111" in result
+
+
+@pytest.mark.asyncio
+async def test_get_debt_summary_no_debts(db):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+        tools = get_accounting_tools()
+        result = await tools["get_debt_summary"]["executor"](
+            {}, group_jid="g@g.us", sender="972501111111@s.whatsapp.net", is_admin=False
+        )
+    assert "no open debts" in result.lower() or "no debts" in result.lower()
