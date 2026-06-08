@@ -78,11 +78,18 @@ async def list_groups():
         rows = db.query(GroupRegistry).all()
         blueprints = {b.id: b.display_name for b in db.query(Blueprint).all()}
 
-        # Pre-load all GroupParticipant rows for name lookups
+        # Pre-load all GroupParticipant rows for name lookups.
+        # gp_by_group: per-group phone→GP (for in-group lookup)
+        # gp_by_phone: global phone→GP fallback for participants who are known
+        #   in *some* group but haven't messaged the bot in *this* group yet.
         all_gp = db.query(GroupParticipant).all()
         gp_by_group: dict[str, dict[str, GroupParticipant]] = {}
+        gp_by_phone: dict[str, GroupParticipant] = {}
         for gp in all_gp:
             gp_by_group.setdefault(gp.group_jid, {})[gp.phone] = gp
+            # Keep first occurrence (prefer active rows; order is stable enough)
+            if gp.phone not in gp_by_phone:
+                gp_by_phone[gp.phone] = gp
 
         # Build name→phone map from AdminNumbers for reverse lookup.
         # Keyed by lowercase first-word of the label (e.g. "eran", "sivan").
@@ -109,7 +116,10 @@ async def list_groups():
                     phone = p["jid"].split("@")[0].split(":")[0]
                     if bot_phone and phone == bot_phone:
                         continue  # belt-and-suspenders fallback
-                    gp = db_phones.get(phone)
+                    # Look up in this group first; fall back to any group the
+                    # person has ever appeared in (covers solo groups where the
+                    # member has never sent a message to the bot).
+                    gp = db_phones.get(phone) or gp_by_phone.get(phone)
                     if gp:
                         name = gp.admin_name or gp.push_name
                         # Try to resolve the actual phone from AdminNumbers
