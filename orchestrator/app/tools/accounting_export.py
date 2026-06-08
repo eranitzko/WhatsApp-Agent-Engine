@@ -210,7 +210,7 @@ def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> byte
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     # Import RTL/Hebrew utilities from pdf_report
-    from app.reports.pdf_report import _bidi, _font, _register_hebrew_fonts, _xml
+    from app.reports.pdf_report import _bidi, _font, _register_font, _xml
 
     # Detect language from group config
     lang = "en"
@@ -224,8 +224,7 @@ def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> byte
         pass
 
     rtl = (lang == "he")
-    if rtl:
-        _register_hebrew_fonts()
+    _register_font()
 
     LABELS = {
         "en": {
