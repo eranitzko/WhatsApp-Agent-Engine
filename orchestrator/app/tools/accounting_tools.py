@@ -78,17 +78,15 @@ def _net_owed(db, group_jid: str, from_phone: str, to_phone: str) -> Decimal:
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
 _SCHEMAS: dict[str, dict] = {
-    "record_transaction": {
-        "name": "record_transaction",
+    "record_expense": {
+        "name": "record_expense",
         "category": "accounting",
         "description": (
-            "Use when a user reports that one person paid for others, or acknowledges a debt. "
+            "Use when one person paid for others, or a user acknowledges a debt. "
             "Examples: 'Eran paid for me ₪150', 'I owe Tal ₪200', 'I paid for Eden'. "
-            "The tool automatically handles routing: if the sender is reporting their own debt (1st-party), "
-            "the entry is recorded immediately and the creditor is notified. "
-            "If the sender is claiming credit at someone else's expense (2nd-party), "
-            "a confirmation request is sent to the other party before anything is recorded. "
-            "Returns: 'Recorded. [Name] has been notified.' or 'Confirmation request sent to [Name].'"
+            "Handles routing automatically: 1st-party (self-reported debt) is recorded immediately; "
+            "2nd-party (claimed credit at another's expense) sends a confirmation request first. "
+            "Returns: 'Recorded.' or 'Confirmation request sent to [Name].'"
         ),
         "input_schema": {
             "type": "object",
@@ -184,11 +182,12 @@ _SCHEMAS: dict[str, dict] = {
             "required": ["message", "send_at"],
         },
     },
-    "save_email": {
-        "name": "save_email",
+    "set_report_email": {
+        "name": "set_report_email",
         "category": "accounting",
         "description": (
-            "Use when a user wants to save their email address for report delivery. "
+            "Saves the user's email address for PDF/XLSX report delivery. "
+            "Use when a user says 'send reports to my email' or provides an address for export. "
             "Returns: confirmation that the email was saved."
         ),
         "input_schema": {
@@ -969,12 +968,12 @@ def get_accounting_tools() -> dict[str, dict]:
     return {
         name: {"schema": _SCHEMAS[name], "executor": executor}
         for name, executor in [
-            ("record_transaction",   _exec_record_transaction),
+            ("record_expense",       _exec_record_transaction),
             ("record_payment",       _exec_record_payment),
             ("get_balance",          _exec_get_balance),
             ("get_history",          _exec_get_history),
             ("set_reminder",         _exec_set_reminder),
-            ("save_email",           _exec_save_email),
+            ("set_report_email",     _exec_save_email),
             ("rename_participant",   _exec_rename_participant),
             ("set_household",        _exec_set_household),
             ("correct_transaction",  _exec_correct_transaction),

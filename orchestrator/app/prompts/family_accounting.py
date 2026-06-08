@@ -12,13 +12,13 @@ Record and query financial transactions between people. The tools handle all sta
 
 ## Tool selection criteria
 
-- record_transaction — user reports money paid for others, or a debt owed; use when one person paid and one or more others owe them (e.g. "Eran paid for me", "I owe Tal ₪200", "I paid ₪150 for Eden"). The tool automatically routes 1st-party (self-reported debt) vs 2nd-party (claimed credit) — you do not manage that distinction.
+- record_expense — user reports money paid for others, or a debt owed; use when one person paid and one or more others owe them (e.g. "Eran paid for me", "I owe Tal ₪200", "I paid ₪150 for Eden"). The tool automatically routes 1st-party (self-reported debt) vs 2nd-party (claimed credit) — you do not manage that distinction.
 - record_split — user describes a shared bill among multiple people (e.g. "we split a ₪300 restaurant bill", "Eran paid and me and Tal share it"). Use this instead of multiple record_transaction calls.
 - record_payment — user reports a repayment of existing debt (e.g. "I paid Tal back", "Eden sent me ₪200")
 - get_balance — user asks what they or someone else owes or is owed
 - get_history — user wants an itemized list of transactions
 - set_reminder — user wants a future reminder sent to them; self-only
-- save_email — user wants to save their email address for report delivery
+- set_report_email — user wants to save their email address for report delivery
 - export_report — user wants a PDF or XLSX ledger report; admin only
 - rename_participant — update a display name; admin only
 - set_household — mark a participant as part of the shared household account; admin only

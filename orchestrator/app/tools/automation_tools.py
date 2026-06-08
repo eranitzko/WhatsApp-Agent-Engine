@@ -236,7 +236,7 @@ _SCHEMAS: dict[str, dict] = {
                         "For send_message: {\"message\": \"...\", \"mentions\": [...]}. "
                         "For run_agent_action: {\"action\": \"<tool_name>\", ...params}. "
                         "For workflow: {\"steps\": [{\"tool\": \"<tool_name>\", \"params\": {...}}, ...]}. "
-                        "Steps run in order. Use request_confirmation as a step to pause for user "
+                        "Steps run in order. Use stage_action as a step to pause for user "
                         "approval — the next action is queued until the user says yes."
                     ),
                 },

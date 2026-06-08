@@ -7,7 +7,7 @@ from app.tools.invoice_tools import get_invoice_tools
 EXPECTED_TOOLS = [
     "get_status", "list_invoices", "get_invoice_summary", "update_config",
     "flag_invoice", "unflag_invoice", "set_invoice_date",
-    "set_invoice_amount", "add_date_format", "request_confirmation",
+    "set_invoice_amount", "add_date_format", "stage_action",
 ]
 
 def test_get_invoice_tools_returns_all_10_tools():
@@ -27,9 +27,9 @@ def test_get_invoice_tools_accepts_db_session_factory():
     assert len(tools) == 10
 
 @pytest.mark.asyncio
-async def test_request_confirmation_without_store_returns_error():
+async def test_stage_action_without_store_returns_error():
     tools = get_invoice_tools()
-    result = await tools["request_confirmation"]["executor"](
+    result = await tools["stage_action"]["executor"](
         {"action": "remove_invoice", "params": {}, "description": "Remove invoice"},
         group_jid="123@g.us",
         confirmation_store=None,
@@ -37,10 +37,10 @@ async def test_request_confirmation_without_store_returns_error():
     assert "Error" in result or "not available" in result
 
 @pytest.mark.asyncio
-async def test_request_confirmation_calls_store():
+async def test_stage_action_calls_store():
     mock_store = MagicMock()
     tools = get_invoice_tools()
-    result = await tools["request_confirmation"]["executor"](
+    result = await tools["stage_action"]["executor"](
         {"action": "remove_invoice", "params": {"invoice_id": "abc"}, "description": "Remove invoice abc"},
         group_jid="123@g.us",
         confirmation_store=mock_store,
@@ -70,7 +70,7 @@ def test_get_status_executor_is_async_callable():
 def test_multiple_calls_return_fresh_executors():
     tools_a = get_invoice_tools()
     tools_b = get_invoice_tools()
-    wrapped_tools = [n for n in EXPECTED_TOOLS if n != "request_confirmation"]
+    wrapped_tools = [n for n in EXPECTED_TOOLS if n != "stage_action"]
     for name in wrapped_tools:
         assert tools_a[name]["executor"] is not tools_b[name]["executor"], (
             f"{name}: executor is the same object across calls"
@@ -102,3 +102,10 @@ def test_no_negative_call_instructions_in_descriptions():
         desc = schema["description"].lower()
         assert "never call" not in desc, f"{schema['name']} contains 'never call'"
         assert "only execute after" not in desc, f"{schema['name']} contains 'only execute after'"
+
+
+def test_stage_action_tool_exists():
+    from app.tools.invoice_tools import get_invoice_tools
+    tools = get_invoice_tools()
+    assert "stage_action" in tools
+    assert "request_confirmation" not in tools

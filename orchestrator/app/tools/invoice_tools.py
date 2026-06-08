@@ -58,7 +58,7 @@ def _make_executor(orig_fn, tool_name: str):
         group_jid           — the WhatsApp group JID
         sender              — sender JID (not used by most tools)
         is_admin            — bool
-        confirmation_store  — ConfirmationStore instance (used by request_confirmation)
+        confirmation_store  — ConfirmationStore instance (used by stage_action)
     """
     async def executor(params: dict, **ctx) -> str:
         group_jid = ctx.get("group_jid", "")
@@ -78,7 +78,7 @@ def _make_executor(orig_fn, tool_name: str):
     return executor
 
 
-# ── request_confirmation — inline implementation ──────────────────────────────
+# ── stage_action — inline implementation ─────────────────────────────────────
 # Re-implemented inline rather than delegating to the original
 # exec_request_confirmation, which imports confirmation_store at module load
 # time and therefore cannot be patched at call time.  This also eliminates the
@@ -147,9 +147,9 @@ def get_invoice_tools(db_session_factory=None, **kwargs) -> dict[str, dict]:
             "executor": _make_executor(orig_fn, name),
         }
 
-    # request_confirmation uses inline implementation (avoids import-time singleton issue)
-    registry["request_confirmation"] = {
-        "schema":   _SCHEMA_BY_NAME["request_confirmation"],
+    # stage_action uses inline implementation (avoids import-time singleton issue)
+    registry["stage_action"] = {
+        "schema":   _SCHEMA_BY_NAME["stage_action"],
         "executor": _exec_request_confirmation,
     }
 

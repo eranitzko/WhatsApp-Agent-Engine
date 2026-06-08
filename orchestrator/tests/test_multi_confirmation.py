@@ -143,7 +143,7 @@ async def test_record_transaction_self_records_immediately(db):
          patch("app.tools.accounting_tools.to_ils", new=AsyncMock(return_value=Decimal("100"))):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
-        result = await tools["record_transaction"]["executor"](
+        result = await tools["record_expense"]["executor"](
             {
                 "payer_phone": "972500000002",
                 "participant_phones": ["972500000001"],  # sender IS the participant
@@ -170,7 +170,7 @@ async def test_record_transaction_payer_sends_awaits_participants(db):
          patch("app.tools.accounting_tools.to_ils", new=AsyncMock(return_value=Decimal("300"))):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
-        result = await tools["record_transaction"]["executor"](
+        result = await tools["record_expense"]["executor"](
             {
                 "payer_phone": "972500000001",   # sender IS payer
                 "participant_phones": ["972500000002", "972500000003"],
@@ -202,7 +202,7 @@ async def test_record_transaction_third_party_awaits_all(db):
          patch("app.tools.accounting_tools.to_ils", new=AsyncMock(return_value=Decimal("300"))):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
-        result = await tools["record_transaction"]["executor"](
+        result = await tools["record_expense"]["executor"](
             {
                 "payer_phone": "972500000002",
                 "participant_phones": ["972500000003", "972500000004"],

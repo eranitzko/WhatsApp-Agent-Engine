@@ -2,10 +2,11 @@
 
 Tools exposed to Claude:
   get_status, list_invoices, get_invoice_summary, update_config,
-  generate_report, flag_invoice, unflag_invoice, set_invoice_date, request_confirmation
+  flag_invoice, unflag_invoice, set_invoice_date, set_invoice_amount,
+  add_date_format, stage_action
 
 remove_invoice and send_report_by_email are NOT exposed as tools.
-They execute only via the confirmation callback in agent.py.
+They execute only via the confirmation callback.
 
 Admin enforcement happens here in code, independent of Claude's reasoning.
 """
@@ -174,13 +175,14 @@ TOOL_SCHEMAS: list[dict] = [
         },
     },
     {
-        "name": "request_confirmation",
+        "name": "stage_action",
         "description": (
-            "Use before executing any destructive or external action: removing an invoice, correcting its amount, "
-            "adding a date format, or sending anything outside the group. "
-            "Call this first, then tell the user what will happen and ask them to reply yes. "
-            "The action will only execute when the user confirms. "
-            "Returns: a confirmation prompt string that you should relay to the user."
+            "Stages a destructive or external action for user approval. "
+            "Use before: removing an invoice, correcting its amount, adding a date format, "
+            "or sending anything outside the group. "
+            "Tell the user what will happen and ask them to reply yes. "
+            "The action only executes when the user confirms. "
+            "Returns: a confirmation prompt to relay to the user."
         ),
         "input_schema": {
             "type": "object",
@@ -190,12 +192,11 @@ TOOL_SCHEMAS: list[dict] = [
                     "type": "object",
                     "description": (
                         "Parameters for the action. "
-                        "For remove_invoice: {invoice_id}. "
-                        "For send_email: {to_email, month (optional), year (optional), "
-                        "start_date (optional YYYY-MM-DD), end_date (optional YYYY-MM-DD), "
-                        "format ('pdf'|'excel'|'both'), attach_images (bool), dual_currency (bool|null)}. "
-                        "For set_invoice_amount: {invoice_id, new_amount}. "
-                        "For add_date_format: {format_string}. "
+                        "remove_invoice: {invoice_id}. "
+                        "send_email: {to, month?, year?, start_date?, end_date?, format, attach_images, dual_currency?}. "
+                        "set_invoice_amount: {invoice_id, new_amount}. "
+                        "add_date_format: {format_string}. "
+                        "Note: use key 'to' (not 'to_email') for the recipient address."
                     ),
                 },
                 "description": {"type": "string", "description": "Short label identifying what will be removed or sent (e.g. vendor, date, amount). No warnings or caveats."},
@@ -651,7 +652,7 @@ EXECUTORS = {
     "set_invoice_date":     exec_set_invoice_date,
     "set_invoice_amount":   exec_set_invoice_amount,
     "add_date_format":      exec_add_date_format,
-    "request_confirmation": exec_request_confirmation,
+    "stage_action": exec_request_confirmation,
 }
 
 

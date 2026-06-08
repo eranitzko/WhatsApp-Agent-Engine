@@ -64,7 +64,7 @@ async def test_save_email_creates_profile(db):
     with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
-        result = await tools["save_email"]["executor"](
+        result = await tools["set_report_email"]["executor"](
             {"email": "eran@example.com"},
             group_jid="123@g.us",
             sender="972500000001@s.whatsapp.net",
@@ -86,7 +86,7 @@ async def test_save_email_updates_existing(db):
     with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
-        await tools["save_email"]["executor"](
+        await tools["set_report_email"]["executor"](
             {"email": "new@example.com"},
             group_jid="123@g.us",
             sender="972500000001@s.whatsapp.net",

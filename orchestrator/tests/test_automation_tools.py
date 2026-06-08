@@ -576,7 +576,7 @@ async def test_create_workflow_automation_saves_rule(db):
                     "steps": [
                         {"tool": "export_report", "params": {"format": "pdf", "delivery": "group"}},
                         {
-                            "tool": "request_confirmation",
+                            "tool": "stage_action",
                             "params": {
                                 "action": "export_report",
                                 "params": {"format": "pdf", "delivery": "email"},

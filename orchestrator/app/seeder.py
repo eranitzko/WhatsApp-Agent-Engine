@@ -16,7 +16,7 @@ AUTOMATION_TOOLS = [
 INVOICE_CURATOR_TOOLS = [
     "get_status", "list_invoices", "get_invoice_summary",
     "flag_invoice", "unflag_invoice", "set_invoice_date", "set_invoice_amount",
-    "add_date_format", "update_config", "request_confirmation",
+    "add_date_format", "update_config", "stage_action",
     *AUTOMATION_TOOLS,
 ]
 
@@ -25,9 +25,9 @@ NOTION_ASSISTANT_TOOLS = [
 ]
 
 FAMILY_ACCOUNTING_TOOLS = [
-    "record_transaction", "record_payment", "get_balance",
+    "record_expense", "record_payment", "get_balance",
     "get_history", "set_reminder",
-    "save_email", "rename_participant", "set_household",
+    "set_report_email", "rename_participant", "set_household",
     "correct_transaction", "commit_correction",
     "create_report_format", "list_report_formats", "delete_report_format",
     *AUTOMATION_TOOLS,

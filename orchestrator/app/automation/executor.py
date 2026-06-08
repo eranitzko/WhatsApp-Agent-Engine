@@ -23,7 +23,7 @@ class AutomationExecutor:
       - send_message: sends a WhatsApp message to the group.
       - run_agent_action: calls one tool from the ToolRegistry.
       - workflow: calls a sequence of tools in order; stops on first failure.
-        confirmation_store is passed in ctx so request_confirmation works.
+        confirmation_store is passed in ctx so stage_action works.
     """
 
     async def execute(self, rule: "AutomationRule", db: "Session") -> None:
@@ -84,7 +84,7 @@ class AutomationExecutor:
 
         - Resolves {{variable}} templates in all step params before execution.
         - Stores step outputs under output_key for use in later steps.
-        - Passes confirmation_store in ctx so request_confirmation works.
+        - Passes confirmation_store in ctx so stage_action works.
         - Stops at the first step that raises or uses an unknown tool.
         """
         from app.agent.confirmation import confirmation_store as _store
@@ -143,7 +143,7 @@ class AutomationExecutor:
                     "Automation workflow step %d (%r) returned for %s: %s",
                     i, tool_name, group_jid, result,
                 )
-                if tool_name == "request_confirmation":
+                if tool_name == "stage_action":
                     # Surface the confirmation prompt in the group and stop.
                     # Remaining steps don't run — the confirmed action in
                     # confirmation_store fires when the user replies "yes".

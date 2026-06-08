@@ -9,9 +9,9 @@ from app.db.models import LedgerEntry, ScheduledMessage
 from app.tools.accounting_tools import get_accounting_tools
 
 EXPECTED_TOOLS = [
-    "record_transaction", "record_payment", "get_balance",
+    "record_expense", "record_payment", "get_balance",
     "get_history", "set_reminder",
-    "save_email", "rename_participant", "set_household",
+    "set_report_email", "rename_participant", "set_household",
     "correct_transaction", "commit_correction",
     "create_report_format", "list_report_formats", "delete_report_format",
 ]
@@ -64,7 +64,7 @@ async def test_record_transaction_creates_legs_for_each_participant(db):
     with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)), \
          patch("app.tools.accounting_tools.to_ils", new=AsyncMock(return_value=Decimal("300"))):
         tools = get_accounting_tools()
-        result = await tools["record_transaction"]["executor"](
+        result = await tools["record_expense"]["executor"](
             {
                 "payer_phone": "972500000001",
                 "participant_phones": ["972500000002", "972500000003"],
@@ -179,7 +179,7 @@ async def test_record_transaction_uses_account_service_when_injected(db):
     with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)), \
          patch("app.tools.accounting_tools.to_ils", new=AsyncMock(return_value=Decimal("100"))):
         tools = get_accounting_tools()
-        result = await tools["record_transaction"]["executor"](
+        result = await tools["record_expense"]["executor"](
             {
                 "payer_phone": "972500000001",
                 "participant_phones": ["972500000002"],
@@ -211,3 +211,16 @@ def test_commit_correction_has_step_label():
     desc = tools["commit_correction"]["schema"]["description"]
     assert "Step 2 of 2" in desc
     assert "correct_transaction" in desc
+
+
+def test_record_expense_tool_exists():
+    from app.tools.accounting_tools import get_accounting_tools
+    tools = get_accounting_tools()
+    assert "record_expense" in tools
+    assert "record_transaction" not in tools
+
+def test_set_report_email_tool_exists():
+    from app.tools.accounting_tools import get_accounting_tools
+    tools = get_accounting_tools()
+    assert "set_report_email" in tools
+    assert "save_email" not in tools

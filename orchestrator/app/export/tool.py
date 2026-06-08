@@ -52,7 +52,7 @@ async def _exec_export_report(params: dict, **ctx) -> str:
 
     email = _resolve_email(params, sender_phone) if delivery in ("email", "both") else None
     if delivery in ("email", "both") and not email:
-        return "No email address available. Provide one or save it with save_email."
+        return "No email address available. Provide one or save it with set_report_email."
 
     with SessionLocal() as db:
         blueprint_id = _blueprint_for_group(group_jid, db)
