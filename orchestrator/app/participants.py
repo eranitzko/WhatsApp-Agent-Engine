@@ -75,12 +75,24 @@ def build_participant_block(db: Session, group_jid: str) -> str | None:
                 name = gp.admin_name or gp.push_name
         known_lines.append(f"- {name or ua.phone}: {ua.phone}")
 
+    # Collect first names already visible in the group (to avoid duplicating people
+    # whose GroupParticipant.phone is a WhatsApp LID rather than a human phone).
+    shown_first_names = {
+        (r.admin_name or r.push_name or "").split()[0].lower()
+        for r in rows
+        if (r.admin_name or r.push_name)
+    }
+
     # Admin numbers not covered by a UserAccount (e.g. pending registration)
     for an in db.query(AdminNumbers).all():
         if an.phone_number in seen:
             continue
-        seen.add(an.phone_number)
         label = an.label if (an.label and an.label != "owner") else None
+        # Skip if this person is already shown under their push_name (LID mismatch case)
+        if label and label.split()[0].lower() in shown_first_names:
+            seen.add(an.phone_number)  # mark as seen so UserAccount loop also skips
+            continue
+        seen.add(an.phone_number)
         known_lines.append(f"- {label or an.phone_number}: {an.phone_number}")
 
     if known_lines:

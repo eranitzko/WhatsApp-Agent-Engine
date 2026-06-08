@@ -51,8 +51,63 @@ class AccountService:
         return row.group_type or "unregistered"
 
     def get_personal_group_jid(self, db: Session, phone: str) -> str | None:
+        """Return the personal group JID for a user identified by phone.
+
+        Tries three strategies in order:
+        1. UserAccount table (the canonical path for registered personal groups).
+        2. GroupParticipant.phone exact match — handles WhatsApp LID-format phone
+           numbers that bypass the UserAccount table.
+        3. AdminNumbers label → GroupParticipant push_name fuzzy match — handles
+           the case where the agent uses a human-format phone number (e.g.
+           "972528695501") but GroupParticipant stores a WhatsApp LID ("8650248708313").
+           Matches when the AdminNumbers label appears anywhere in the push_name
+           (case-insensitive).  Prefers family_accounting groups.
+        """
+        from app.db.models import GroupParticipant, GroupRegistry
+
+        # 1. UserAccount (intended path)
         acct = self.resolve_user(db, phone)
-        return acct.group_jid if acct else None
+        if acct:
+            return acct.group_jid
+
+        # 2. Direct GroupParticipant match (phone may already be a LID)
+        gps = (
+            db.query(GroupParticipant)
+            .filter_by(phone=phone, status="active")
+            .all()
+        )
+        fallback_jid: str | None = None
+        for gp in gps:
+            reg = db.get(GroupRegistry, gp.group_jid)
+            if reg and reg.blueprint_id == "family_accounting":
+                return gp.group_jid
+            if reg and fallback_jid is None:
+                fallback_jid = gp.group_jid
+        if fallback_jid:
+            return fallback_jid
+
+        # 3. AdminNumbers label → push_name fuzzy match
+        admin_row = db.query(AdminNumbers).filter_by(phone_number=phone).first()
+        if admin_row and admin_row.label and admin_row.label.lower() != "owner":
+            label_lower = admin_row.label.lower()
+            all_gps = (
+                db.query(GroupParticipant)
+                .filter_by(status="active")
+                .all()
+            )
+            best_jid: str | None = None
+            for gp in all_gps:
+                pname = (gp.admin_name or gp.push_name or "").lower()
+                if label_lower and label_lower in pname:
+                    reg = db.get(GroupRegistry, gp.group_jid)
+                    if reg and reg.blueprint_id == "family_accounting":
+                        return gp.group_jid
+                    if reg and best_jid is None:
+                        best_jid = gp.group_jid
+            if best_jid:
+                return best_jid
+
+        return None
 
     def _confirmation_timeout_hours(self, db: Session) -> int:
         from app.db.models import SystemConfig
@@ -129,8 +184,18 @@ class AccountService:
         phone: str,
         reply: str,
     ) -> bool:
-        """Returns True if a pending confirmation was resolved, False if none found."""
+        """Returns True if a pending confirmation was resolved, False if none found.
+
+        Tries exact (phone + group) match first.  Falls back to group-JID-only
+        match to handle WhatsApp LID vs human phone number mismatches: the agent
+        stores confirmations using the human-format phone from the tool call, but
+        the webhook delivers replies with a LID-format sender phone.  For personal
+        groups (one human per group) this is safe — any reply in the target group
+        is unambiguously from the intended recipient.
+        """
         now = datetime.now(timezone.utc)
+
+        # 1. Exact match (phone + group)
         conf = (
             db.query(CrossGroupConfirmation)
             .filter_by(target_phone=phone, target_group_jid=group_jid, status="pending")
@@ -138,6 +203,17 @@ class AccountService:
             .order_by(CrossGroupConfirmation.created_at.asc())
             .first()
         )
+
+        # 2. Group-only fallback (handles LID ↔ phone mismatch)
+        if conf is None:
+            conf = (
+                db.query(CrossGroupConfirmation)
+                .filter_by(target_group_jid=group_jid, status="pending")
+                .filter(CrossGroupConfirmation.expires_at > now)
+                .order_by(CrossGroupConfirmation.created_at.asc())
+                .first()
+            )
+
         if conf is None:
             return False
 
