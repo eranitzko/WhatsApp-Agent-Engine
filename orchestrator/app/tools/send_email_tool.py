@@ -114,11 +114,13 @@ _SCHEMA = {
     "name": "send_email",
     "category": "export",
     "description": (
-        "Send a custom plain-text email. Admin only. "
-        "All fields support {{variable}} templates resolved at send time: "
-        "{{previous_month}}, {{previous_month_invoice_total}}, {{monthly_invoice_total}}, "
-        "{{open_debt_amount}}, {{today}}, {{current_month}}, {{previous_month_name}}, "
-        "{{previous_month_year}}, plus outputs of earlier workflow steps via their output_key."
+        "Sends a custom plain-text email with template variable support. Admin only. "
+        "Use for custom messages, notifications, or automation workflows — "
+        "NOT for delivering generated PDF/XLSX reports. "
+        "To email a report, use export_invoice_report or export_accounting_report with delivery='email'. "
+        "Supported variables: {{previous_month}}, {{previous_month_invoice_total}}, "
+        "{{monthly_invoice_total}}, {{open_debt_amount}}, {{today}}, {{current_month}}, "
+        "{{previous_month_name}}, {{previous_month_year}}, plus workflow step outputs."
     ),
     "input_schema": {
         "type": "object",
