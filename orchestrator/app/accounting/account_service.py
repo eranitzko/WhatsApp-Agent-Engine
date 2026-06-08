@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone, timedelta
+import uuid as _uuid_mod
+from datetime import datetime, timezone, timedelta, date as _date
 from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app import bridge_client
 from app.db.models import (
-    AdminNumbers, CrossGroupConfirmation, GroupRegistry, SplitTransaction,
-    UserAccount, UserProfile,
+    AdminNumbers, CrossGroupConfirmation, GroupRegistry, LedgerEntry,
+    LedgerSettlement, SplitTransaction, UserAccount, UserProfile,
 )
+from app.tools.accounting_fifo import DebtLeg, apply_payment
 
 logger = logging.getLogger(__name__)
 
@@ -220,13 +222,151 @@ class AccountService:
             )
             return f"Confirmation request sent to {debtor_name}. I'll notify you when they respond."
 
+    # ── Payment FIFO settlement ───────────────────────────────────────────────
+
+    async def _apply_payment_fifo(
+        self,
+        db: Session,
+        group_jid: str,
+        payer_phone: str,
+        payee_phone: str,
+        amount_ils: Decimal,
+        payment_date: _date,
+    ) -> str:
+        """Apply FIFO settlement for a payment and return a summary string."""
+        now = datetime.now(timezone.utc)
+        open_rows = (
+            db.query(LedgerEntry)
+            .filter(
+                LedgerEntry.group_jid == group_jid,
+                LedgerEntry.from_phone == payer_phone,
+                LedgerEntry.to_phone == payee_phone,
+                LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
+            )
+            .order_by(LedgerEntry.transaction_date)
+            .all()
+        )
+        debt_legs = [
+            DebtLeg(
+                id=r.id,
+                amount_ils=r.amount_ils,
+                amount_settled_ils=r.amount_settled_ils or Decimal("0"),
+                transaction_date=r.transaction_date,
+            )
+            for r in open_rows
+        ]
+        result = apply_payment(amount_ils, debt_legs)
+        for leg_id, new_settled in result.updated_legs:
+            row = db.get(LedgerEntry, leg_id)
+            if row:
+                row.amount_settled_ils = new_settled
+        payment_leg = LedgerEntry(
+            transaction_id=str(_uuid_mod.uuid4()),
+            group_jid=group_jid,
+            from_phone=payer_phone,
+            to_phone=payee_phone,
+            amount_ils=amount_ils,
+            amount_settled_ils=amount_ils,
+            description=f"Payment on {payment_date.isoformat()}",
+            transaction_date=payment_date,
+            created_at=now,
+        )
+        db.add(payment_leg)
+        db.flush()
+        for debt_leg_id, applied_amount in result.settlements:
+            db.add(LedgerSettlement(
+                payment_leg_id=payment_leg.id,
+                debt_leg_id=debt_leg_id,
+                amount_ils=applied_amount,
+                created_at=now,
+            ))
+        db.commit()
+        parts = [f"{amt:.2f} ILS off {did[:8]}" for did, amt in result.settlements]
+        summary = "; ".join(parts) if parts else "no open debts found"
+        return f"Payment of {amount_ils:.2f} ILS recorded. {summary}."
+
+    async def process_payment(
+        self,
+        db: Session,
+        reporter_phone: str,
+        reporter_group_jid: str,
+        payer_phone: str,
+        payee_phone: str,
+        amount_ils: Decimal,
+        payment_date: _date,
+    ) -> str:
+        """Route a payment through the correct path.
+
+        First-party (payer self-reports): record immediately and notify payee.
+        Second-party (payee reports): send a confirmation request to the payer's
+        personal group and wait for their reply.
+        """
+        payer_name = self.get_display_name(db, payer_phone)
+        payee_name = self.get_display_name(db, payee_phone)
+
+        if self._is_first_party(reporter_phone, payer_phone):
+            # Payer is self-reporting → record immediately
+            summary = await self._apply_payment_fifo(
+                db, reporter_group_jid, payer_phone, payee_phone, amount_ils, payment_date
+            )
+            notify_msg = (
+                f"{payer_name} reported a ₪{float(amount_ils):.2f} payment to you. "
+                f"Your balance has been updated."
+            )
+            await self.notify_user(db, payee_phone, notify_msg)
+            return f"Recorded. {payee_name} has been notified."
+        else:
+            # Payee is reporting → payer must confirm in their own personal group
+            confirm_msg = (
+                f"{payee_name} says you paid them ₪{float(amount_ils):.2f} on {payment_date}. "
+                f"Confirm? (yes / no)"
+            )
+            await self.request_confirmation(
+                db=db,
+                initiator_phone=reporter_phone,
+                initiator_group_jid=reporter_group_jid,
+                target_phone=payer_phone,
+                action_type="record_payment",
+                action_payload={
+                    "group_jid": reporter_group_jid,
+                    "payer_phone": payer_phone,
+                    "payee_phone": payee_phone,
+                    "amount_ils": str(amount_ils),
+                    "payment_date": str(payment_date),
+                },
+                confirmation_message=confirm_msg,
+            )
+            return f"Confirmation request sent to {payer_name}. I'll notify you when they respond."
+
     async def commit_confirmed_transaction(self, db: Session, conf: CrossGroupConfirmation) -> None:
         """Write the ledger entry for a confirmed 2nd-party transaction."""
-        from app.db.models import LedgerEntry
-        import uuid as _uuid_mod
-        from datetime import date as _date
-
         payload = json.loads(conf.action_payload)
+
+        if conf.action_type == "record_payment":
+            # FIFO settlement for a confirmed payment
+            payment_date = _date.fromisoformat(payload["payment_date"])
+            amount_ils = Decimal(payload["amount_ils"])
+            await self._apply_payment_fifo(
+                db,
+                payload["group_jid"],
+                payload["payer_phone"],
+                payload["payee_phone"],
+                amount_ils,
+                payment_date,
+            )
+            payer_name = self.get_display_name(db, payload["payer_phone"])
+            payee_name = self.get_display_name(db, payload["payee_phone"])
+            await self.notify_user(
+                db, payload["payee_phone"],
+                f"{payer_name} confirmed the ₪{float(amount_ils):.2f} payment."
+            )
+            await bridge_client.send_message(
+                conf.target_group_jid,
+                f"Confirmed. Your payment to {payee_name} has been recorded."
+            )
+            return
+
+        # Default: record_expense — write a new ledger debt entry
         entry = LedgerEntry(
             transaction_id=str(_uuid_mod.uuid4()),
             group_jid=payload["group_jid"],

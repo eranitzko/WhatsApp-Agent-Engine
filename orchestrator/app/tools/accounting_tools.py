@@ -563,6 +563,24 @@ async def _exec_record_payment(params: dict, **ctx) -> str:
     pay_date_str = params.get("payment_date") or date.today().isoformat()
     pay_date = date.fromisoformat(pay_date_str)
 
+    if _account_service:
+        # Cross-group routing path: confirmation goes to the payer's personal group
+        # with a 24-hour TTL so they can respond at their own pace.
+        with SessionLocal() as db:
+            try:
+                return await _account_service.process_payment(
+                    db=db,
+                    reporter_phone=sender_phone,
+                    reporter_group_jid=group_jid,
+                    payer_phone=payer,
+                    payee_phone=payee,
+                    amount_ils=amount_ils,
+                    payment_date=pay_date,
+                )
+            except ValueError as exc:
+                return f"Cannot process payment: {exc}"
+
+    # Legacy same-group path (no AccountService configured)
     # Determine who needs to confirm:
     # - If sender is the payer → payee must confirm receiving.
     # - Otherwise → payer must confirm paying.
