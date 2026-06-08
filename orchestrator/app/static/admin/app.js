@@ -137,14 +137,18 @@ async function renderGroups(app) {
         <tr id="group-detail-${i}" style="display:none">
           <td colspan="4" style="padding:0">
             <div style="padding:10px 16px 14px;background:var(--surface);border-top:1px solid var(--border)">
-              ${g.members.length
-                ? `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Members</div>
+              ${g.member_count > 0
+                ? `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Members (${g.member_count})</div>
                    <div style="display:flex;flex-wrap:wrap;gap:6px">
-                     ${g.members.map(m => `
-                       <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:12px">
-                         <span style="font-weight:500">${escHtml(m.name)}</span>
-                         ${m.name !== m.phone ? `<span style="color:var(--muted);margin-left:4px">${escHtml(m.phone)}</span>` : ''}
-                       </div>`).join('')}
+                     ${g.members.map(m => m.name
+                       ? `<div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:12px">
+                            <span style="font-weight:500">${escHtml(m.name)}</span>
+                            ${m.phone ? `<span style="color:var(--muted);margin-left:6px;font-size:11px">${escHtml(m.phone)}</span>` : ''}
+                          </div>`
+                       : `<div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:12px;color:var(--muted)">
+                            Unknown member
+                          </div>`
+                     ).join('')}
                    </div>`
                 : '<span style="font-size:12px;color:var(--muted)">No members recorded yet.</span>'}
             </div>

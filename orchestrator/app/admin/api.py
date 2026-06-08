@@ -84,6 +84,16 @@ async def list_groups():
         for gp in all_gp:
             gp_by_group.setdefault(gp.group_jid, {})[gp.phone] = gp
 
+        # Build name→phone map from AdminNumbers for reverse lookup.
+        # Keyed by lowercase first-word of the label (e.g. "eran", "sivan").
+        # This lets us show actual phone numbers for admins whose DB entry
+        # uses a WhatsApp LID instead of a real phone.
+        admin_label_to_phone: dict[str, str] = {}
+        for an in db.query(AdminNumbers).all():
+            if an.label:
+                key = an.label.strip().split()[0].lower()
+                admin_label_to_phone[key] = an.phone_number
+
         result = []
         for r in rows:
             bridge_info = bridge_map.get(r.group_jid, {})
@@ -92,22 +102,33 @@ async def list_groups():
             db_phones = gp_by_group.get(r.group_jid, {})
 
             if bridge_participants:
-                # Use bridge as the source of truth for membership
+                # Use bridge as the source of truth for membership.
+                # Bot is already excluded by the bridge (/groups filters sock.user.id).
                 members = []
                 for p in bridge_participants:
                     phone = p["jid"].split("@")[0].split(":")[0]
                     if bot_phone and phone == bot_phone:
-                        continue  # exclude the bot itself
+                        continue  # belt-and-suspenders fallback
                     gp = db_phones.get(phone)
-                    name = (gp.admin_name or gp.push_name) if gp else None
-                    members.append({"phone": phone, "name": name or phone})
+                    if gp:
+                        name = gp.admin_name or gp.push_name
+                        # Try to resolve the actual phone from AdminNumbers
+                        first = (name or "").split()[0].lower()
+                        display_phone = admin_label_to_phone.get(first) or phone
+                    else:
+                        name = None
+                        display_phone = phone
+                    members.append({"phone": display_phone, "name": name})
             else:
                 # Bridge data unavailable — fall back to DB participants
-                members = [
-                    {"phone": gp.phone, "name": gp.admin_name or gp.push_name or gp.phone}
-                    for gp in db_phones.values()
-                    if gp.status == "active" and gp.phone != bot_phone
-                ]
+                members = []
+                for gp in db_phones.values():
+                    if gp.status != "active" or gp.phone == bot_phone:
+                        continue
+                    name = gp.admin_name or gp.push_name
+                    first = (name or "").split()[0].lower()
+                    display_phone = admin_label_to_phone.get(first) or gp.phone
+                    members.append({"phone": display_phone, "name": name})
 
             result.append({
                 "group_jid": r.group_jid,

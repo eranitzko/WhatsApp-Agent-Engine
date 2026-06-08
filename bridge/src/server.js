@@ -91,13 +91,21 @@ app.get('/groups', requireBridgeAuth, async (_req, res) => {
   if (!sock) return res.status(503).json({ error: 'WhatsApp not connected' })
   try {
     const groups = await sock.groupFetchAllParticipating()
+    // Derive bot's own JID prefix so we can exclude it from participant lists
+    const botJid = sock.user?.id ?? ''
+    const botPrefix = botJid.split(':')[0].split('@')[0]
     const list = Object.values(groups).map(g => ({
       jid: g.id,
       name: g.subject,
-      participants: (g.participants || []).map(p => ({
-        jid: p.id,
-        isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
-      })),
+      participants: (g.participants || [])
+        .filter(p => {
+          const prefix = (p.id || '').split(':')[0].split('@')[0]
+          return prefix !== botPrefix
+        })
+        .map(p => ({
+          jid: p.id,
+          isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+        })),
     }))
     res.json({ groups: list })
   } catch (err) {
