@@ -48,8 +48,8 @@ class RegisterGroupRequest(BaseModel):
     blueprint_id: str
 
 
-async def _fetch_bridge_name_map() -> dict[str, str]:
-    """Fetch {jid: name} map from bridge. Returns empty dict on failure."""
+async def _fetch_bridge_groups() -> dict[str, dict]:
+    """Fetch {jid: {name, participants}} map from bridge. Returns empty dict on failure."""
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(
@@ -57,43 +57,61 @@ async def _fetch_bridge_name_map() -> dict[str, str]:
                 headers=_bridge_headers(),
             )
             if resp.status_code == 200:
-                return {g["jid"]: g["name"] for g in resp.json().get("groups", [])}
+                return {
+                    g["jid"]: {
+                        "name": g.get("name", g["jid"]),
+                        "participants": g.get("participants", []),
+                    }
+                    for g in resp.json().get("groups", [])
+                }
     except Exception:
-        logger.warning("Could not fetch group names from bridge", exc_info=True)
+        logger.warning("Could not fetch groups from bridge", exc_info=True)
     return {}
 
 
 @router.get("/groups", dependencies=[Depends(require_auth)])
 async def list_groups():
-    name_map = await _fetch_bridge_name_map()
-    bot_phone = ""
-    try:
-        from app.config import settings as _s
-        bot_phone = _s.bot_phone_number or ""
-    except Exception:
-        pass
+    bridge_map = await _fetch_bridge_groups()
+    bot_phone = settings.bot_phone_number or ""
+
     with SessionLocal() as db:
         rows = db.query(GroupRegistry).all()
         blueprints = {b.id: b.display_name for b in db.query(Blueprint).all()}
+
+        # Pre-load all GroupParticipant rows for name lookups
+        all_gp = db.query(GroupParticipant).all()
+        gp_by_group: dict[str, dict[str, GroupParticipant]] = {}
+        for gp in all_gp:
+            gp_by_group.setdefault(gp.group_jid, {})[gp.phone] = gp
+
         result = []
         for r in rows:
-            participants = (
-                db.query(GroupParticipant)
-                .filter_by(group_jid=r.group_jid, status="active")
-                .all()
-            )
-            # Exclude the bot itself from the member list
-            members = [
-                {
-                    "phone": p.phone,
-                    "name": p.admin_name or p.push_name or p.phone,
-                }
-                for p in participants
-                if p.phone != bot_phone
-            ]
+            bridge_info = bridge_map.get(r.group_jid, {})
+            group_name = bridge_info.get("name") or r.group_jid
+            bridge_participants = bridge_info.get("participants", [])
+            db_phones = gp_by_group.get(r.group_jid, {})
+
+            if bridge_participants:
+                # Use bridge as the source of truth for membership
+                members = []
+                for p in bridge_participants:
+                    phone = p["jid"].split("@")[0].split(":")[0]
+                    if bot_phone and phone == bot_phone:
+                        continue  # exclude the bot itself
+                    gp = db_phones.get(phone)
+                    name = (gp.admin_name or gp.push_name) if gp else None
+                    members.append({"phone": phone, "name": name or phone})
+            else:
+                # Bridge data unavailable — fall back to DB participants
+                members = [
+                    {"phone": gp.phone, "name": gp.admin_name or gp.push_name or gp.phone}
+                    for gp in db_phones.values()
+                    if gp.status == "active" and gp.phone != bot_phone
+                ]
+
             result.append({
                 "group_jid": r.group_jid,
-                "group_name": name_map.get(r.group_jid, r.group_jid),
+                "group_name": group_name,
                 "blueprint_id": r.blueprint_id,
                 "blueprint_name": blueprints.get(r.blueprint_id, r.blueprint_id),
                 "status": r.status,
@@ -140,18 +158,15 @@ async def bridge_groups():
     with SessionLocal() as db:
         registered = {r.group_jid for r in db.query(GroupRegistry).all()}
 
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(
-                f"{settings.bridge_url}/groups",
-                headers=_bridge_headers(),
-            )
-            resp.raise_for_status()
-            all_groups = resp.json().get("groups", [])
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Bridge unreachable: {exc}")
+    bridge_map = await _fetch_bridge_groups()
+    if not bridge_map:
+        raise HTTPException(status_code=502, detail="Bridge unreachable or returned no groups")
 
-    return [{"jid": g["jid"], "name": g.get("name", g["jid"])} for g in all_groups if g["jid"] not in registered]
+    return [
+        {"jid": jid, "name": info["name"]}
+        for jid, info in bridge_map.items()
+        if jid not in registered
+    ]
 
 
 # -- Admins ------------------------------------------------------------------

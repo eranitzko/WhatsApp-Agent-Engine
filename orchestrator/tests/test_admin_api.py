@@ -56,11 +56,11 @@ async def test_list_groups(db):
 
     from app.admin import api as admin_api
 
-    async def _mock_name_map():
-        return {"111@g.us": "Test Group"}
+    async def _mock_bridge_groups():
+        return {"111@g.us": {"name": "Test Group", "participants": []}}
 
     with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)), \
-         patch.object(admin_api, "_fetch_bridge_name_map", _mock_name_map):
+         patch.object(admin_api, "_fetch_bridge_groups", _mock_bridge_groups):
         app = _make_app(db)
         client = TestClient(app)
         resp = client.get("/admin/api/groups")
@@ -84,11 +84,11 @@ async def test_list_groups_bridge_fallback(db):
 
     Session = _get_session_factory(db)
 
-    async def _empty_name_map():
+    async def _empty_bridge_groups():
         return {}
 
     with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)), \
-         patch.object(admin_api, "_fetch_bridge_name_map", _empty_name_map):
+         patch.object(admin_api, "_fetch_bridge_groups", _empty_bridge_groups):
         client = TestClient(app)
         resp = client.get("/admin/api/groups")
         assert resp.status_code == 200

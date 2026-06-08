@@ -91,7 +91,14 @@ app.get('/groups', requireBridgeAuth, async (_req, res) => {
   if (!sock) return res.status(503).json({ error: 'WhatsApp not connected' })
   try {
     const groups = await sock.groupFetchAllParticipating()
-    const list = Object.values(groups).map(g => ({ jid: g.id, name: g.subject }))
+    const list = Object.values(groups).map(g => ({
+      jid: g.id,
+      name: g.subject,
+      participants: (g.participants || []).map(p => ({
+        jid: p.id,
+        isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+      })),
+    }))
     res.json({ groups: list })
   } catch (err) {
     res.status(500).json({ error: err.message })
