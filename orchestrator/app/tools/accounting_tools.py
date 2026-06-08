@@ -182,6 +182,35 @@ _SCHEMAS: dict[str, dict] = {
             "required": ["message", "send_at"],
         },
     },
+    "list_reminders": {
+        "name": "list_reminders",
+        "category": "accounting",
+        "description": (
+            "Lists pending (not yet sent) reminders for the current user in this group. "
+            "Shows each reminder's ID prefix, message text, and scheduled time. "
+            "Returns: numbered list, or 'No pending reminders.'"
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    "cancel_reminder": {
+        "name": "cancel_reminder",
+        "category": "accounting",
+        "description": (
+            "Cancels a pending reminder by its ID prefix. "
+            "Use the ID prefix shown by list_reminders (at least 4 characters). "
+            "Returns: confirmation that the reminder was cancelled."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reminder_id": {
+                    "type": "string",
+                    "description": "The reminder ID prefix shown by list_reminders (at least 4 characters).",
+                },
+            },
+            "required": ["reminder_id"],
+        },
+    },
     "set_report_email": {
         "name": "set_report_email",
         "category": "accounting",
@@ -642,6 +671,62 @@ async def _exec_set_reminder(params: dict, **ctx) -> str:
     return f"Reminder set for {send_at.isoformat()}: \"{message}\""
 
 
+async def _exec_list_reminders(params: dict, **ctx) -> str:
+    group_jid = ctx.get("group_jid", "")
+    to_phone = _sender_phone(ctx)
+    if not to_phone:
+        return "Error: could not determine sender phone."
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        rows = (
+            db.query(ScheduledMessage)
+            .filter(
+                ScheduledMessage.group_jid == group_jid,
+                ScheduledMessage.to_phone == to_phone,
+                ScheduledMessage.sent == False,
+                ScheduledMessage.cancelled == False,
+                ScheduledMessage.send_at > now,
+            )
+            .order_by(ScheduledMessage.send_at)
+            .all()
+        )
+    if not rows:
+        return "No pending reminders."
+    lines = [
+        f"{i+1}. [{r.id[:8]}] {r.send_at.strftime('%d/%m/%Y %H:%M')} UTC — {r.message}"
+        for i, r in enumerate(rows)
+    ]
+    return "\n".join(lines)
+
+
+async def _exec_cancel_reminder(params: dict, **ctx) -> str:
+    group_jid = ctx.get("group_jid", "")
+    to_phone = _sender_phone(ctx)
+    if not to_phone:
+        return "Error: could not determine sender phone."
+    reminder_id_prefix = params.get("reminder_id", "").strip()
+    if len(reminder_id_prefix) < 4:
+        return "Please provide at least 4 characters of the reminder ID."
+    with SessionLocal() as db:
+        row = (
+            db.query(ScheduledMessage)
+            .filter(
+                ScheduledMessage.group_jid == group_jid,
+                ScheduledMessage.to_phone == to_phone,
+                ScheduledMessage.id.startswith(reminder_id_prefix),
+                ScheduledMessage.sent == False,
+                ScheduledMessage.cancelled == False,
+            )
+            .first()
+        )
+        if row is None:
+            return f"No pending reminder found matching '{reminder_id_prefix}'."
+        row.cancelled = True
+        db.commit()
+        msg = row.message
+    return f"Reminder cancelled: \"{msg}\""
+
+
 async def _exec_save_email(params: dict, **ctx) -> str:
     phone = _sender_phone(ctx)
     if not phone:
@@ -973,6 +1058,8 @@ def get_accounting_tools() -> dict[str, dict]:
             ("get_balance",          _exec_get_balance),
             ("get_history",          _exec_get_history),
             ("set_reminder",         _exec_set_reminder),
+            ("list_reminders",       _exec_list_reminders),
+            ("cancel_reminder",      _exec_cancel_reminder),
             ("set_report_email",     _exec_save_email),
             ("rename_participant",   _exec_rename_participant),
             ("set_household",        _exec_set_household),

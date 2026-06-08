@@ -70,7 +70,11 @@ async def _dispatch_due_messages() -> None:
     with SessionLocal() as db:
         due = (
             db.query(ScheduledMessage)
-            .filter(ScheduledMessage.sent == False, ScheduledMessage.send_at <= now)
+            .filter(
+                ScheduledMessage.sent == False,
+                ScheduledMessage.cancelled == False,
+                ScheduledMessage.send_at <= now,
+            )
             .all()
         )
         for msg in due:

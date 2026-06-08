@@ -10,7 +10,7 @@ from app.tools.accounting_tools import get_accounting_tools
 
 EXPECTED_TOOLS = [
     "record_expense", "record_payment", "get_balance",
-    "get_history", "set_reminder",
+    "get_history", "set_reminder", "list_reminders", "cancel_reminder",
     "set_report_email", "rename_participant", "set_household",
     "correct_transaction", "commit_correction",
     "create_report_format", "list_report_formats", "delete_report_format",
@@ -224,3 +224,99 @@ def test_set_report_email_tool_exists():
     tools = get_accounting_tools()
     assert "set_report_email" in tools
     assert "save_email" not in tools
+
+
+@pytest.mark.asyncio
+async def test_list_reminders_returns_pending(db):
+    import uuid
+    future = datetime.now(timezone.utc) + timedelta(hours=2)
+    msg_id = str(uuid.uuid4())
+    db.add(ScheduledMessage(
+        id=msg_id,
+        group_jid="g@g.us",
+        to_phone="972501234567",
+        message="Test reminder",
+        send_at=future,
+        sent=False,
+        cancelled=False,
+    ))
+    db.commit()
+
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+        tools = get_accounting_tools()
+        result = await tools["list_reminders"]["executor"](
+            {},
+            group_jid="g@g.us",
+            sender="972501234567@s.whatsapp.net",
+            is_admin=False,
+        )
+    assert "Test reminder" in result
+
+
+@pytest.mark.asyncio
+async def test_list_reminders_returns_no_pending_when_empty(db):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+        tools = get_accounting_tools()
+        result = await tools["list_reminders"]["executor"](
+            {},
+            group_jid="g@g.us",
+            sender="972501234567@s.whatsapp.net",
+            is_admin=False,
+        )
+    assert "No pending reminders" in result
+
+
+@pytest.mark.asyncio
+async def test_cancel_reminder_marks_cancelled(db):
+    import uuid
+    future = datetime.now(timezone.utc) + timedelta(hours=2)
+    msg_id = str(uuid.uuid4())
+    db.add(ScheduledMessage(
+        id=msg_id,
+        group_jid="g@g.us",
+        to_phone="972501234567",
+        message="Cancel me",
+        send_at=future,
+        sent=False,
+        cancelled=False,
+    ))
+    db.commit()
+
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+        tools = get_accounting_tools()
+        result = await tools["cancel_reminder"]["executor"](
+            {"reminder_id": msg_id[:6]},
+            group_jid="g@g.us",
+            sender="972501234567@s.whatsapp.net",
+            is_admin=False,
+        )
+    assert "cancel" in result.lower() or "reminder" in result.lower()
+    db.expire_all()
+    updated = db.get(ScheduledMessage, msg_id)
+    assert updated.cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_cancel_reminder_not_found(db):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+        tools = get_accounting_tools()
+        result = await tools["cancel_reminder"]["executor"](
+            {"reminder_id": "zzzz"},
+            group_jid="g@g.us",
+            sender="972501234567@s.whatsapp.net",
+            is_admin=False,
+        )
+    assert "not found" in result.lower() or "no pending" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_cancel_reminder_short_prefix_rejected(db):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+        tools = get_accounting_tools()
+        result = await tools["cancel_reminder"]["executor"](
+            {"reminder_id": "ab"},
+            group_jid="g@g.us",
+            sender="972501234567@s.whatsapp.net",
+            is_admin=False,
+        )
+    assert "4 characters" in result or "at least" in result.lower()

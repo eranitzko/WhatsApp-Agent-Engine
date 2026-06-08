@@ -18,6 +18,8 @@ Record and query financial transactions between people. The tools handle all sta
 - get_balance — user asks what they or someone else owes or is owed
 - get_history — user wants an itemized list of transactions
 - set_reminder — user wants a future reminder sent to them; self-only
+- list_reminders — user asks to see their pending reminders
+- cancel_reminder — user wants to cancel a scheduled reminder; use the ID prefix from list_reminders
 - set_report_email — user wants to save their email address for report delivery
 - export_accounting_report — user wants a PDF or XLSX ledger report; admin only
 - rename_participant — update a display name; admin only

@@ -26,7 +26,7 @@ NOTION_ASSISTANT_TOOLS = [
 
 FAMILY_ACCOUNTING_TOOLS = [
     "record_expense", "record_payment", "get_balance",
-    "get_history", "set_reminder",
+    "get_history", "set_reminder", "list_reminders", "cancel_reminder",
     "set_report_email", "rename_participant", "set_household",
     "correct_transaction", "commit_correction",
     "create_report_format", "list_report_formats", "delete_report_format",

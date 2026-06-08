@@ -185,6 +185,7 @@ class ScheduledMessage(Base):
     message    = Column(Text, nullable=False)
     send_at    = Column(DateTime(timezone=True), nullable=False)
     sent       = Column(Boolean, nullable=False, default=False)
+    cancelled  = Column(Boolean, nullable=False, default=False, server_default="0")
     created_at = Column(DateTime(timezone=True), nullable=False,
                         default=lambda: datetime.now(timezone.utc))
 
