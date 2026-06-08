@@ -801,7 +801,7 @@ async def _exec_correct_transaction(params: dict, **ctx) -> str:
     if confirmation_store:
         confirmation_store.set(
             group_jid,
-            "apply_correction",
+            "commit_correction",
             {"token": result.token, "admin_phone": admin_phone},
             "\n".join(diff_lines),
         )

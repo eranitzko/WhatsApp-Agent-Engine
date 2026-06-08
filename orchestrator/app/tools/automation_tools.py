@@ -1,6 +1,6 @@
 """Automation engine CRUD tools for ToolRegistry.
 
-Five tools: create_automation, confirm_automation, list_automations,
+Tools: create_automation, activate_automation, list_automations,
 pause_automation, cancel_automation.
 
 group_jid is always taken from **ctx (injected by AgentRunner), never from params.
