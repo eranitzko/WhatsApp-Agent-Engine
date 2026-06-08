@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -14,9 +15,32 @@ logger = logging.getLogger(__name__)
 
 
 class AgentRunner:
+    # ── disabled_tools cache ──────────────────────────────────────────────────
+    # Loaded once at startup; refreshed by refresh_disabled_tools() whenever the
+    # admin panel writes to SystemConfig["disabled_tools"].  No time-based TTL —
+    # invalidation is event-driven so a disabled tool never stays active.
+    _disabled_tools: set[str] = set()
+
+    @classmethod
+    def refresh_disabled_tools(cls) -> None:
+        """Load (or reload) the disabled-tools set from DB into the class cache."""
+        try:
+            with SessionLocal() as db:
+                row = db.get(SystemConfig, "disabled_tools")
+                cls._disabled_tools = (
+                    set(json.loads(row.value)) if row and row.value else set()
+                )
+            logger.info("disabled_tools cache refreshed: %s", cls._disabled_tools)
+        except Exception:
+            logger.warning("Could not refresh disabled_tools cache", exc_info=True)
+
+    # ── constructor ───────────────────────────────────────────────────────────
+
     def __init__(self, client: anthropic.AsyncAnthropic, tool_registry: ToolRegistry):
         self.client = client
         self.registry = tool_registry
+
+    # ── main entry point ──────────────────────────────────────────────────────
 
     async def run(
         self,
@@ -34,15 +58,9 @@ class AgentRunner:
         start_ms = time.monotonic()
         allowed_tools = blueprint.tools_list()
 
-        # Filter globally disabled tools (stored in SystemConfig["disabled_tools"])
-        try:
-            with SessionLocal() as _db:
-                _row = _db.get(SystemConfig, "disabled_tools")
-                if _row and _row.value:
-                    _disabled = set(json.loads(_row.value))
-                    allowed_tools = [t for t in allowed_tools if t not in _disabled]
-        except Exception:
-            logger.warning("Could not read disabled_tools from SystemConfig", exc_info=True)
+        # Filter globally disabled tools from the in-process cache
+        if self._disabled_tools:
+            allowed_tools = [t for t in allowed_tools if t not in self._disabled_tools]
 
         sender_phone = sender.split("@")[0].split(":")[0]
 
@@ -173,31 +191,34 @@ class AgentRunner:
                 if response.stop_reason == "tool_use":
                     tc_list = [b for b in response.content if b.type == "tool_use"]
                     messages.append({"role": "assistant", "content": response.content})
-                    tool_results = []
-                    for tc in tc_list:
+
+                    # Run all tool calls in parallel — independent calls in one turn
+                    # are the common case and asyncio.gather cuts latency significantly.
+                    async def _run_one(tc):
                         if tc.name not in allowed_tools:
-                            result_text = f"Tool '{tc.name}' is not permitted for this agent."
                             logger.warning(
                                 "Tool not permitted | group=%s tool=%s allowed=%s",
                                 group_jid, tc.name, allowed_tools,
                             )
-                        else:
-                            raw = await self.registry.execute(
-                                tc.name, tc.input,
-                                group_jid=group_jid, sender=sender, is_admin=is_admin,
-                                confirmation_store=confirmation_store,
-                                multi_confirmation_store=multi_confirmation_store,
-                            )
-                            result_text = raw if isinstance(raw, str) else json.dumps(raw)
-                        tool_calls_made.append({
-                            "name": tc.name,
-                            "preview": result_text[:120],
-                        })
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": tc.id,
-                            "content": result_text,
-                        })
+                            return f"Tool '{tc.name}' is not permitted for this agent."
+                        raw = await self.registry.execute(
+                            tc.name, tc.input,
+                            group_jid=group_jid, sender=sender, is_admin=is_admin,
+                            confirmation_store=confirmation_store,
+                            multi_confirmation_store=multi_confirmation_store,
+                        )
+                        return raw if isinstance(raw, str) else json.dumps(raw)
+
+                    result_texts = await asyncio.gather(*[_run_one(tc) for tc in tc_list])
+
+                    tool_calls_made.extend([
+                        {"name": tc.name, "preview": text[:120]}
+                        for tc, text in zip(tc_list, result_texts)
+                    ])
+                    tool_results = [
+                        {"type": "tool_result", "tool_use_id": tc.id, "content": text}
+                        for tc, text in zip(tc_list, result_texts)
+                    ]
                     messages.append({"role": "user", "content": tool_results})
 
             final_stop_reason = "max_tool_turns"

@@ -123,6 +123,8 @@ async def test_agent_runner_filters_globally_disabled_tools(db):
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr("app.agent_runner.SessionLocal", lambda: _CM(db))
+        # Prime the class-level cache from the test DB (mirrors what lifespan does at startup)
+        AgentRunner.refresh_disabled_tools()
         await runner.run(
             blueprint=blueprint,
             group_jid="g@g.us",
@@ -132,6 +134,8 @@ async def test_agent_runner_filters_globally_disabled_tools(db):
             context=context,
             confirmation_store=confirmation_store,
         )
+    # Clean up class-level state between tests
+    AgentRunner._disabled_tools = set()
 
     tool_names = [t["name"] for t in captured_tools]
     assert "tool_a" in tool_names

@@ -158,6 +158,7 @@ async def lifespan(_app: FastAPI):
         logger.warning("NOTION_API_KEY not set — Notion tools disabled")
 
     agent_runner = AgentRunner(anthropic_client, tool_registry)
+    AgentRunner.refresh_disabled_tools()   # prime the in-process cache at startup
     multi_confirmation_store.set_sender(
         lambda jid, text, mentions=None: _send(jid, text, mentions=mentions)
     )
@@ -192,7 +193,7 @@ async def _process(payload: WebhookPayload) -> None:
     try:
         logger.debug("Processing event: type=%s jid=%s", payload.type, payload.jid)
 
-        # Track participant names passively from every incoming message
+        # Passively track participant names on every inbound message
         if payload.push_name and payload.sender and payload.jid:
             sender_phone = payload.sender.split("@")[0].split(":")[0]
             if sender_phone:
@@ -202,7 +203,7 @@ async def _process(payload: WebhookPayload) -> None:
                     db.rollback()
                     logger.debug("Could not upsert participant %s", sender_phone)
 
-        # Handle participant join/leave events
+        # Participant join/leave events — handled regardless of blueprint
         if payload.type == "participant_update":
             if payload.participants and payload.action in ("add", "remove", "leave"):
                 from datetime import datetime, timezone
@@ -213,7 +214,6 @@ async def _process(payload: WebhookPayload) -> None:
                         continue
                     if payload.action == "add":
                         _upsert_participant(db, payload.jid, phone, status="active")
-                        # Check if the bot itself was added to a new group
                         if bot_phone and phone == bot_phone:
                             try:
                                 meta = await bridge_client.fetch_group_meta(payload.jid)
@@ -222,7 +222,6 @@ async def _process(payload: WebhookPayload) -> None:
                                     for p in meta.get("participants", [])
                                     if p["jid"].split("@")[0].split(":")[0] != bot_phone
                                 ]
-                                # Persist all group members so the admin panel can show them
                                 for hp in human_phones:
                                     _upsert_participant(db, payload.jid, hp, status="active")
                                 await group_registration_handler.on_bot_added_to_group(
@@ -240,15 +239,27 @@ async def _process(payload: WebhookPayload) -> None:
 
         text = payload.text or payload.caption or ""
 
-        # Commands are checked before blueprint lookup so /bind works on unregistered groups
+        # Commands are checked before blueprint lookup (/bind works on unregistered groups).
+        # Invalidate the route cache after any command so the next message sees fresh state.
         if command_handler.is_command(text):
             sender_phone = payload.sender.split("@")[0].split(":")[0]
             reply = await command_handler.handle(db, payload.jid, sender_phone, text)
             if reply:
                 await _send(payload.jid, reply)
+            router.invalidate(payload.jid)
             return
 
-        # Intercept sys-admin registration approvals
+        # Ignore messages sent by the bot itself (bridge may echo outbound messages)
+        _bot_phone = settings.bot_phone_number or ""
+        if _bot_phone and payload.sender.split("@")[0].split(":")[0] == _bot_phone:
+            return
+
+        # Resolve blueprint via TTL cache — 0 DB hits on the hot path after first lookup
+        blueprint, entry = router.resolve(db, payload.jid)
+        if blueprint is None:
+            return
+
+        # Yes/no intercepts — only relevant for registered groups
         if text.strip().lower() in ("yes", "no", "כן", "לא", "y", "n"):
             sender_phone = payload.sender.split("@")[0].split(":")[0]
             group_type = account_service.get_group_type(db, payload.jid)
@@ -260,14 +271,12 @@ async def _process(payload: WebhookPayload) -> None:
                     if handled:
                         return
 
-        # Intercept cross-group confirmation replies (yes/no to 2nd-party transactions)
         if text.strip().lower() in ("yes", "no", "כן", "לא", "y", "n", "אישור", "ביטול"):
             sender_phone = payload.sender.split("@")[0].split(":")[0]
             resolved = account_service.handle_confirmation_reply(
                 db, payload.jid, sender_phone, text
             )
             if resolved:
-                # Find the confirmation we just resolved (most recent for this user)
                 conf = (
                     db.query(CrossGroupConfirmation)
                     .filter(
@@ -297,24 +306,22 @@ async def _process(payload: WebhookPayload) -> None:
                         )
                 return
 
-        blueprint, entry = router.resolve(db, payload.jid)
-        if blueprint is None:
-            return
-
-        participant_block = build_participant_block(db, payload.jid)
-
-        # Rate limiting
+        # Rate limiting (async — uses asyncio.Lock)
         if payload.type == "image":
-            if not rate_limiter.allow_image(payload.jid):
+            if not await rate_limiter.allow_image(payload.jid):
                 logger.warning("Rate limit hit for group %s (image)", payload.jid)
                 return
         else:
-            if not rate_limiter.allow_text(payload.jid):
+            if not await rate_limiter.allow_text(payload.jid):
                 logger.warning("Rate limit hit for group %s (text)", payload.jid)
                 return
 
         if not router.check_trigger(entry, text=text, bot_phone=settings.bot_phone_number):
             return
+
+        # Build participant block only after trigger check passes — avoids DB query
+        # for messages that won't activate the agent (mention/prefix blueprints)
+        participant_block = build_participant_block(db, payload.jid)
 
         agent_message = text
         if payload.type == "image" and entry.blueprint_id == "invoice_curator":

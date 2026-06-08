@@ -299,6 +299,11 @@ def update_tool_enabled(tool_name: str, body: UpdateToolEnabledRequest):
         else:
             db.add(SystemConfig(key="disabled_tools", value=new_value))
         db.commit()
+
+    # Refresh the in-process cache so the change takes effect immediately
+    from app.agent_runner import AgentRunner
+    AgentRunner.refresh_disabled_tools()
+
     return {"ok": True}
 
 
