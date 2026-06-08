@@ -1,7 +1,7 @@
 """Tool definitions (Claude format) and their async executors.
 
 Tools exposed to Claude:
-  get_status, list_invoices, get_preview, update_config,
+  get_status, list_invoices, get_invoice_summary, update_config,
   generate_report, flag_invoice, unflag_invoice, set_invoice_date, request_confirmation
 
 remove_invoice and send_report_by_email are NOT exposed as tools.
@@ -30,8 +30,9 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "name": "get_status",
         "description": (
-            "Use when a user asks for bot status, invoice statistics, or current configuration. "
-            "Returns: invoice count and total for the current month, flagged invoice count, language, header, and other group settings."
+            "Returns group configuration: language setting, report header, "
+            "report author, and dual-currency flag. "
+            "For invoice statistics, use get_invoice_summary instead."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -52,11 +53,11 @@ TOOL_SCHEMAS: list[dict] = [
         },
     },
     {
-        "name": "get_preview",
+        "name": "get_invoice_summary",
         "description": (
-            "Use when a user wants a summary of invoices for a month — count, total, flagged count. "
-            "Returns: invoice count, total ILS amount, number flagged. "
-            "Defaults to the current month. Available to all members."
+            "Returns invoice statistics for a month: count, total ILS, and number of flagged invoices. "
+            "Defaults to the current month. "
+            "For group settings, use get_status instead."
         ),
         "input_schema": {
             "type": "object",
@@ -640,7 +641,7 @@ async def exec_send_email(group_id: str, params: dict) -> dict:
 EXECUTORS = {
     "get_status":           exec_get_status,
     "list_invoices":        exec_list_invoices,
-    "get_preview":          exec_get_preview,
+    "get_invoice_summary":  exec_get_preview,
     "update_config":        exec_update_config,
     "generate_report":      exec_generate_report,
     "flag_invoice":         exec_flag_invoice,

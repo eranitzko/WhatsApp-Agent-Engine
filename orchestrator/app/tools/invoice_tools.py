@@ -128,15 +128,15 @@ def get_invoice_tools(db_session_factory=None, **kwargs) -> dict[str, dict]:
     """
     # Build wrapped executors for the 10 straightforward tools
     _tool_executor_pairs = [
-        ("get_status",         _orig.exec_get_status),
-        ("list_invoices",      _orig.exec_list_invoices),
-        ("get_preview",        _orig.exec_get_preview),
-        ("update_config",      _orig.exec_update_config),
-        ("flag_invoice",       _orig.exec_flag_invoice),
-        ("unflag_invoice",     _orig.exec_unflag_invoice),
-        ("set_invoice_date",   _orig.exec_set_invoice_date),
-        ("set_invoice_amount", _orig.exec_set_invoice_amount),
-        ("add_date_format",    _orig.exec_add_date_format),
+        ("get_status",           _orig.exec_get_status),
+        ("list_invoices",        _orig.exec_list_invoices),
+        ("get_invoice_summary",  _orig.exec_get_preview),
+        ("update_config",        _orig.exec_update_config),
+        ("flag_invoice",         _orig.exec_flag_invoice),
+        ("unflag_invoice",       _orig.exec_unflag_invoice),
+        ("set_invoice_date",     _orig.exec_set_invoice_date),
+        ("set_invoice_amount",   _orig.exec_set_invoice_amount),
+        ("add_date_format",      _orig.exec_add_date_format),
     ]
 
     registry: dict[str, dict] = {}

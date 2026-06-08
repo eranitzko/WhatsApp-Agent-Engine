@@ -14,7 +14,7 @@ AUTOMATION_TOOLS = [
 ]
 
 INVOICE_CURATOR_TOOLS = [
-    "get_status", "list_invoices", "get_preview",
+    "get_status", "list_invoices", "get_invoice_summary",
     "flag_invoice", "unflag_invoice", "set_invoice_date", "set_invoice_amount",
     "add_date_format", "update_config", "request_confirmation",
     *AUTOMATION_TOOLS,

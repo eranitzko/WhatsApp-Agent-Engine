@@ -5,7 +5,7 @@ import pytest
 from app.tools.invoice_tools import get_invoice_tools
 
 EXPECTED_TOOLS = [
-    "get_status", "list_invoices", "get_preview", "update_config",
+    "get_status", "list_invoices", "get_invoice_summary", "update_config",
     "flag_invoice", "unflag_invoice", "set_invoice_date",
     "set_invoice_amount", "add_date_format", "request_confirmation",
 ]
@@ -75,3 +75,22 @@ def test_multiple_calls_return_fresh_executors():
         assert tools_a[name]["executor"] is not tools_b[name]["executor"], (
             f"{name}: executor is the same object across calls"
         )
+
+
+def test_get_status_and_invoice_summary_descriptions_exclusive():
+    """get_status must not mention stats; get_invoice_summary must not mention config."""
+    from app.agent.tools import TOOL_SCHEMAS
+    schemas = {s["name"]: s for s in TOOL_SCHEMAS}
+
+    status_desc = schemas["get_status"]["description"].lower()
+    summary_desc = schemas["get_invoice_summary"]["description"].lower()
+
+    # get_status must be config-only
+    assert "invoice count" not in status_desc
+    assert "total" not in status_desc
+    assert "get_invoice_summary" in status_desc  # cross-reference
+
+    # get_invoice_summary must be stats-only
+    assert "language" not in summary_desc
+    assert "configuration" not in summary_desc
+    assert "get_status" in summary_desc  # cross-reference
