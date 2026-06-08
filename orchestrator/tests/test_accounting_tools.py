@@ -11,7 +11,7 @@ from app.tools.accounting_tools import get_accounting_tools
 EXPECTED_TOOLS = [
     "record_expense", "record_payment", "get_balance",
     "get_history", "set_reminder", "list_reminders", "cancel_reminder",
-    "set_report_email", "rename_participant", "set_household",
+    "set_report_email", "rename_participant", "set_household", "list_participants",
     "correct_transaction", "commit_correction",
     "create_report_format", "list_report_formats", "delete_report_format",
 ]
@@ -320,3 +320,33 @@ async def test_cancel_reminder_short_prefix_rejected(db):
             is_admin=False,
         )
     assert "4 characters" in result or "at least" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_list_participants_returns_group_members(db):
+    from app.db.models import GroupParticipant
+
+    db.add(GroupParticipant(
+        group_jid="g@g.us", phone="972501111111",
+        push_name="Eran", status="active",
+    ))
+    db.add(GroupParticipant(
+        group_jid="g@g.us", phone="972502222222",
+        admin_name="Tal (override)", push_name="Tal", status="active",
+    ))
+    db.add(GroupParticipant(
+        group_jid="g@g.us", phone="972503333333",
+        push_name="Removed Person", status="removed",
+    ))
+    db.commit()
+
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+        tools = get_accounting_tools()
+        result = await tools["list_participants"]["executor"](
+            {}, group_jid="g@g.us", sender="972501111111@s.whatsapp.net", is_admin=False
+        )
+    assert "972501111111" in result
+    assert "Eran" in result
+    assert "972502222222" in result
+    assert "Tal (override)" in result  # admin_name takes precedence
+    assert "972503333333" not in result  # removed members excluded

@@ -260,6 +260,17 @@ _SCHEMAS: dict[str, dict] = {
             "required": ["phone", "is_household"],
         },
     },
+    "list_participants": {
+        "name": "list_participants",
+        "category": "accounting",
+        "description": (
+            "Returns the list of active group members with their display names and phone numbers. "
+            "Use this before calling get_balance, record_expense, rename_participant, or set_household "
+            "when you need to resolve a name to a phone number. "
+            "Returns: each participant's phone, display name, and household status."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
     "correct_transaction": {
         "name": "correct_transaction",
         "category": "accounting",
@@ -799,6 +810,29 @@ async def _exec_set_household(params: dict, **ctx) -> str:
             db.close()
 
 
+async def _exec_list_participants(params: dict, **ctx) -> str:
+    from app.db.models import GroupParticipant
+    group_jid = ctx.get("group_jid", "")
+    with SessionLocal() as db:
+        rows = (
+            db.query(GroupParticipant)
+            .filter(
+                GroupParticipant.group_jid == group_jid,
+                GroupParticipant.status == "active",
+            )
+            .order_by(GroupParticipant.phone)
+            .all()
+        )
+    if not rows:
+        return "No participants found."
+    lines = []
+    for r in rows:
+        name = r.admin_name or r.push_name or r.phone
+        household = " [household]" if r.is_household else ""
+        lines.append(f"{r.phone} — {name}{household}")
+    return "\n".join(lines)
+
+
 async def _exec_correct_transaction(params: dict, **ctx) -> str:
     if not ctx.get("is_admin"):
         return "Only admins can correct transactions."
@@ -1063,6 +1097,7 @@ def get_accounting_tools() -> dict[str, dict]:
             ("set_report_email",     _exec_save_email),
             ("rename_participant",   _exec_rename_participant),
             ("set_household",        _exec_set_household),
+            ("list_participants",    _exec_list_participants),
             ("correct_transaction",  _exec_correct_transaction),
             ("commit_correction",    _exec_apply_correction),
             ("create_report_format", _exec_create_report_format),

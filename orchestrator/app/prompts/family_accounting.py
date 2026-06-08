@@ -22,6 +22,7 @@ Record and query financial transactions between people. The tools handle all sta
 - cancel_reminder — user wants to cancel a scheduled reminder; use the ID prefix from list_reminders
 - set_report_email — user wants to save their email address for report delivery
 - export_accounting_report — user wants a PDF or XLSX ledger report; admin only
+- list_participants — look up who is in the group with their phone numbers and display names; use before get_balance or record_expense when you need to resolve a name to a phone number
 - rename_participant — update a display name; admin only
 - set_household — mark a participant as part of the shared household account; admin only
 - correct_transaction / commit_correction — fix a past transaction; admin only
