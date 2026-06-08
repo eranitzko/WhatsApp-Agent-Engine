@@ -91,20 +91,21 @@ app.get('/groups', requireBridgeAuth, async (_req, res) => {
   if (!sock) return res.status(503).json({ error: 'WhatsApp not connected' })
   try {
     const groups = await sock.groupFetchAllParticipating()
-    // Derive bot's own JID prefix so we can exclude it from participant lists
-    const botJid = sock.user?.id ?? ''
-    const botPrefix = botJid.split(':')[0].split('@')[0]
+    // Derive bot's own identifiers so we can exclude it from participant lists.
+    // WhatsApp now uses opaque LID-based JIDs for all participants, so we must
+    // check both the phone-based JID (sock.user.id) and LID (sock.user.lid).
+    const _extract = jid => (jid || '').split(':')[0].split('@')[0]
+    const botPrefix    = _extract(sock.user?.id)
+    const botLidPrefix = _extract(sock.user?.lid)
+    const isBotJid = prefix => prefix && (prefix === botPrefix || prefix === botLidPrefix)
+
     const list = Object.values(groups).map(g => ({
       jid: g.id,
       name: g.subject,
       participants: (g.participants || [])
-        .filter(p => {
-          const prefix = (p.id || '').split(':')[0].split('@')[0]
-          return prefix !== botPrefix
-        })
+        .filter(p => !isBotJid(_extract(p.id)))
         .map(p => ({
           jid: p.id,
-          lid: p.lid || null,
           isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
         })),
     }))

@@ -146,9 +146,9 @@ async function renderGroups(app) {
                             ${m.phone ? `<span style="color:var(--muted);margin-left:6px;font-size:11px">${escHtml(m.phone)}</span>` : ''}
                           </div>`
                        : `<div style="background:var(--bg);border:1px dashed var(--border);border-radius:6px;padding:4px 10px;font-size:12px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:5px"
-                              onclick="event.stopPropagation();openAddPersonFromGroup('${escAttr(m.phone)}','${escAttr(g.group_jid)}')"
+                              onclick="event.stopPropagation();openAddPersonFromGroup('${escAttr(g.group_jid)}')"
                               title="Click to add this person">
-                            <span style="color:var(--accent);font-size:14px;line-height:1">+</span>${escHtml(m.phone)}
+                            <span style="color:var(--accent);font-size:14px;line-height:1">+</span>Unknown member
                           </div>`
                      ).join('')}
                    </div>`
@@ -187,19 +187,18 @@ async function deleteGroup(jid) {
   renderGroups(document.getElementById('app'));
 }
 
-function openAddPersonFromGroup(phone, groupJid) {
+function openAddPersonFromGroup(groupJid) {
   document.getElementById('modal-container').innerHTML = `
     <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
       <div class="modal">
         <h3>Add Person</h3>
-        <p class="subtitle">From group: <span style="font-family:monospace;font-size:12px">${escHtml(groupJid)}</span></p>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.5">
+          ⚠️ WhatsApp no longer exposes phone numbers for group members — it uses
+          opaque internal IDs instead. Enter the person's actual phone number below.
+        </div>
         <div class="form-group">
           <label>Phone number</label>
-          <input id="ap-phone" type="text" value="${escAttr(phone)}"
-            placeholder="e.g. 972501234567">
-          <div style="font-size:11px;color:var(--muted);margin-top:4px">
-            Correct this if what's shown is a WhatsApp internal ID, not a real number
-          </div>
+          <input id="ap-phone" type="text" placeholder="e.g. 972501234567">
         </div>
         <div class="form-group">
           <label>Display name (optional)</label>
@@ -215,7 +214,7 @@ function openAddPersonFromGroup(phone, groupJid) {
         </div>
       </div>
     </div>`;
-  document.getElementById('ap-name').focus();
+  document.getElementById('ap-phone').focus();
 }
 
 async function submitAddPersonFromGroup(groupJid) {
