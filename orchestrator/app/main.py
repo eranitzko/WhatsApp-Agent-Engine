@@ -18,7 +18,7 @@ from app.command_handler import CommandHandler
 from app.agent.context import ContextStore
 from app.agent.confirmation import confirmation_store
 from app.agent.multi_confirmation import multi_confirmation_store
-from app.db.models import GroupParticipant, CrossGroupConfirmation, SplitTransaction
+from app.db.models import GroupParticipant, CrossGroupConfirmation, SplitTransaction, AdminNumbers
 from app.accounting.account_service import AccountService
 from app.accounting.group_registration import GroupRegistrationHandler
 from app.participants import build_participant_block
@@ -43,8 +43,6 @@ configure_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 _WEBHOOK_SECRET: str = os.environ.get("WEBHOOK_SECRET", "")
-if not _WEBHOOK_SECRET:
-    logger.warning("WEBHOOK_SECRET is not configured — /webhook accepts unauthenticated requests")
 
 
 def _upsert_participant(
@@ -77,8 +75,6 @@ def _upsert_participant(
 
 
 def _verify_webhook_auth(request: Request) -> None:
-    if not _WEBHOOK_SECRET:
-        return
     auth = request.headers.get("Authorization", "")
     token = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
     if token != _WEBHOOK_SECRET:
@@ -121,6 +117,8 @@ async def lifespan(_app: FastAPI):
 
     if not settings.anthropic_api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is required but not set")
+    if not _WEBHOOK_SECRET:
+        raise RuntimeError("WEBHOOK_SECRET is required but not set — refusing to start with an unauthenticated webhook")
 
     db = SessionLocal()
     seeder.seed(
@@ -341,11 +339,18 @@ async def _process(payload: WebhookPayload) -> None:
         if not agent_message.strip():
             return
 
+        # Compute is_admin server-side — never trust the bridge-supplied flag.
+        # The bridge payload field (isAdmin) is untrusted attacker-controlled input.
+        _acl_phone = payload.sender.split("@")[0].split(":")[0]
+        is_admin = (
+            db.query(AdminNumbers).filter_by(phone_number=_acl_phone).first() is not None
+        )
+
         reply = await agent_runner.run(
             blueprint=blueprint,
             group_jid=payload.jid,
             sender=payload.sender,
-            is_admin=payload.is_admin,
+            is_admin=is_admin,
             message=agent_message,
             context=context_store,
             confirmation_store=confirmation_store,
