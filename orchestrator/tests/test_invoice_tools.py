@@ -94,3 +94,11 @@ def test_get_status_and_invoice_summary_descriptions_exclusive():
     assert "language" not in summary_desc
     assert "configuration" not in summary_desc
     assert "get_status" in summary_desc  # cross-reference
+
+
+def test_no_negative_call_instructions_in_descriptions():
+    from app.agent.tools import TOOL_SCHEMAS
+    for schema in TOOL_SCHEMAS:
+        desc = schema["description"].lower()
+        assert "never call" not in desc, f"{schema['name']} contains 'never call'"
+        assert "only execute after" not in desc, f"{schema['name']} contains 'only execute after'"

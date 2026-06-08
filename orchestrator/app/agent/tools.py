@@ -132,9 +132,10 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "name": "set_invoice_amount",
         "description": (
-            "Use when an admin reports that an invoice's amount was extracted incorrectly. Admin only. "
-            "Only execute after a confirmed request_confirmation — never call this directly. "
-            "Recalculates the ILS amount using the existing exchange rate for that invoice's date. "
+            "Corrects an invoice's extracted amount. Admin only. "
+            "Requires prior approval: call stage_action with action='set_invoice_amount' first "
+            "and wait for the user to confirm before calling this tool. "
+            "Recalculates the ILS amount using the stored exchange rate for the invoice's date. "
             "Returns: confirmation of the corrected amount."
         ),
         "input_schema": {
@@ -152,8 +153,9 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "name": "add_date_format",
         "description": (
-            "Use when an admin wants to register a new date format for invoice date parsing (e.g. MM/DD/YYYY). Admin only. "
-            "Only execute after a confirmed request_confirmation — never call this directly. "
+            "Registers a new date format for invoice date parsing (e.g. MM/DD/YYYY). Admin only. "
+            "Requires prior approval: call stage_action with action='add_date_format' first "
+            "and wait for the user to confirm before calling this tool. "
             "Adds to existing formats without replacing them. "
             "Returns: confirmation of the added format."
         ),
