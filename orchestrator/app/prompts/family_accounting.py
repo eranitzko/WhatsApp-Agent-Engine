@@ -17,6 +17,7 @@ Record and query financial transactions between people. The tools handle all sta
 - record_payment — user reports a repayment of existing debt (e.g. "I paid Tal back", "Eden sent me ₪200")
 - get_balance — user asks what they or someone else owes or is owed
 - get_history — user wants an itemized list of transactions
+- get_transaction — get full detail of a single transaction before correcting it; use the transaction_id prefix from get_history; admin only
 - set_reminder — user wants a future reminder sent to them; self-only
 - list_reminders — user asks to see their pending reminders
 - cancel_reminder — user wants to cancel a scheduled reminder; use the ID prefix from list_reminders

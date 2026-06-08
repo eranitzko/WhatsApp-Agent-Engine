@@ -12,7 +12,7 @@ EXPECTED_TOOLS = [
     "record_expense", "record_payment", "get_balance",
     "get_history", "set_reminder", "list_reminders", "cancel_reminder",
     "set_report_email", "rename_participant", "set_household", "list_participants",
-    "correct_transaction", "commit_correction",
+    "get_transaction", "correct_transaction", "commit_correction",
     "create_report_format", "list_report_formats", "delete_report_format",
 ]
 
@@ -350,3 +350,46 @@ async def test_list_participants_returns_group_members(db):
     assert "972502222222" in result
     assert "Tal (override)" in result  # admin_name takes precedence
     assert "972503333333" not in result  # removed members excluded
+
+
+@pytest.mark.asyncio
+async def test_get_transaction_returns_detail(db):
+    import uuid
+    tx_id = str(uuid.uuid4())
+    db.add(LedgerEntry(
+        id=str(uuid.uuid4()),
+        transaction_id=tx_id,
+        group_jid="g@g.us",
+        from_phone="972501111111",
+        to_phone="972502222222",
+        amount_ils=Decimal("150.00"),
+        amount_settled_ils=Decimal("0"),
+        description="Restaurant",
+        transaction_date=date(2026, 5, 1),
+    ))
+    db.commit()
+
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+        tools = get_accounting_tools()
+        result = await tools["get_transaction"]["executor"](
+            {"transaction_id": tx_id[:8]},
+            group_jid="g@g.us",
+            sender="972501111111@s.whatsapp.net",
+            is_admin=True,
+        )
+    assert "Restaurant" in result
+    assert "150" in result
+    assert "972501111111" in result
+
+
+@pytest.mark.asyncio
+async def test_get_transaction_admin_only(db):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+        tools = get_accounting_tools()
+        result = await tools["get_transaction"]["executor"](
+            {"transaction_id": "any-prefix"},
+            group_jid="g@g.us",
+            sender="972501111111@s.whatsapp.net",
+            is_admin=False,
+        )
+    assert "admin" in result.lower()

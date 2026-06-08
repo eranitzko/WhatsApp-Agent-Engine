@@ -165,6 +165,26 @@ _SCHEMAS: dict[str, dict] = {
             "required": [],
         },
     },
+    "get_transaction": {
+        "name": "get_transaction",
+        "category": "accounting",
+        "description": (
+            "Returns full detail for a single transaction: all participants, amounts, "
+            "date, description, and settlement status. Admin only. "
+            "Use the transaction_id prefix (at least 8 characters) shown in get_history. "
+            "Use this before correct_transaction to confirm you have the right record."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "transaction_id": {
+                    "type": "string",
+                    "description": "Transaction ID prefix (at least 8 characters) from get_history.",
+                },
+            },
+            "required": ["transaction_id"],
+        },
+    },
     "set_reminder": {
         "name": "set_reminder",
         "category": "accounting",
@@ -649,6 +669,41 @@ async def _exec_get_history(params: dict, **ctx) -> str:
     return "\n".join(lines)
 
 
+async def _exec_get_transaction(params: dict, **ctx) -> str:
+    group_jid = ctx.get("group_jid", "")
+    is_admin = ctx.get("is_admin", False)
+    if not is_admin:
+        return "get_transaction is admin only."
+    tx_prefix = params.get("transaction_id", "").strip()
+    if len(tx_prefix) < 8:
+        return "Please provide at least 8 characters of the transaction ID."
+    with SessionLocal() as db:
+        rows = (
+            db.query(LedgerEntry)
+            .filter(
+                LedgerEntry.group_jid == group_jid,
+                LedgerEntry.transaction_id.startswith(tx_prefix),
+            )
+            .all()
+        )
+    if not rows:
+        return f"No transaction found matching '{tx_prefix}'."
+    first = rows[0]
+    total = sum(r.amount_ils for r in rows)
+    settled_total = sum(r.amount_settled_ils or Decimal("0") for r in rows)
+    lines = [
+        f"Transaction: {first.transaction_id[:16]}",
+        f"Date: {first.transaction_date}",
+        f"Description: {first.description}",
+        f"Total: ₪{float(total):,.2f} | Settled: ₪{float(settled_total):,.2f}",
+        "Legs:",
+    ]
+    for r in rows:
+        status = "settled" if (r.amount_settled_ils or Decimal("0")) >= r.amount_ils else "open"
+        lines.append(f"  {r.from_phone} → {r.to_phone}: ₪{float(r.amount_ils):,.2f} [{status}]")
+    return "\n".join(lines)
+
+
 async def _exec_set_reminder(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
     to_phone = _sender_phone(ctx)
@@ -1091,6 +1146,7 @@ def get_accounting_tools() -> dict[str, dict]:
             ("record_payment",       _exec_record_payment),
             ("get_balance",          _exec_get_balance),
             ("get_history",          _exec_get_history),
+            ("get_transaction",      _exec_get_transaction),
             ("set_reminder",         _exec_set_reminder),
             ("list_reminders",       _exec_list_reminders),
             ("cancel_reminder",      _exec_cancel_reminder),
