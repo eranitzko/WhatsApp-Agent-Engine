@@ -54,20 +54,27 @@ except ImportError:
 _HEBREW_FONT = "HebrewFont"
 _HEBREW_FONT_BOLD = "HebrewFont-Bold"
 _FONT_REGISTERED = False
+_FONT_IS_UNIVERSAL = False   # True if the registered font covers both Hebrew AND Latin
 
 # Font candidates in preference order.
-# Must have BOTH Hebrew (U+0590-U+05FF) AND full Latin coverage — culmus fonts
-# (MiriamCLM etc.) have Hebrew only, causing Latin text to render as invisible.
-# FreeSans (fonts-freefont-ttf) covers Hebrew + Latin in a single file.
-_FONT_CANDIDATES: list[tuple[str, str]] = [
-    # (regular, bold)  — searched across _SEARCH_DIRS
-    ("FreeSans.ttf",                   "FreeSansBold.ttf"),
-    ("NotoSansHebrew-Regular.ttf",     "NotoSansHebrew-Bold.ttf"),
-    ("MiriamCLM-Book.ttf",             "MiriamCLM-Bold.ttf"),
-    ("DavidCLM-Medium.ttf",            "DavidCLM-Bold.ttf"),
+# Each entry: (regular_filename, bold_filename, is_universal)
+#
+# "Universal" fonts cover both Hebrew (U+0590–U+05FF) AND full Latin in a
+# single face — safe to use for ALL text regardless of the report language.
+# Hebrew-only fonts (Culmus, NotoSansHebrew) lack Latin glyphs; using them for
+# Latin text produces black boxes, so they are only applied when lang=="he".
+_FONT_CANDIDATES: list[tuple[str, str, bool]] = [
+    # universal — Hebrew + Latin
+    ("FreeSans.ttf",                "FreeSansBold.ttf",         True),
+    ("DejaVuSans.ttf",              "DejaVuSans-Bold.ttf",      True),
+    # Hebrew-only — fall back when no universal font is available
+    ("NotoSansHebrew-Regular.ttf",  "NotoSansHebrew-Bold.ttf",  False),
+    ("MiriamCLM-Book.ttf",          "MiriamCLM-Bold.ttf",       False),
+    ("DavidCLM-Medium.ttf",         "DavidCLM-Bold.ttf",        False),
 ]
 _SEARCH_DIRS = [
     "/usr/share/fonts/truetype/freefont",
+    "/usr/share/fonts/truetype/dejavu",
     "/usr/share/fonts/truetype/culmus",
     "/usr/share/fonts/truetype/noto",
     "/usr/share/fonts/noto",
@@ -85,12 +92,16 @@ def _find_font(filename: str) -> str | None:
 
 
 def _register_hebrew_fonts() -> bool:
-    """Register a Hebrew-capable TTF font pair with ReportLab. Returns True if successful."""
-    global _FONT_REGISTERED
+    """Register a Hebrew-capable TTF font pair with ReportLab. Returns True if successful.
+
+    Sets the module-level ``_FONT_IS_UNIVERSAL`` flag to True when the
+    registered font covers both Hebrew and Latin (e.g. FreeSans, DejaVu).
+    """
+    global _FONT_REGISTERED, _FONT_IS_UNIVERSAL
     if _FONT_REGISTERED:
         return True
 
-    for regular_name, bold_name in _FONT_CANDIDATES:
+    for regular_name, bold_name, is_universal in _FONT_CANDIDATES:
         regular_path = _find_font(regular_name)
         if not regular_path:
             continue
@@ -106,8 +117,9 @@ def _register_hebrew_fonts() -> bool:
         except Exception:
             pass  # bold fallback to regular is fine
 
-        logger.info("Registered Hebrew font: %s", regular_path)
+        logger.info("Registered Hebrew font: %s (universal=%s)", regular_path, is_universal)
         _FONT_REGISTERED = True
+        _FONT_IS_UNIVERSAL = is_universal
         return True
 
     logger.warning("No Hebrew font found — Hebrew PDF will use Helvetica (no Hebrew glyphs)")
@@ -168,7 +180,20 @@ def _fmt_ils(amount) -> str:
 
 
 def _font(lang: str, bold: bool = False) -> str:
-    if lang == "he" and _register_hebrew_fonts():
+    """Return the best available font name for the content language.
+
+    If a *universal* font (FreeSans / DejaVu — both Hebrew and Latin) was
+    registered, use it for ALL text regardless of ``lang``.  This makes
+    mixed-script content (e.g. Hebrew vendor names in an English-mode report)
+    render correctly without black boxes.
+
+    If only a Hebrew-only font was registered (NotoSansHebrew, MiriamCLM…),
+    use it exclusively when ``lang=="he"`` — applying it to Latin text would
+    produce black boxes for Latin characters.
+
+    Falls back to Helvetica when no suitable font is available.
+    """
+    if _register_hebrew_fonts() and (_FONT_IS_UNIVERSAL or lang == "he"):
         return _HEBREW_FONT_BOLD if bold else _HEBREW_FONT
     return "Helvetica-Bold" if bold else "Helvetica"
 
@@ -442,8 +467,7 @@ def generate_pdf(
 ) -> bytes:
     """Generate a PDF report and return bytes."""
     rtl = (lang == "he")
-    if rtl:
-        _register_hebrew_fonts()
+    _register_hebrew_fonts()  # always register — universal fonts render mixed content in any lang
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
