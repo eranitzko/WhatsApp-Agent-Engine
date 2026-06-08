@@ -111,18 +111,44 @@ async function doLogin() {
 
 // ── Groups ────────────────────────────────────────────────────────────────────
 
+let _groupsData = [];
+
 async function renderGroups(app) {
   app.innerHTML = layout('groups', '<p style="color:var(--muted)">Loading...</p>');
   const res = await apiFetch('/groups');
   if (!res) return;
-  const groups = await res.json();
+  _groupsData = await res.json();
 
-  const rows = groups.length
-    ? groups.map(g => `
-        <tr>
-          <td>${escHtml(g.group_name)}<br><span style="font-size:11px;color:var(--muted)">${escHtml(g.group_jid)}</span></td>
+  const rows = _groupsData.length
+    ? _groupsData.map((g, i) => `
+        <tr class="group-row" onclick="toggleGroupDetail(${i})" style="cursor:pointer" title="Click to see members">
+          <td>
+            <span style="font-weight:500">${escHtml(g.group_name)}</span>
+            <br><span style="font-size:11px;color:var(--muted)">${escHtml(g.group_jid)}</span>
+          </td>
           <td><span class="badge">${escHtml(g.blueprint_name)}</span></td>
-          <td><button class="btn btn-danger" onclick="deleteGroup('${escAttr(g.group_jid)}')">Remove</button></td>
+          <td style="font-size:13px;color:var(--muted);white-space:nowrap">
+            ${g.member_count} member${g.member_count !== 1 ? 's' : ''}
+          </td>
+          <td>
+            <button class="btn btn-danger" onclick="event.stopPropagation();deleteGroup('${escAttr(g.group_jid)}')">Remove</button>
+          </td>
+        </tr>
+        <tr id="group-detail-${i}" style="display:none">
+          <td colspan="4" style="padding:0">
+            <div style="padding:10px 16px 14px;background:var(--surface);border-top:1px solid var(--border)">
+              ${g.members.length
+                ? `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Members</div>
+                   <div style="display:flex;flex-wrap:wrap;gap:6px">
+                     ${g.members.map(m => `
+                       <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:12px">
+                         <span style="font-weight:500">${escHtml(m.name)}</span>
+                         ${m.name !== m.phone ? `<span style="color:var(--muted);margin-left:4px">${escHtml(m.phone)}</span>` : ''}
+                       </div>`).join('')}
+                   </div>`
+                : '<span style="font-size:12px;color:var(--muted)">No members recorded yet.</span>'}
+            </div>
+          </td>
         </tr>`).join('')
     : '<tr><td colspan="4" class="empty">No groups registered yet.</td></tr>';
 
@@ -132,15 +158,26 @@ async function renderGroups(app) {
       <button class="btn btn-primary" onclick="openRegisterModal()">+ Register Group</button>
     </div>
     <div class="table-wrap"><table class="table">
-      <thead><tr><th>Group</th><th>Blueprint</th><th></th></tr></thead>
+      <thead><tr><th>Group</th><th>Blueprint</th><th>Members</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
     <div id="modal-container"></div>`);
 }
 
+function toggleGroupDetail(i) {
+  const row = document.getElementById('group-detail-' + i);
+  if (!row) return;
+  row.style.display = row.style.display === 'none' ? '' : 'none';
+}
+
 async function deleteGroup(jid) {
-  if (!confirm(`Remove group ${jid}?`)) return;
-  await apiFetch('/groups/' + encodeURIComponent(jid), { method: 'DELETE' });
+  if (!confirm(`Remove group ${jid}?\n\nThis also removes all participants and automations for this group.`)) return;
+  const res = await apiFetch('/groups/' + encodeURIComponent(jid), { method: 'DELETE' });
+  if (!res || !res.ok) {
+    const body = await res?.json().catch(() => ({}));
+    alert('Failed to remove group: ' + (body?.detail || 'Unknown error'));
+    return;
+  }
   renderGroups(document.getElementById('app'));
 }
 

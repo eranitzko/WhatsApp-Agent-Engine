@@ -66,19 +66,41 @@ async def _fetch_bridge_name_map() -> dict[str, str]:
 @router.get("/groups", dependencies=[Depends(require_auth)])
 async def list_groups():
     name_map = await _fetch_bridge_name_map()
+    bot_phone = ""
+    try:
+        from app.config import settings as _s
+        bot_phone = _s.bot_phone_number or ""
+    except Exception:
+        pass
     with SessionLocal() as db:
         rows = db.query(GroupRegistry).all()
         blueprints = {b.id: b.display_name for b in db.query(Blueprint).all()}
-        return [
-            {
+        result = []
+        for r in rows:
+            participants = (
+                db.query(GroupParticipant)
+                .filter_by(group_jid=r.group_jid, status="active")
+                .all()
+            )
+            # Exclude the bot itself from the member list
+            members = [
+                {
+                    "phone": p.phone,
+                    "name": p.admin_name or p.push_name or p.phone,
+                }
+                for p in participants
+                if p.phone != bot_phone
+            ]
+            result.append({
                 "group_jid": r.group_jid,
                 "group_name": name_map.get(r.group_jid, r.group_jid),
                 "blueprint_id": r.blueprint_id,
                 "blueprint_name": blueprints.get(r.blueprint_id, r.blueprint_id),
                 "status": r.status,
-            }
-            for r in rows
-        ]
+                "member_count": len(members),
+                "members": members,
+            })
+        return result
 
 
 @router.post("/groups", dependencies=[Depends(require_auth)])
@@ -97,10 +119,16 @@ def register_group(body: RegisterGroupRequest):
 
 @router.delete("/groups/{group_jid:path}", dependencies=[Depends(require_auth)])
 def delete_group(group_jid: str):
+    from app.db.models import AutomationRule, UserAccount
     with SessionLocal() as db:
         row = db.get(GroupRegistry, group_jid)
         if not row:
             raise HTTPException(status_code=404, detail="Group not found")
+        # Remove child rows that have FK constraints on group_registry.group_jid
+        # (PRAGMA foreign_keys=ON is active so we must clear them first)
+        db.query(GroupParticipant).filter_by(group_jid=group_jid).delete()
+        db.query(AutomationRule).filter_by(group_jid=group_jid).delete()
+        db.query(UserAccount).filter_by(group_jid=group_jid).delete()
         db.delete(row)
         db.commit()
     return {"ok": True}
