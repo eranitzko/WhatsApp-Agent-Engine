@@ -472,7 +472,7 @@ async def test_workflow_executes_steps_in_order(db):
 
 @pytest.mark.asyncio
 async def test_workflow_passes_confirmation_store_in_ctx(db):
-    """confirmation_store is injected into ctx so request_confirmation works."""
+    """confirmation_store is injected into ctx so stage_action works."""
     from unittest.mock import AsyncMock, MagicMock
 
     received_ctx = {}

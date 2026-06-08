@@ -560,8 +560,8 @@ async def exec_request_confirmation(
         if not params.get("invoice_id"):
             return {"error": "invoice_id is required for remove_invoice action."}
     elif action == "send_email":
-        if not params.get("to_email"):
-            return {"error": "to_email is required for send_email action."}
+        if not params.get("to"):
+            return {"error": "'to' is required for send_email action."}
     elif action == "set_invoice_amount":
         if not params.get("invoice_id"):
             return {"error": "invoice_id is required for set_invoice_amount action."}
@@ -577,7 +577,7 @@ async def exec_request_confirmation(
     if action == "send_email":
         from app.tools.send_email_tool import _is_allowed
 
-        to_email = params.get("to_email", "").strip()
+        to_email = params.get("to", "").strip()
         if not to_email:
             return {"error": "No email address provided."}
         if not _is_allowed(to_email):

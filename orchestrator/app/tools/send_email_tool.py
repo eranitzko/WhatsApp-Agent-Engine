@@ -8,7 +8,7 @@ Params:
 All template variables are resolved via WorkflowContext at send time using
 a fresh DB session. This means the tool works correctly whether called:
   - Directly from a workflow step (templates may already be resolved)
-  - As a confirmed action after request_confirmation (resolves from DB fresh)
+  - As a confirmed action after stage_action (resolves from DB fresh)
 
 Admin only. Validates recipient against the email_allowlist DB table.
 """

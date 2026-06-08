@@ -1,7 +1,7 @@
 """Pending confirmation state for destructive or external actions.
 
 Flow:
-  1. Agent calls request_confirmation(action, params, description).
+  1. Agent calls stage_action(action, params, description).
   2. System stores a PendingAction for the group with a 5-min TTL.
   3. Next admin message:
        - "yes" / "כן" / "confirm" / "אישור" → execute the stored action.
@@ -33,7 +33,7 @@ class PendingAction:
 class ConfirmationStore:
     """One pending action per group at a time.
 
-    NOTE: State is in-memory only. A server restart between request_confirmation
+    NOTE: State is in-memory only. A server restart between stage_action
     and the user's "yes" will silently lose the pending action.
     This is intentional for the short 5-min TTL — the window is too narrow to
     justify DB persistence. Cross-group accounting confirmations use the
