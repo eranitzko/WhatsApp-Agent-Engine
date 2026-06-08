@@ -18,17 +18,17 @@ Record and query financial transactions between people. The tools handle all sta
 - get_balance — user asks what they or someone else owes or is owed
 - get_debt_summary — user asks who owes what to whom; returns a readable debt table; non-admins see only their own debts
 - get_history — user wants an itemized list of transactions
-- get_transaction — get full detail of a single transaction before correcting it; use the transaction_id prefix from get_history; admin only
+- get_transaction — get full detail of a single transaction before correcting it; use the transaction_id prefix from get_history
 - set_reminder — user wants a future reminder sent to them; self-only
 - list_reminders — user asks to see their pending reminders
 - cancel_reminder — user wants to cancel a scheduled reminder; use the ID prefix from list_reminders
 - set_report_email — user wants to save their email address for report delivery
-- export_accounting_report — user wants a PDF or XLSX ledger report; admin only
+- export_accounting_report — user wants a PDF or XLSX ledger report
 - list_participants — look up who is in the group with their phone numbers and display names; use before get_balance or record_expense when you need to resolve a name to a phone number
-- rename_participant — update a display name; admin only
-- set_household — mark a participant as part of the shared household account; admin only
-- correct_transaction / commit_correction — fix a past transaction; admin only
-- create_automation / activate_automation / list_automations / pause_automation / cancel_automation / edit_automation — set up recurring or triggered actions; admin only
+- rename_participant — update a display name
+- set_household — mark a participant as part of the shared household account
+- correct_transaction / commit_correction — fix a past transaction
+- create_automation / activate_automation / list_automations / pause_automation / cancel_automation / edit_automation — set up recurring or triggered actions
 
 ## Resolving "I"
 "I paid" means sender_phone is the payer. "I owe" means sender_phone is the debtor.

@@ -146,3 +146,64 @@ async def test_run_blocks_tool_not_in_blueprint(context, confirmation_store):
         confirmation_store=confirmation_store,
     )
     registry._tools["forbidden_tool"]["executor"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_admin_tools_filtered_for_non_admins():
+    """Non-admin users must not see admin-only tools in the API call."""
+    import json
+    from unittest.mock import MagicMock, AsyncMock
+    from app.agent_runner import AgentRunner
+    from app.tool_registry import ToolRegistry
+    from app.db.models import Blueprint
+
+    reg = ToolRegistry()
+    reg.register({
+        "user_tool": {
+            "schema": {
+                "name": "user_tool", "description": "x",
+                "input_schema": {"type": "object", "properties": {}, "required": []},
+                "access": "user",
+            },
+            "executor": AsyncMock(),
+        },
+        "admin_tool": {
+            "schema": {
+                "name": "admin_tool", "description": "y",
+                "input_schema": {"type": "object", "properties": {}, "required": []},
+                "access": "admin",
+            },
+            "executor": AsyncMock(),
+        },
+    })
+
+    captured: list = []
+
+    async def fake_create(**kwargs):
+        captured.extend(kwargs.get("tools", []))
+        block = MagicMock(); block.type = "text"; block.text = "ok"
+        resp = MagicMock(); resp.stop_reason = "end_turn"; resp.content = [block]
+        return resp
+
+    client = MagicMock()
+    client.messages.create = fake_create
+    runner = AgentRunner(client, reg)
+
+    bp = Blueprint(
+        id="bp", system_prompt="p", model="m", max_tool_turns=1,
+        context_window=4, context_idle_reset_minutes=60,
+        tools_enabled=json.dumps(["user_tool", "admin_tool"]),
+    )
+    context = MagicMock()
+    context.get_history.return_value = []
+    context.add = MagicMock()
+    cs = MagicMock(); cs.get.return_value = None
+
+    await runner.run(
+        blueprint=bp, group_jid="g@g.us", sender="p@s.whatsapp.net",
+        is_admin=False, message="hi", context=context, confirmation_store=cs,
+    )
+
+    tool_names = [t["name"] for t in captured]
+    assert "user_tool" in tool_names
+    assert "admin_tool" not in tool_names  # filtered out for non-admin

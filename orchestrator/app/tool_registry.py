@@ -30,6 +30,21 @@ class ToolRegistry:
         self._schema_cache[key] = schemas
         return schemas
 
+    def get_allowed_tool_names(self, tool_names: list[str], is_admin: bool) -> list[str]:
+        """Filter tool names by access level.
+
+        Admin sees all tools; non-admin sees only tools with access='user'.
+        Tools with no 'access' field default to 'user' (visible to all).
+        """
+        result = []
+        for name in tool_names:
+            if name not in self._tools:
+                continue
+            access = self._tools[name]["schema"].get("access", "user")
+            if is_admin or access == "user":
+                result.append(name)
+        return result
+
     def has_tool(self, tool_name: str) -> bool:
         return tool_name in self._tools
 

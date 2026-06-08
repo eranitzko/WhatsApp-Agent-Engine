@@ -113,6 +113,7 @@ async def _exec_send_email(params: dict, **ctx) -> str:
 _SCHEMA = {
     "name": "send_email",
     "category": "export",
+    "access": "admin",
     "description": (
         "Sends a custom plain-text email with template variable support. Admin only. "
         "Use for custom messages, notifications, or automation workflows — "

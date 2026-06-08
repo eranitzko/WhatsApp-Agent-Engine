@@ -193,6 +193,7 @@ _SCHEMA = {
 _SCHEMA_INVOICE = {
     "name": "export_invoice_report",
     "category": "export",
+    "access": "admin",
     "description": (
         "Generates and delivers an invoice report (PDF or XLSX) for a given month. Admin only. "
         "Delivers to the group chat, by email, or both. "
@@ -252,6 +253,7 @@ _SCHEMA_INVOICE = {
 _SCHEMA_ACCOUNTING = {
     "name": "export_accounting_report",
     "category": "export",
+    "access": "admin",
     "description": (
         "Generates and delivers an accounting ledger report (PDF or XLSX). Admin only. "
         "PDF shows net balances and full transaction history. "

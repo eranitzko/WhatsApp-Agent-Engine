@@ -204,6 +204,7 @@ _SCHEMAS: dict[str, dict] = {
     "create_automation": {
         "name": "create_automation",
         "category": "automation",
+        "access": "admin",
         "description": (
             "Step 1 of 2 — saves a scheduled, recurring, inactivity, or threshold-triggered automation rule. "
             "The rule is saved as pending and must be activated with activate_automation after the user confirms. "
@@ -272,6 +273,7 @@ _SCHEMAS: dict[str, dict] = {
     "activate_automation": {
         "name": "activate_automation",
         "category": "automation",
+        "access": "admin",
         "description": (
             "Step 2 of 2 — activates a pending automation rule created with create_automation. "
             "Only call this after the user has said yes to the create_automation summary. "
@@ -288,6 +290,7 @@ _SCHEMAS: dict[str, dict] = {
     "list_automations": {
         "name": "list_automations",
         "category": "automation",
+        "access": "admin",
         "description": (
             "Use when a user asks to see, list, or review their automations. "
             "Returns: all active and paused rules with their type, schedule, and action summary."
@@ -301,6 +304,7 @@ _SCHEMAS: dict[str, dict] = {
     "pause_automation": {
         "name": "pause_automation",
         "category": "automation",
+        "access": "admin",
         "description": (
             "Use when a user wants to temporarily stop an automation rule from firing. "
             "Returns: confirmation that the rule is paused."
@@ -316,6 +320,7 @@ _SCHEMAS: dict[str, dict] = {
     "cancel_automation": {
         "name": "cancel_automation",
         "category": "automation",
+        "access": "admin",
         "description": (
             "Use when a user wants to permanently delete an automation rule. "
             "Returns: confirmation that the rule was deleted."
@@ -331,6 +336,7 @@ _SCHEMAS: dict[str, dict] = {
     "edit_automation": {
         "name": "edit_automation",
         "category": "automation",
+        "access": "admin",
         "description": (
             "Updates one or more fields of an existing automation rule. Admin only. "
             "All fields except 'id' are optional — only provided fields are changed. "

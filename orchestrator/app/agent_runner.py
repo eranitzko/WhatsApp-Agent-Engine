@@ -62,6 +62,9 @@ class AgentRunner:
         if self._disabled_tools:
             allowed_tools = [t for t in allowed_tools if t not in self._disabled_tools]
 
+        # Filter by access level — admin tools are invisible to non-admins
+        allowed_tools = self.registry.get_allowed_tool_names(allowed_tools, is_admin)
+
         sender_phone = sender.split("@")[0].split(":")[0]
 
         # ── Multi-party confirmation intercept ────────────────────────────────

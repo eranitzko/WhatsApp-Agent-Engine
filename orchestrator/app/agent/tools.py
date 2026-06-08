@@ -36,6 +36,7 @@ TOOL_SCHEMAS: list[dict] = [
             "For invoice statistics, use get_invoice_summary instead."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
+        "access": "user",
     },
     {
         "name": "list_invoices",
@@ -52,6 +53,7 @@ TOOL_SCHEMAS: list[dict] = [
             },
             "required": [],
         },
+        "access": "user",
     },
     {
         "name": "get_invoice_summary",
@@ -68,6 +70,7 @@ TOOL_SCHEMAS: list[dict] = [
             },
             "required": [],
         },
+        "access": "user",
     },
     {
         "name": "update_config",
@@ -84,6 +87,7 @@ TOOL_SCHEMAS: list[dict] = [
             },
             "required": ["key", "value"],
         },
+        "access": "admin",
     },
     {
         "name": "flag_invoice",
@@ -99,6 +103,7 @@ TOOL_SCHEMAS: list[dict] = [
             },
             "required": ["invoice_id"],
         },
+        "access": "admin",
     },
     {
         "name": "unflag_invoice",
@@ -113,6 +118,7 @@ TOOL_SCHEMAS: list[dict] = [
             },
             "required": ["invoice_id"],
         },
+        "access": "admin",
     },
     {
         "name": "set_invoice_date",
@@ -129,6 +135,7 @@ TOOL_SCHEMAS: list[dict] = [
             },
             "required": ["invoice_id", "new_date"],
         },
+        "access": "admin",
     },
     {
         "name": "set_invoice_amount",
@@ -150,6 +157,7 @@ TOOL_SCHEMAS: list[dict] = [
             },
             "required": ["invoice_id", "new_amount"],
         },
+        "access": "admin",
     },
     {
         "name": "add_date_format",
@@ -173,6 +181,7 @@ TOOL_SCHEMAS: list[dict] = [
             },
             "required": ["format_string"],
         },
+        "access": "admin",
     },
     {
         "name": "stage_action",
@@ -203,6 +212,7 @@ TOOL_SCHEMAS: list[dict] = [
             },
             "required": ["action", "params", "description"],
         },
+        "access": "admin",
     },
 ]
 

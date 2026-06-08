@@ -81,6 +81,7 @@ _SCHEMAS: dict[str, dict] = {
     "record_expense": {
         "name": "record_expense",
         "category": "accounting",
+        "access": "user",
         "description": (
             "Use when one person paid for others, or a user acknowledges a debt. "
             "Examples: 'Eran paid for me ₪150', 'I owe Tal ₪200', 'I paid for Eden'. "
@@ -111,6 +112,7 @@ _SCHEMAS: dict[str, dict] = {
     "record_payment": {
         "name": "record_payment",
         "category": "accounting",
+        "access": "user",
         "description": (
             "Use when a user reports repaying a debt (e.g. 'I paid Tal back ₪200', 'Eden sent me money'). "
             "Applies FIFO settlement to open debt legs between the two parties. "
@@ -133,6 +135,7 @@ _SCHEMAS: dict[str, dict] = {
     "get_balance": {
         "name": "get_balance",
         "category": "accounting",
+        "access": "user",
         "description": (
             "Use when a user asks what they owe, what they are owed, or the balance between two people. "
             "Non-admins automatically see only their own balances. "
@@ -150,6 +153,7 @@ _SCHEMAS: dict[str, dict] = {
     "get_debt_summary": {
         "name": "get_debt_summary",
         "category": "accounting",
+        "access": "user",
         "description": (
             "Returns a human-readable list of who owes what to whom. "
             "Non-admins see only debts involving themselves. "
@@ -161,6 +165,7 @@ _SCHEMAS: dict[str, dict] = {
     "get_history": {
         "name": "get_history",
         "category": "accounting",
+        "access": "user",
         "description": (
             "Use when a user wants an itemized list of transactions — past expenses, payments, dates. "
             "Non-admins see only their own transactions. Optionally filtered by person or date range. "
@@ -179,6 +184,7 @@ _SCHEMAS: dict[str, dict] = {
     "get_transaction": {
         "name": "get_transaction",
         "category": "accounting",
+        "access": "admin",
         "description": (
             "Returns full detail for a single transaction: all participants, amounts, "
             "date, description, and settlement status. Admin only. "
@@ -199,6 +205,7 @@ _SCHEMAS: dict[str, dict] = {
     "set_reminder": {
         "name": "set_reminder",
         "category": "accounting",
+        "access": "user",
         "description": (
             "Use when a user wants a WhatsApp reminder sent to themselves at a future time. "
             "Self-only — cannot set reminders for other people. "
@@ -216,6 +223,7 @@ _SCHEMAS: dict[str, dict] = {
     "list_reminders": {
         "name": "list_reminders",
         "category": "accounting",
+        "access": "user",
         "description": (
             "Lists pending (not yet sent) reminders for the current user in this group. "
             "Shows each reminder's ID prefix, message text, and scheduled time. "
@@ -226,6 +234,7 @@ _SCHEMAS: dict[str, dict] = {
     "cancel_reminder": {
         "name": "cancel_reminder",
         "category": "accounting",
+        "access": "user",
         "description": (
             "Cancels a pending reminder by its ID prefix. "
             "Use the ID prefix shown by list_reminders (at least 4 characters). "
@@ -245,6 +254,7 @@ _SCHEMAS: dict[str, dict] = {
     "set_report_email": {
         "name": "set_report_email",
         "category": "accounting",
+        "access": "user",
         "description": (
             "Saves the user's email address for PDF/XLSX report delivery. "
             "Use when a user says 'send reports to my email' or provides an address for export. "
@@ -261,6 +271,7 @@ _SCHEMAS: dict[str, dict] = {
     "rename_participant": {
         "name": "rename_participant",
         "category": "accounting",
+        "access": "admin",
         "description": (
             "Use when an admin wants to set or clear the display name for a group participant. Admin only. "
             "Pass empty string to revert to their WhatsApp push name. "
@@ -278,6 +289,7 @@ _SCHEMAS: dict[str, dict] = {
     "set_household": {
         "name": "set_household",
         "category": "accounting",
+        "access": "admin",
         "description": (
             "Use when an admin wants to mark or unmark a participant as part of the shared household account (shown as 'Parents'). Admin only. "
             "Returns: confirmation of the updated household status."
@@ -294,6 +306,7 @@ _SCHEMAS: dict[str, dict] = {
     "list_participants": {
         "name": "list_participants",
         "category": "accounting",
+        "access": "user",
         "description": (
             "Returns the list of active group members with their display names and phone numbers. "
             "Use this before calling get_balance, record_expense, rename_participant, or set_household "
@@ -305,6 +318,7 @@ _SCHEMAS: dict[str, dict] = {
     "correct_transaction": {
         "name": "correct_transaction",
         "category": "accounting",
+        "access": "admin",
         "description": (
             "Step 1 of 2 — proposes a correction to an existing transaction. Admin only. "
             "Accepts partial updates: new date, new total amount in ILS, participants to add or remove. "
@@ -333,6 +347,7 @@ _SCHEMAS: dict[str, dict] = {
     "create_report_format": {
         "name": "create_report_format",
         "category": "accounting",
+        "access": "admin",
         "description": (
             "Use when an admin wants to save a named report layout for XLSX exports. Admin only. "
             "Returns: confirmation that the format was saved."
@@ -358,6 +373,7 @@ _SCHEMAS: dict[str, dict] = {
     "list_report_formats": {
         "name": "list_report_formats",
         "category": "accounting",
+        "access": "admin",
         "description": (
             "Use when an admin asks to see saved report formats. Admin only. "
             "Returns: list of named formats with their settings."
@@ -367,6 +383,7 @@ _SCHEMAS: dict[str, dict] = {
     "delete_report_format": {
         "name": "delete_report_format",
         "category": "accounting",
+        "access": "admin",
         "description": (
             "Use when an admin wants to delete a named report format. Admin only. "
             "Returns: confirmation that the format was deleted."
@@ -382,6 +399,7 @@ _SCHEMAS: dict[str, dict] = {
     "commit_correction": {
         "name": "commit_correction",
         "category": "accounting",
+        "access": "admin",
         "description": (
             "Step 2 of 2 — applies a staged transaction correction. Admin only. "
             "Only call this after calling correct_transaction and receiving a correction_token. "
