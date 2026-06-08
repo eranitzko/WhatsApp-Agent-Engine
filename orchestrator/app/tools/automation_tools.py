@@ -175,6 +175,31 @@ async def _exec_cancel_automation(params: dict, **ctx) -> str:
     return f"Automation '{name}' deleted."
 
 
+async def _exec_edit_automation(params: dict, **ctx) -> str:
+    rule_id = params.get("id", "")
+    group_jid: str = ctx.get("group_jid", "")
+    with SessionLocal() as db:
+        rule = db.get(AutomationRule, rule_id)
+        if rule is None:
+            return f"No automation found with ID '{rule_id}'."
+        if rule.group_jid != group_jid:
+            return "That automation belongs to a different group."
+
+        if "name" in params:
+            rule.name = params["name"]
+        if "schedule_cron" in params:
+            rule.schedule_cron = params["schedule_cron"]
+        if "inactivity_hours" in params:
+            rule.inactivity_hours = params["inactivity_hours"]
+        if "action_config" in params:
+            ac = params["action_config"]
+            rule.action_config = json.dumps(ac) if isinstance(ac, dict) else ac
+
+        db.commit()
+        description = _describe_rule(rule)
+    return f"Automation updated:\n{description}"
+
+
 _SCHEMAS: dict[str, dict] = {
     "create_automation": {
         "name": "create_automation",
@@ -303,6 +328,41 @@ _SCHEMAS: dict[str, dict] = {
             "required": ["id"],
         },
     },
+    "edit_automation": {
+        "name": "edit_automation",
+        "category": "automation",
+        "description": (
+            "Updates one or more fields of an existing automation rule. Admin only. "
+            "All fields except 'id' are optional — only provided fields are changed. "
+            "Returns: updated rule summary."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "The automation rule ID to edit.",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "New human label.",
+                },
+                "schedule_cron": {
+                    "type": "string",
+                    "description": "New cron expression (recurring) or ISO 8601 datetime (one_off).",
+                },
+                "inactivity_hours": {
+                    "type": "integer",
+                    "description": "New inactivity threshold in hours (inactivity rules only).",
+                },
+                "action_config": {
+                    "type": "object",
+                    "description": "New action configuration object. Replaces the entire existing config.",
+                },
+            },
+            "required": ["id"],
+        },
+    },
 }
 
 
@@ -328,5 +388,9 @@ def get_automation_tools() -> dict[str, dict]:
         "cancel_automation": {
             "schema": _SCHEMAS["cancel_automation"],
             "executor": _exec_cancel_automation,
+        },
+        "edit_automation": {
+            "schema": _SCHEMAS["edit_automation"],
+            "executor": _exec_edit_automation,
         },
     }

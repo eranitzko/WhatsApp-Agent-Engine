@@ -28,7 +28,7 @@ Record and query financial transactions between people. The tools handle all sta
 - rename_participant — update a display name; admin only
 - set_household — mark a participant as part of the shared household account; admin only
 - correct_transaction / commit_correction — fix a past transaction; admin only
-- create_automation / activate_automation / list_automations / pause_automation / cancel_automation — set up recurring or triggered actions; admin only
+- create_automation / activate_automation / list_automations / pause_automation / cancel_automation / edit_automation — set up recurring or triggered actions; admin only
 
 ## Resolving "I"
 "I paid" means sender_phone is the payer. "I owe" means sender_phone is the debtor.

@@ -212,11 +212,11 @@ def _seed_group(db):
     db.commit()
 
 
-def test_get_automation_tools_returns_five_tools():
+def test_get_automation_tools_returns_six_tools():
     tools = get_automation_tools()
     assert set(tools.keys()) == {
         "create_automation", "activate_automation",
-        "list_automations", "pause_automation", "cancel_automation",
+        "list_automations", "pause_automation", "cancel_automation", "edit_automation",
     }
 
 
@@ -628,3 +628,153 @@ def test_activate_automation_has_step_label():
     desc = tools["activate_automation"]["schema"]["description"]
     assert "Step 2 of 2" in desc
     assert "create_automation" in desc
+
+
+@pytest.mark.asyncio
+async def test_edit_automation_updates_name(db):
+    _seed_group(db)
+    rule = AutomationRule(
+        group_jid="123@g.us",
+        name="Old name",
+        rule_type="recurring",
+        schedule_cron="0 9 * * 1",
+        action_type="send_message",
+        action_config=json.dumps({"message": "hello"}),
+        status="active",
+    )
+    db.add(rule)
+    db.commit()
+    rule_id = rule.id
+
+    tools = get_automation_tools()
+    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+        result = await tools["edit_automation"]["executor"](
+            {"id": rule_id, "name": "New name"},
+            group_jid="123@g.us",
+        )
+    assert "New name" in result
+    db.expire_all()
+    rule = db.get(AutomationRule, rule_id)
+    assert rule.name == "New name"
+
+
+@pytest.mark.asyncio
+async def test_edit_automation_updates_schedule(db):
+    _seed_group(db)
+    rule = AutomationRule(
+        group_jid="123@g.us",
+        name="test",
+        rule_type="recurring",
+        schedule_cron="0 9 * * 1",
+        action_type="send_message",
+        action_config=json.dumps({"message": "hello"}),
+        status="active",
+    )
+    db.add(rule)
+    db.commit()
+    rule_id = rule.id
+
+    tools = get_automation_tools()
+    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+        result = await tools["edit_automation"]["executor"](
+            {"id": rule_id, "schedule_cron": "0 10 * * 2"},
+            group_jid="123@g.us",
+        )
+    assert "updated" in result.lower()
+    db.expire_all()
+    rule = db.get(AutomationRule, rule_id)
+    assert rule.schedule_cron == "0 10 * * 2"
+
+
+@pytest.mark.asyncio
+async def test_edit_automation_updates_inactivity_hours(db):
+    _seed_group(db)
+    rule = AutomationRule(
+        group_jid="123@g.us",
+        name="test",
+        rule_type="inactivity",
+        inactivity_hours=24,
+        action_type="send_message",
+        action_config=json.dumps({"message": "hello"}),
+        status="active",
+    )
+    db.add(rule)
+    db.commit()
+    rule_id = rule.id
+
+    tools = get_automation_tools()
+    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+        result = await tools["edit_automation"]["executor"](
+            {"id": rule_id, "inactivity_hours": 48},
+            group_jid="123@g.us",
+        )
+    assert "updated" in result.lower()
+    db.expire_all()
+    rule = db.get(AutomationRule, rule_id)
+    assert rule.inactivity_hours == 48
+
+
+@pytest.mark.asyncio
+async def test_edit_automation_updates_action_config(db):
+    _seed_group(db)
+    rule = AutomationRule(
+        group_jid="123@g.us",
+        name="test",
+        rule_type="recurring",
+        schedule_cron="0 9 * * 1",
+        action_type="send_message",
+        action_config=json.dumps({"message": "old"}),
+        status="active",
+    )
+    db.add(rule)
+    db.commit()
+    rule_id = rule.id
+
+    tools = get_automation_tools()
+    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+        result = await tools["edit_automation"]["executor"](
+            {"id": rule_id, "action_config": {"message": "new message"}},
+            group_jid="123@g.us",
+        )
+    assert "updated" in result.lower()
+    db.expire_all()
+    rule = db.get(AutomationRule, rule_id)
+    config = json.loads(rule.action_config)
+    assert config["message"] == "new message"
+
+
+@pytest.mark.asyncio
+async def test_edit_automation_not_found(db):
+    tools = get_automation_tools()
+    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+        result = await tools["edit_automation"]["executor"](
+            {"id": "nonexistent-id", "name": "x"},
+            group_jid="123@g.us",
+        )
+    assert "no automation" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_edit_automation_wrong_group_rejected(db):
+    _seed_group(db)
+    rule = AutomationRule(
+        group_jid="123@g.us",
+        name="test",
+        rule_type="recurring",
+        schedule_cron="0 9 * * 1",
+        action_type="send_message",
+        action_config=json.dumps({"message": "hello"}),
+        status="active",
+    )
+    db.add(rule)
+    db.commit()
+
+    tools = get_automation_tools()
+    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+        result = await tools["edit_automation"]["executor"](
+            {"id": rule.id, "name": "hacked"},
+            group_jid="999@g.us",
+        )
+    assert "different group" in result.lower()
+    db.expire_all()
+    assert db.get(AutomationRule, rule.id).name == "test"  # unchanged

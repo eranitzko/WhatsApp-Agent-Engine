@@ -8,7 +8,7 @@ from app.prompts.family_accounting import FAMILY_ACCOUNTING_SYSTEM_PROMPT
 
 AUTOMATION_TOOLS = [
     "create_automation", "activate_automation", "list_automations",
-    "pause_automation", "cancel_automation",
+    "pause_automation", "cancel_automation", "edit_automation",
     "export_invoice_report", "export_accounting_report",
     "send_email",
 ]
