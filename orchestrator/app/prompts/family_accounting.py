@@ -19,7 +19,7 @@ Record and query financial transactions between people. The tools handle all sta
 - get_history — user wants an itemized list of transactions
 - set_reminder — user wants a future reminder sent to them; self-only
 - set_report_email — user wants to save their email address for report delivery
-- export_report — user wants a PDF or XLSX ledger report; admin only
+- export_accounting_report — user wants a PDF or XLSX ledger report; admin only
 - rename_participant — update a display name; admin only
 - set_household — mark a participant as part of the shared household account; admin only
 - correct_transaction / commit_correction — fix a past transaction; admin only

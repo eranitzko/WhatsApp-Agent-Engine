@@ -318,12 +318,30 @@ async def test_export_report_unknown_blueprint_returns_error(db):
     assert "not supported" in result.lower()
 
 
-def test_get_export_tools_returns_one_tool():
+def test_export_invoice_report_tool_exists():
     from app.export.tool import get_export_tools
     tools = get_export_tools()
-    assert "export_report" in tools
-    assert "schema" in tools["export_report"]
-    assert "executor" in tools["export_report"]
+    assert "export_invoice_report" in tools
+    assert "export_accounting_report" in tools
+    assert "export_report" not in tools
+
+
+def test_export_invoice_report_has_invoice_params():
+    from app.export.tool import get_export_tools
+    tools = get_export_tools()
+    props = tools["export_invoice_report"]["schema"]["input_schema"]["properties"]
+    assert "month" in props
+    assert "attach_images" in props
+
+
+def test_export_accounting_report_has_no_invoice_params():
+    from app.export.tool import get_export_tools
+    tools = get_export_tools()
+    props = tools["export_accounting_report"]["schema"]["input_schema"]["properties"]
+    assert "month" not in props
+    assert "attach_images" not in props
+    assert "start_date" not in props
+    assert "year" not in props
 
 
 @pytest.mark.asyncio

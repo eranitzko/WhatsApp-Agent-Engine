@@ -190,11 +190,113 @@ _SCHEMA = {
     },
 }
 
+_SCHEMA_INVOICE = {
+    "name": "export_invoice_report",
+    "category": "export",
+    "description": (
+        "Generates and delivers an invoice report (PDF or XLSX) for a given month. Admin only. "
+        "Delivers to the group chat, by email, or both. "
+        "PDF can optionally include invoice images as an appendix. "
+        "Returns: confirmation of what was sent and where."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "format": {
+                "type": "string",
+                "enum": ["pdf", "xlsx", "both"],
+                "description": "Report format. Default: pdf.",
+            },
+            "delivery": {
+                "type": "string",
+                "enum": ["group", "email", "both"],
+                "description": "Delivery destination. Default: group.",
+            },
+            "email": {
+                "type": "string",
+                "description": "Recipient email. Optional — uses saved email if omitted.",
+            },
+            "month": {
+                "type": "integer",
+                "description": "Month 1–12. Defaults to current month.",
+            },
+            "year": {
+                "type": "integer",
+                "description": "4-digit year. Defaults to current year.",
+            },
+            "attach_images": {
+                "type": "boolean",
+                "description": "Include invoice images in PDF. Default: false.",
+            },
+            "start_date": {
+                "type": "string",
+                "description": "Custom range start YYYY-MM-DD. Overrides month/year.",
+            },
+            "end_date": {
+                "type": "string",
+                "description": "Custom range end YYYY-MM-DD. Overrides month/year.",
+            },
+            "subject": {
+                "type": "string",
+                "description": "Email subject. Supports {{variables}}. Email delivery only.",
+            },
+            "body": {
+                "type": "string",
+                "description": "Email body. Supports {{variables}}. Email delivery only.",
+            },
+        },
+        "required": [],
+    },
+}
+
+_SCHEMA_ACCOUNTING = {
+    "name": "export_accounting_report",
+    "category": "export",
+    "description": (
+        "Generates and delivers an accounting ledger report (PDF or XLSX). Admin only. "
+        "PDF shows net balances and full transaction history. "
+        "Delivers to the group chat, by email, or both. "
+        "Returns: confirmation of what was sent and where."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "format": {
+                "type": "string",
+                "enum": ["pdf", "xlsx", "both"],
+                "description": "Report format. Default: pdf.",
+            },
+            "delivery": {
+                "type": "string",
+                "enum": ["group", "email", "both"],
+                "description": "Delivery destination. Default: group.",
+            },
+            "email": {
+                "type": "string",
+                "description": "Recipient email. Optional — uses saved email if omitted.",
+            },
+            "subject": {
+                "type": "string",
+                "description": "Email subject. Supports {{variables}}. Email delivery only.",
+            },
+            "body": {
+                "type": "string",
+                "description": "Email body. Supports {{variables}}. Email delivery only.",
+            },
+        },
+        "required": [],
+    },
+}
+
 
 def get_export_tools() -> dict[str, dict]:
     return {
-        "export_report": {
-            "schema": _SCHEMA,
+        "export_invoice_report": {
+            "schema": _SCHEMA_INVOICE,
             "executor": _exec_export_report,
-        }
+        },
+        "export_accounting_report": {
+            "schema": _SCHEMA_ACCOUNTING,
+            "executor": _exec_export_report,
+        },
     }
