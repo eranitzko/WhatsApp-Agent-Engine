@@ -92,6 +92,13 @@ async def _exec_request_confirmation(params: dict, **ctx) -> str:
     action = params.get("action", "")
     action_params = params.get("params", {})
     description = params.get("description", action)
+
+    # DIAG: log exactly what is being frozen in the confirmation store
+    logger.info(
+        "DIAG request_confirmation store | group=%s | action=%r | action_params_keys=%s | action_params=%s | description=%r",
+        group_jid, action, list(action_params.keys()), action_params, description,
+    )
+
     try:
         # ConfirmationStore.set(group_id, action, params, description)
         confirmation_store.set(group_jid, action, action_params, description)

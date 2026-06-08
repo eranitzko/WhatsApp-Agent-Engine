@@ -28,6 +28,13 @@ class AutomationExecutor:
 
     async def execute(self, rule: "AutomationRule", db: "Session") -> None:
         """Execute the action for a rule. Logs errors but never raises."""
+        # DIAG: dump rule state at execution time
+        logger.info(
+            "DIAG AutomationExecutor.execute | rule_id=%s | name=%r | rule_type=%s | "
+            "action_type=%s | status=%s | last_fired_at=%s | schedule_cron=%r",
+            rule.id, rule.name, rule.rule_type, rule.action_type,
+            rule.status, rule.last_fired_at, rule.schedule_cron,
+        )
         try:
             config = json.loads(rule.action_config)
             if rule.action_type == "send_message":
@@ -99,7 +106,17 @@ class AutomationExecutor:
         for i, step in enumerate(steps):
             tool_name = step.get("tool", "")
             output_key = step.get("output_key")
-            params = ctx.resolve_dict(step.get("params", {}))
+            raw_params = step.get("params", {})
+            params = ctx.resolve_dict(raw_params)
+
+            # DIAG: log each step with raw and resolved params so we can see template substitution
+            logger.info(
+                "DIAG workflow step %d | group=%s | tool=%r | output_key=%r | "
+                "raw_params=%s | resolved_params=%s",
+                i, group_jid, tool_name, output_key,
+                {k: (v[:80] if isinstance(v, str) and len(v) > 80 else v) for k, v in raw_params.items()},
+                {k: (v[:80] if isinstance(v, str) and len(v) > 80 else v) for k, v in params.items()},
+            )
 
             if not reg.has_tool(tool_name):
                 logger.warning(

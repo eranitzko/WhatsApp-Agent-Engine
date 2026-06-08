@@ -52,6 +52,14 @@ def _is_allowed(to: str, db=None) -> bool:
 
 
 async def _exec_send_email(params: dict, **ctx) -> str:
+    # DIAG: log exact params dict so we can see whether 'to' or 'to_email' is present
+    logger.info(
+        "DIAG send_email entry | group=%s | params_keys=%s | params=%s",
+        ctx.get("group_jid", "?"),
+        list(params.keys()),
+        {k: (v[:80] if isinstance(v, str) and len(v) > 80 else v) for k, v in params.items()},
+    )
+
     if not ctx.get("is_admin", False):
         return "send_email is admin only."
 
@@ -62,6 +70,11 @@ async def _exec_send_email(params: dict, **ctx) -> str:
     body = params.get("body", "").strip()
 
     if not to:
+        # DIAG: log which keys existed when 'to' was empty so we can spot to_email mismatch
+        logger.warning(
+            "DIAG send_email 'to' is empty | group=%s | available_keys=%s | to_email_value=%r",
+            group_jid, list(params.keys()), params.get("to_email"),
+        )
         return "Missing 'to' email address."
     if not subject:
         return "Missing 'subject'."

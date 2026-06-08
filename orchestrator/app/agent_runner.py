@@ -78,6 +78,14 @@ class AgentRunner:
         pending = confirmation_store.get(group_jid)
         if pending and not pending.is_expired():
             if confirmation_store.is_confirm(message):
+                # DIAG: log exactly what action and params are being fired at confirmation time
+                logger.info(
+                    "DIAG confirmation fired | group=%s | action=%r | params_keys=%s | params=%s",
+                    group_jid, pending.action,
+                    list(pending.params.keys()),
+                    {k: (v[:80] if isinstance(v, str) and len(v) > 80 else v)
+                     for k, v in pending.params.items()},
+                )
                 result = await self.registry.execute(
                     pending.action, pending.params,
                     group_jid=group_jid, sender=sender, is_admin=is_admin,
