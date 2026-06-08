@@ -12,7 +12,7 @@ Respond in the group's configured language (en or he). Do not mix languages with
 
 ## Tool selection criteria
 
-- get_status — user asks for bot status, invoice counts, or configuration
+- get_status — user asks for bot status or configuration (language, header, author, dual-currency)
 - list_invoices — user wants to see invoices for a month
 - get_invoice_summary — user wants a count/total summary for a month
 - flag_invoice / unflag_invoice — user wants to mark or clear a review flag on an invoice
