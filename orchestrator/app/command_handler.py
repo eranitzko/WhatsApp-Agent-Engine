@@ -108,6 +108,13 @@ class CommandHandler:
                 return f"Failed to fetch group metadata: {exc}"
 
             description = meta["description"]
+            # Sanitize before storing: cap length and strip control characters to
+            # prevent prompt injection via a malicious group description.
+            if description:
+                description = description[:500].strip()
+                description = "".join(
+                    c for c in description if c.isprintable() or c in "\n\r\t"
+                )
             entry.custom_instructions = description or None
 
             from app.db.models import GroupParticipant
