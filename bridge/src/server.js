@@ -104,6 +104,7 @@ app.get('/groups', requireBridgeAuth, async (_req, res) => {
         })
         .map(p => ({
           jid: p.id,
+          lid: p.lid || null,
           isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
         })),
     }))
