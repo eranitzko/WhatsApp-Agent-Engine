@@ -227,7 +227,7 @@ async def test_correct_transaction_enqueues_and_shows_diff(db):
     assert pending.changes["new_amount_ils"] == 200
 
 
-# ── Task: apply_correction ────────────────────────────────────────────────────
+# ── Task: commit_correction ────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_apply_correction_updates_amount(db):
@@ -257,7 +257,7 @@ async def test_apply_correction_updates_amount(db):
          patch("app.tools.accounting_tools.correction_queue", fresh_queue):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
-        result = await tools["apply_correction"]["executor"](
+        result = await tools["commit_correction"]["executor"](
             {"token": correction.token, "admin_phone": "972500000001"},
             group_jid="123@g.us",
             sender="972500000001@s.whatsapp.net",
@@ -299,7 +299,7 @@ async def test_apply_correction_updates_date(db):
          patch("app.tools.accounting_tools.correction_queue", fresh_queue):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
-        await tools["apply_correction"]["executor"](
+        await tools["commit_correction"]["executor"](
             {"token": correction.token, "admin_phone": "972500000001"},
             group_jid="123@g.us",
             sender="972500000001@s.whatsapp.net",

@@ -12,7 +12,7 @@ EXPECTED_TOOLS = [
     "record_transaction", "record_payment", "get_balance",
     "get_history", "set_reminder",
     "save_email", "rename_participant", "set_household",
-    "correct_transaction", "apply_correction",
+    "correct_transaction", "commit_correction",
     "create_report_format", "list_report_formats", "delete_report_format",
 ]
 
@@ -197,3 +197,17 @@ async def test_record_transaction_uses_account_service_when_injected(db):
     assert "Confirmation" in result or "recorded" in result.lower()
 
     at_module.set_account_service(None)  # clean up
+
+
+def test_correct_transaction_has_step_label():
+    tools = get_accounting_tools()
+    desc = tools["correct_transaction"]["schema"]["description"]
+    assert "Step 1 of 2" in desc
+    assert "commit_correction" in desc
+
+
+def test_commit_correction_has_step_label():
+    tools = get_accounting_tools()
+    desc = tools["commit_correction"]["schema"]["description"]
+    assert "Step 2 of 2" in desc
+    assert "correct_transaction" in desc

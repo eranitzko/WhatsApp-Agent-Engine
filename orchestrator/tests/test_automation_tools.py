@@ -215,7 +215,7 @@ def _seed_group(db):
 def test_get_automation_tools_returns_five_tools():
     tools = get_automation_tools()
     assert set(tools.keys()) == {
-        "create_automation", "confirm_automation",
+        "create_automation", "activate_automation",
         "list_automations", "pause_automation", "cancel_automation",
     }
 
@@ -269,7 +269,7 @@ async def test_confirm_automation_activates_rule(db):
 
     tools = get_automation_tools()
     with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
-        result = await tools["confirm_automation"]["executor"](
+        result = await tools["activate_automation"]["executor"](
             {"id": rule_id},
             group_jid="123@g.us",
         )
@@ -295,7 +295,7 @@ async def test_confirm_automation_wrong_group_rejected(db):
 
     tools = get_automation_tools()
     with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
-        result = await tools["confirm_automation"]["executor"](
+        result = await tools["activate_automation"]["executor"](
             {"id": rule.id},
             group_jid="999@g.us",
         )
@@ -614,3 +614,17 @@ async def test_create_automation_rejects_invalid_action_type(db):
             group_jid="123@g.us",
         )
     assert "invalid" in result.lower()
+
+
+def test_create_automation_has_step_label():
+    tools = get_automation_tools()
+    desc = tools["create_automation"]["schema"]["description"]
+    assert "Step 1 of 2" in desc
+    assert "activate_automation" in desc
+
+
+def test_activate_automation_has_step_label():
+    tools = get_automation_tools()
+    desc = tools["activate_automation"]["schema"]["description"]
+    assert "Step 2 of 2" in desc
+    assert "create_automation" in desc

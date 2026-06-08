@@ -180,10 +180,10 @@ _SCHEMAS: dict[str, dict] = {
         "name": "create_automation",
         "category": "automation",
         "description": (
-            "Use when a user asks to set up a scheduled, recurring, inactivity, or threshold-triggered action. "
-            "The rule is saved as pending and must be activated with confirm_automation after user confirms. "
+            "Step 1 of 2 — saves a scheduled, recurring, inactivity, or threshold-triggered automation rule. "
+            "The rule is saved as pending and must be activated with activate_automation after the user confirms. "
             "For one_off: schedule_cron is an ISO 8601 datetime (e.g. '2026-06-15T09:00:00+00:00'). "
-            "For recurring: schedule_cron is a cron expression (e.g. '0 9 * * 5' = every Friday 9am). "
+            "For recurring: schedule_cron is a cron expression (e.g. '0 9 * * 5' = every Friday 9am UTC). "
             "For inactivity: supply inactivity_hours. For threshold: supply threshold_config. "
             "Returns: rule ID and a human-readable summary for the user to confirm."
         ),
@@ -244,11 +244,12 @@ _SCHEMAS: dict[str, dict] = {
             "required": ["name", "rule_type", "action_type", "action_config"],
         },
     },
-    "confirm_automation": {
-        "name": "confirm_automation",
+    "activate_automation": {
+        "name": "activate_automation",
         "category": "automation",
         "description": (
-            "Use when a user says yes to confirm a pending automation rule created with create_automation. "
+            "Step 2 of 2 — activates a pending automation rule created with create_automation. "
+            "Only call this after the user has said yes to the create_automation summary. "
             "Returns: confirmation that the rule is now active."
         ),
         "input_schema": {
@@ -312,8 +313,8 @@ def get_automation_tools() -> dict[str, dict]:
             "schema": _SCHEMAS["create_automation"],
             "executor": _exec_create_automation,
         },
-        "confirm_automation": {
-            "schema": _SCHEMAS["confirm_automation"],
+        "activate_automation": {
+            "schema": _SCHEMAS["activate_automation"],
             "executor": _exec_confirm_automation,
         },
         "list_automations": {

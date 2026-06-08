@@ -7,7 +7,7 @@ from app.prompts.family_accounting import FAMILY_ACCOUNTING_SYSTEM_PROMPT
 
 
 AUTOMATION_TOOLS = [
-    "create_automation", "confirm_automation", "list_automations",
+    "create_automation", "activate_automation", "list_automations",
     "pause_automation", "cancel_automation",
     "export_report",
     "send_email",
@@ -28,7 +28,7 @@ FAMILY_ACCOUNTING_TOOLS = [
     "record_transaction", "record_payment", "get_balance",
     "get_history", "set_reminder",
     "save_email", "rename_participant", "set_household",
-    "correct_transaction", "apply_correction",
+    "correct_transaction", "commit_correction",
     "create_report_format", "list_report_formats", "delete_report_format",
     *AUTOMATION_TOOLS,
 ]

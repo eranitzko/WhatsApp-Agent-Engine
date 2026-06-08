@@ -236,8 +236,11 @@ _SCHEMAS: dict[str, dict] = {
         "name": "correct_transaction",
         "category": "accounting",
         "description": (
-            "Use when an admin wants to propose a correction to an existing transaction (date, amount, or participants). Admin only. "
-            "Returns a diff for review — the correction is only applied after the admin confirms with apply_correction."
+            "Step 1 of 2 — proposes a correction to an existing transaction. Admin only. "
+            "Accepts partial updates: new date, new total amount in ILS, participants to add or remove. "
+            "Returns a human-readable diff and a correction_token. "
+            "You MUST then call commit_correction with that token to apply the change. "
+            "Do not tell the user the change is applied until commit_correction succeeds."
         ),
         "input_schema": {
             "type": "object",
@@ -306,19 +309,20 @@ _SCHEMAS: dict[str, dict] = {
             "required": ["name"],
         },
     },
-    "apply_correction": {
-        "name": "apply_correction",
+    "commit_correction": {
+        "name": "commit_correction",
         "category": "accounting",
         "description": (
-            "Use to apply a staged correction after the admin has reviewed and confirmed it. Admin only. "
+            "Step 2 of 2 — applies a staged transaction correction. Admin only. "
+            "Only call this after calling correct_transaction and receiving a correction_token. "
             "Requires the token returned by correct_transaction. "
-            "Returns: confirmation that the correction was applied."
+            "Returns confirmation that the correction was applied."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "token": {"type": "string"},
-                "admin_phone": {"type": "string"},
+                "token": {"type": "string", "description": "The correction_token returned by correct_transaction."},
+                "admin_phone": {"type": "string", "description": "Admin's phone number."},
             },
             "required": ["token"],
         },
@@ -974,7 +978,7 @@ def get_accounting_tools() -> dict[str, dict]:
             ("rename_participant",   _exec_rename_participant),
             ("set_household",        _exec_set_household),
             ("correct_transaction",  _exec_correct_transaction),
-            ("apply_correction",     _exec_apply_correction),
+            ("commit_correction",    _exec_apply_correction),
             ("create_report_format", _exec_create_report_format),
             ("list_report_formats",  _exec_list_report_formats),
             ("delete_report_format", _exec_delete_report_format),
