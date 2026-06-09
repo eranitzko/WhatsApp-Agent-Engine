@@ -1,5 +1,6 @@
 import logging
 import os
+import re as _re
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -63,6 +64,18 @@ def _sanitize_push_name(name: str | None) -> str | None:
     # Normalize whitespace
     name = " ".join(name.split())
     return name or None
+
+
+_SENDER_PHONE_RE = _re.compile(r'^\d{7,18}$')
+
+
+def _is_valid_sender_phone(phone: str) -> bool:
+    """Return True if phone is a plausible numeric WhatsApp identifier (E.164 or LID).
+
+    Accepts 7-18 digit strings. Rejects empty strings, strings with non-numeric
+    characters, and strings that are too short or too long.
+    """
+    return bool(_SENDER_PHONE_RE.match(phone))
 
 
 def _upsert_participant(
@@ -214,7 +227,7 @@ async def _process(payload: WebhookPayload) -> None:
         # Passively track participant names on every inbound message
         if payload.push_name and payload.sender and payload.jid:
             sender_phone = payload.sender.split("@")[0].split(":")[0]
-            if sender_phone:
+            if sender_phone and _is_valid_sender_phone(sender_phone):
                 try:
                     _upsert_participant(db, payload.jid, sender_phone, push_name=_sanitize_push_name(payload.push_name))
                 except Exception:
@@ -362,6 +375,9 @@ async def _process(payload: WebhookPayload) -> None:
         # Compute is_admin server-side — never trust the bridge-supplied flag.
         # The bridge payload field (isAdmin) is untrusted attacker-controlled input.
         _acl_phone = payload.sender.split("@")[0].split(":")[0]
+        if not _is_valid_sender_phone(_acl_phone):
+            logger.warning("Rejecting message with invalid sender phone format: %r", _acl_phone)
+            return
         is_admin = (
             db.query(AdminNumbers).filter_by(phone_number=_acl_phone).first() is not None
         )

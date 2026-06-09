@@ -262,3 +262,24 @@ def test_email_allowlist_with_entry_blocks_other(db):
     db.add(EmailAllowlist(email="allowed@example.com"))
     db.commit()
     assert _is_allowed("other@example.com", db=db) is False
+
+
+# ── Sender Phone Format Validation (M-3) ────────────────────────────────
+
+
+def test_sender_phone_format_validator_accepts_valid():
+    """Valid phone and LID formats pass the validator."""
+    from app.main import _is_valid_sender_phone
+    assert _is_valid_sender_phone("972523206175") is True
+    assert _is_valid_sender_phone("8650248708313") is True
+    assert _is_valid_sender_phone("1234567") is True       # 7-digit minimum
+
+
+def test_sender_phone_format_validator_rejects_invalid():
+    """Non-numeric and too-short/too-long values are rejected."""
+    from app.main import _is_valid_sender_phone
+    assert _is_valid_sender_phone("") is False
+    assert _is_valid_sender_phone("abc") is False
+    assert _is_valid_sender_phone("../../etc/passwd") is False
+    assert _is_valid_sender_phone("123456") is False        # too short (< 7 digits)
+    assert _is_valid_sender_phone("1" * 19) is False        # too long (> 18 digits)
