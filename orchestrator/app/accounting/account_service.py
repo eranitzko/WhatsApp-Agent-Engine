@@ -95,7 +95,6 @@ class AccountService:
                 .filter_by(status="active")
                 .all()
             )
-            best_jid: str | None = None
             for gp in all_gps:
                 pname = (gp.admin_name or gp.push_name or "").lower()
                 label_parts = label_lower.split()
@@ -103,10 +102,8 @@ class AccountService:
                     reg = db.get(GroupRegistry, gp.group_jid)
                     if reg and reg.blueprint_id == "family_accounting":
                         return gp.group_jid
-                    if reg and best_jid is None:
-                        best_jid = gp.group_jid
-            if best_jid:
-                return best_jid
+                    # Non-family_accounting groups are never a valid personal group
+                    # destination — do not fall back to them.
 
         return None
 
@@ -205,15 +202,18 @@ class AccountService:
             .first()
         )
 
-        # 2. Group-only fallback (handles LID ↔ phone mismatch)
+        # 2. Group-only fallback (handles LID ↔ phone mismatch).
+        # Only safe when there is exactly one pending confirmation for this group —
+        # if multiple are pending we cannot tell which user is responding.
         if conf is None:
-            conf = (
+            pending_for_group = (
                 db.query(CrossGroupConfirmation)
                 .filter_by(target_group_jid=group_jid, status="pending")
                 .filter(CrossGroupConfirmation.expires_at > now)
-                .order_by(CrossGroupConfirmation.created_at.asc())
-                .first()
+                .all()
             )
+            if len(pending_for_group) == 1:
+                conf = pending_for_group[0]
 
         if conf is None:
             return False
