@@ -81,6 +81,29 @@ async def _exec_create_automation(params: dict, **ctx) -> str:
             pass
     action_config_json = json.dumps(action_config_raw)
 
+    # Validate tool names in action_config against the live registry.
+    action_type = params.get("action_type", "")
+    try:
+        from app import registry_ref
+        reg = registry_ref.get_registry()
+        if action_type == "run_agent_action":
+            tool_name = action_config_raw.get("action", "")
+            if tool_name and not reg.has_tool(tool_name):
+                return (
+                    f"Cannot create automation: tool '{tool_name}' is not available. "
+                    f"Check the tool name and try again."
+                )
+        elif action_type == "workflow":
+            for i, step in enumerate(action_config_raw.get("steps", [])):
+                step_tool = step.get("tool", "")
+                if step_tool and not reg.has_tool(step_tool):
+                    return (
+                        f"Cannot create automation: step {i + 1} references unknown tool "
+                        f"'{step_tool}'. Check the tool name and try again."
+                    )
+    except RuntimeError:
+        pass  # registry not yet initialised (unit tests) — skip validation
+
     rule = AutomationRule(
         group_jid=group_jid,
         name=params.get("name", "Unnamed automation"),

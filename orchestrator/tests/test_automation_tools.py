@@ -142,7 +142,7 @@ async def test_executor_run_agent_action_calls_registry_tool(db):
     assert call_args.args[0] == "get_balance"
     assert call_args.args[1] == {"phone": "972501234567"}
     assert call_args.kwargs["group_jid"] == "123@g.us"
-    assert call_args.kwargs["is_admin"] is True
+    assert call_args.kwargs["is_admin"] is False
     assert call_args.kwargs["sender"] == ""
     assert "confirmation_store" in received_ctx
 
@@ -562,10 +562,17 @@ async def test_workflow_stops_at_failed_step(db):
 @pytest.mark.asyncio
 async def test_create_workflow_automation_saves_rule(db):
     """create_automation with action_type='workflow' saves a valid rule."""
+    from unittest.mock import MagicMock
+    import app.registry_ref as rr
+
     _seed_group(db)
     tools = get_automation_tools()
 
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    mock_registry = MagicMock()
+    mock_registry.has_tool.return_value = True
+
+    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)), \
+         patch.object(rr, "get_registry", return_value=mock_registry):
         result = await tools["create_automation"]["executor"](
             {
                 "name": "Monthly PDF then email",

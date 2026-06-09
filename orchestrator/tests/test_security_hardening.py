@@ -109,3 +109,63 @@ def test_pending_action_staged_by_defaults_empty():
     store.set("grp1", "delete", {}, "Delete something")
     pending = store.get("grp1")
     assert pending.staged_by == ""
+
+
+@pytest.mark.asyncio
+async def test_automation_executor_is_admin_false():
+    """AutomationExecutor must pass is_admin=False when running tools."""
+    from app.automation.executor import AutomationExecutor
+    from unittest.mock import MagicMock
+    import json
+
+    captured = {}
+
+    async def fake_execute(tool_name, params, **kwargs):
+        captured.update(kwargs)
+        return "ok"
+
+    mock_registry = MagicMock()
+    mock_registry.has_tool.return_value = True
+    mock_registry.execute = fake_execute
+
+    import app.registry_ref as rr
+    with patch.object(rr, "get_registry", return_value=mock_registry):
+        executor = AutomationExecutor()
+        rule = MagicMock()
+        rule.action_type = "run_agent_action"
+        rule.action_config = json.dumps({"action": "get_balance"})
+        rule.group_jid = "grp@g.us"
+        rule.id = "rule-1"
+        rule.name = "test"
+        rule.rule_type = "recurring"
+        rule.status = "active"
+        rule.last_fired_at = None
+        rule.schedule_cron = "0 9 * * *"
+        await executor.execute(rule, db=None)
+
+    assert captured.get("is_admin") is False
+
+
+@pytest.mark.asyncio
+async def test_create_automation_rejects_unknown_tool():
+    """_exec_create_automation must reject action_config containing an unknown tool name."""
+    from app.tools.automation_tools import _exec_create_automation
+    from unittest.mock import MagicMock
+    import app.registry_ref as rr
+
+    mock_registry = MagicMock()
+    mock_registry.has_tool.return_value = False
+
+    with patch.object(rr, "get_registry", return_value=mock_registry):
+        result = await _exec_create_automation(
+            {
+                "name": "Bad automation",
+                "rule_type": "recurring",
+                "schedule_cron": "0 9 * * *",
+                "action_type": "run_agent_action",
+                "action_config": {"action": "nonexistent_tool"},
+            },
+            group_jid="grp@g.us",
+        )
+
+    assert "not available" in result.lower() or "unknown" in result.lower()
