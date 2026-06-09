@@ -45,6 +45,26 @@ logger = logging.getLogger(__name__)
 _WEBHOOK_SECRET: str = os.environ.get("WEBHOOK_SECRET", "")
 
 
+def _sanitize_push_name(name: str | None) -> str | None:
+    """Sanitize a WhatsApp push name before storing or injecting into prompts.
+
+    Caps length at 100 chars and truncates at the first non-printable character
+    to prevent prompt injection via malicious display names with embedded
+    control sequences.
+    """
+    if name is None:
+        return None
+    name = name[:100]
+    # Truncate at first non-printable character
+    for i, c in enumerate(name):
+        if not c.isprintable():
+            name = name[:i]
+            break
+    # Normalize whitespace
+    name = " ".join(name.split())
+    return name or None
+
+
 def _upsert_participant(
     db,
     group_jid: str,
@@ -196,7 +216,7 @@ async def _process(payload: WebhookPayload) -> None:
             sender_phone = payload.sender.split("@")[0].split(":")[0]
             if sender_phone:
                 try:
-                    _upsert_participant(db, payload.jid, sender_phone, push_name=payload.push_name)
+                    _upsert_participant(db, payload.jid, sender_phone, push_name=_sanitize_push_name(payload.push_name))
                 except Exception:
                     db.rollback()
                     logger.debug("Could not upsert participant %s", sender_phone)
