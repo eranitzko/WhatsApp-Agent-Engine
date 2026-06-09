@@ -43,7 +43,6 @@ configure_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 _WEBHOOK_SECRET: str = os.environ.get("WEBHOOK_SECRET", "")
-_BRIDGE_SECRET: str = os.environ.get("BRIDGE_SECRET", "")
 
 
 def _upsert_participant(
@@ -392,13 +391,10 @@ async def _send(jid: str, text: str, *, mentions: list[str] | None = None) -> No
         payload: dict = {"jid": jid, "text": text}
         if mentions:
             payload["mentions"] = mentions
-        headers: dict = {}
-        if _BRIDGE_SECRET:
-            headers["Authorization"] = f"Bearer {_BRIDGE_SECRET}"
         await _http_client.post(
             f"{settings.bridge_url}/send",
             json=payload,
-            headers=headers,
+            headers=bridge_client._bridge_headers(),
             timeout=10,
         )
     except Exception:
