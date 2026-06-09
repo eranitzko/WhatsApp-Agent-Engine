@@ -28,27 +28,24 @@ def _is_allowed(to: str, db=None) -> bool:
     """Return True if `to` is permitted to receive emails.
 
     Reads from the email_allowlist DB table.
-    If the table is empty, any address is allowed (open by default).
+    Returns False when the table is empty (deny-all by default).
+    Add recipient addresses via the Settings panel to permit them.
     The `db` parameter is injected in tests; production uses a fresh session.
     """
     from app.db.models import EmailAllowlist
-
-    def _check(session):
-        count = session.query(EmailAllowlist).count()
-        if count == 0:
-            return True
-        return (
-            session.query(EmailAllowlist)
-            .filter(EmailAllowlist.email == to.strip().lower())
-            .first()
-        ) is not None
-
-    if db is not None:
-        return _check(db)
-
     from app.db.session import SessionLocal
-    with SessionLocal() as session:
-        return _check(session)
+
+    _db = db
+    _close = False
+    if _db is None:
+        _db = SessionLocal()
+        _close = True
+    try:
+        row = _db.query(EmailAllowlist).filter_by(email=to.strip().lower()).first()
+        return row is not None
+    finally:
+        if _close:
+            _db.close()
 
 
 async def _exec_send_email(params: dict, **ctx) -> str:

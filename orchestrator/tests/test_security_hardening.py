@@ -233,3 +233,32 @@ def test_push_name_sanitized_empty_string_returns_none():
 
     assert _sanitize_push_name("") is None
     assert _sanitize_push_name("   ") is None
+
+
+# ── Email Allowlist Deny-All When Empty (M-2) ────────────────────────────────
+
+
+def test_email_allowlist_empty_denies_all(db):
+    """When allowlist table has no rows, _is_allowed() must return False."""
+    from app.tools.send_email_tool import _is_allowed
+    assert _is_allowed("anyone@example.com", db=db) is False
+
+
+def test_email_allowlist_with_entry_allows(db):
+    """When allowlist table has a matching entry, _is_allowed() returns True."""
+    from app.tools.send_email_tool import _is_allowed
+    from app.db.models import EmailAllowlist
+
+    db.add(EmailAllowlist(email="allowed@example.com"))
+    db.commit()
+    assert _is_allowed("allowed@example.com", db=db) is True
+
+
+def test_email_allowlist_with_entry_blocks_other(db):
+    """When allowlist has entries but none match, _is_allowed() returns False."""
+    from app.tools.send_email_tool import _is_allowed
+    from app.db.models import EmailAllowlist
+
+    db.add(EmailAllowlist(email="allowed@example.com"))
+    db.commit()
+    assert _is_allowed("other@example.com", db=db) is False

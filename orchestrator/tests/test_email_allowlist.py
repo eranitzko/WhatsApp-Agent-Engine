@@ -21,10 +21,10 @@ def test_email_allowlist_model_created(db):
 
 # ── _is_allowed ──────────────────────────────────────────────────────────────
 
-def test_is_allowed_empty_table_permits_any(db):
-    """Empty allowlist → any address is allowed."""
+def test_is_allowed_empty_table_denies_all(db):
+    """Empty allowlist → no address is allowed (deny-all by default)."""
     from app.tools.send_email_tool import _is_allowed
-    assert _is_allowed("anyone@anywhere.com", db=db) is True
+    assert _is_allowed("anyone@anywhere.com", db=db) is False
 
 
 def test_is_allowed_blocks_unlisted(db):
