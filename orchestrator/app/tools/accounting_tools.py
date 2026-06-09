@@ -985,7 +985,9 @@ async def _exec_correct_transaction(params: dict, **ctx) -> str:
         return "Only admins can correct transactions."
     group_jid = ctx.get("group_jid", "")
     admin_phone = _sender_phone(ctx)
-    tx_prefix = params["transaction_id"]
+    tx_prefix = params.get("transaction_id", "").strip()
+    if len(tx_prefix) < 8:
+        return "Transaction ID prefix must be at least 8 characters. Use the ID shown in get_history."
 
     new_date = params.get("new_date")
     new_amount_ils = params.get("new_amount_ils")

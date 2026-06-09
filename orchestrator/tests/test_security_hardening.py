@@ -283,3 +283,61 @@ def test_sender_phone_format_validator_rejects_invalid():
     assert _is_valid_sender_phone("../../etc/passwd") is False
     assert _is_valid_sender_phone("123456") is False        # too short (< 7 digits)
     assert _is_valid_sender_phone("1" * 19) is False        # too long (> 18 digits)
+
+
+# ── Minimum Prefix Length for Transaction and Reminder IDs (M-4) ────────────────
+
+@pytest.mark.asyncio
+async def test_get_transaction_rejects_short_prefix(db):
+    """get_transaction must reject prefix shorter than 8 characters."""
+    from app.tools.accounting_tools import _exec_get_transaction
+
+    result = await _exec_get_transaction(
+        {"transaction_id": "abc"},
+        group_jid="grp@g.us",
+        sender="972500000001@s.whatsapp.net",
+        is_admin=True,
+    )
+    assert "at least 8" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_get_transaction_rejects_empty_prefix(db):
+    """get_transaction must reject empty prefix."""
+    from app.tools.accounting_tools import _exec_get_transaction
+
+    result = await _exec_get_transaction(
+        {"transaction_id": ""},
+        group_jid="grp@g.us",
+        sender="972500000001@s.whatsapp.net",
+        is_admin=True,
+    )
+    assert "at least 8" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_correct_transaction_rejects_short_prefix(db):
+    """correct_transaction must reject prefix shorter than 8 characters."""
+    from app.tools.accounting_tools import _exec_correct_transaction
+
+    result = await _exec_correct_transaction(
+        {"transaction_id": "abc", "new_date": "2026-06-10"},
+        group_jid="grp@g.us",
+        sender="972500000001@s.whatsapp.net",
+        is_admin=True,
+    )
+    assert "at least 8" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_cancel_reminder_rejects_short_prefix(db):
+    """cancel_reminder must reject reminder_id prefix shorter than 4 characters."""
+    from app.tools.accounting_tools import _exec_cancel_reminder
+
+    result = await _exec_cancel_reminder(
+        {"reminder_id": "ab"},
+        group_jid="grp@g.us",
+        sender="972500000001@s.whatsapp.net",
+        is_admin=False,
+    )
+    assert "at least 4" in result.lower()
