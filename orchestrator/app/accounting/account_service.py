@@ -98,7 +98,8 @@ class AccountService:
             best_jid: str | None = None
             for gp in all_gps:
                 pname = (gp.admin_name or gp.push_name or "").lower()
-                if label_lower and label_lower in pname:
+                label_parts = label_lower.split()
+                if label_parts and any(part in pname for part in label_parts):
                     reg = db.get(GroupRegistry, gp.group_jid)
                     if reg and reg.blueprint_id == "family_accounting":
                         return gp.group_jid
