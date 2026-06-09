@@ -10,6 +10,7 @@ from app.admin.auth import create_token, verify_token, AdminAuthError
 def test_create_token_returns_string():
     with patch("app.admin.auth.settings") as mock_settings:
         mock_settings.admin_ui_password = "secret123"
+        mock_settings.admin_jwt_secret = ""
         token = create_token("secret123")
     assert isinstance(token, str)
     assert len(token) > 20
@@ -18,6 +19,7 @@ def test_create_token_returns_string():
 def test_create_token_wrong_password_raises():
     with patch("app.admin.auth.settings") as mock_settings:
         mock_settings.admin_ui_password = "secret123"
+        mock_settings.admin_jwt_secret = ""
         with pytest.raises(AdminAuthError):
             create_token("wrongpassword")
 
@@ -25,6 +27,7 @@ def test_create_token_wrong_password_raises():
 def test_create_token_empty_password_configured_raises():
     with patch("app.admin.auth.settings") as mock_settings:
         mock_settings.admin_ui_password = ""
+        mock_settings.admin_jwt_secret = ""
         with pytest.raises(AdminAuthError):
             create_token("anything")
 
@@ -32,6 +35,7 @@ def test_create_token_empty_password_configured_raises():
 def test_verify_token_valid():
     with patch("app.admin.auth.settings") as mock_settings:
         mock_settings.admin_ui_password = "secret123"
+        mock_settings.admin_jwt_secret = ""
         token = create_token("secret123")
         assert verify_token(token) is True
 
@@ -39,6 +43,7 @@ def test_verify_token_valid():
 def test_verify_token_tampered_returns_false():
     with patch("app.admin.auth.settings") as mock_settings:
         mock_settings.admin_ui_password = "secret123"
+        mock_settings.admin_jwt_secret = ""
         token = create_token("secret123")
     # Tamper with the token
     tampered = token[:-4] + "XXXX"
@@ -63,6 +68,7 @@ def test_require_auth_valid_token_passes():
 
     with patch("app.admin.auth.settings") as mock_settings:
         mock_settings.admin_ui_password = "testpass"
+        mock_settings.admin_jwt_secret = ""
         token = create_token("testpass")
         client = TestClient(app)
         resp = client.get("/protected", headers={"Authorization": f"Bearer {token}"})

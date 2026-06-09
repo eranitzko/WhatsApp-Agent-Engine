@@ -56,5 +56,11 @@ class Settings(BaseSettings):
     # Admin panel
     admin_ui_password: str = ""
 
+    # Separate signing secret for admin JWT tokens.
+    # If set, tokens are signed with this value instead of sha256(admin_ui_password).
+    # Change this value to immediately revoke all existing admin sessions.
+    # Defaults to "" — falls back to sha256(admin_ui_password) for backwards compatibility.
+    admin_jwt_secret: str = ""
+
 
 settings = Settings()

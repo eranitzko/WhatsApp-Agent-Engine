@@ -26,7 +26,13 @@ class AdminAuthError(Exception):
 
 
 def _jwt_secret() -> str:
-    """Derive a stable JWT signing secret from the admin password."""
+    """Return the JWT signing secret.
+
+    Uses ADMIN_JWT_SECRET when set (preferred). Falls back to sha256(password)
+    for backwards compatibility. To revoke all active sessions, change ADMIN_JWT_SECRET.
+    """
+    if settings.admin_jwt_secret:
+        return settings.admin_jwt_secret
     return hashlib.sha256(settings.admin_ui_password.encode()).hexdigest()
 
 

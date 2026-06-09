@@ -169,3 +169,34 @@ async def test_create_automation_rejects_unknown_tool():
         )
 
     assert "not available" in result.lower() or "unknown" in result.lower()
+
+
+def test_jwt_uses_admin_jwt_secret_when_set():
+    """When ADMIN_JWT_SECRET is set, JWT is signed with it (not the password hash)."""
+    from app.admin import auth as auth_mod
+    import hashlib
+
+    class FakeSettings:
+        admin_ui_password = "mypassword"
+        admin_jwt_secret = "separate-jwt-secret-value"
+
+    with patch.object(auth_mod, "settings", FakeSettings()):
+        secret = auth_mod._jwt_secret()
+
+    assert secret == "separate-jwt-secret-value"
+    assert secret != hashlib.sha256(b"mypassword").hexdigest()
+
+
+def test_jwt_falls_back_to_password_hash_when_no_jwt_secret():
+    """When ADMIN_JWT_SECRET is empty, fall back to sha256(password)."""
+    from app.admin import auth as auth_mod
+    import hashlib
+
+    class FakeSettings:
+        admin_ui_password = "mypassword"
+        admin_jwt_secret = ""
+
+    with patch.object(auth_mod, "settings", FakeSettings()):
+        secret = auth_mod._jwt_secret()
+
+    assert secret == hashlib.sha256(b"mypassword").hexdigest()
