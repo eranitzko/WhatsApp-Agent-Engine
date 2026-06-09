@@ -560,6 +560,7 @@ async def exec_add_date_format(
 async def exec_request_confirmation(
     group_id: str, is_admin: bool,
     action: str, params: dict, description: str,
+    sender: str = "",
     **_,
 ) -> dict:
     if not is_admin:
@@ -600,8 +601,10 @@ async def exec_request_confirmation(
         # Append recipient to description so the user sees it in the confirmation prompt
         description = f"{description} — will be sent to {to_email}"
 
+    sender_raw = sender
+    staged_by = sender_raw.split("@")[0].split(":")[0] if sender_raw else ""
     from app.agent.confirmation import confirmation_store
-    if not confirmation_store.set(group_id, action, params, description):
+    if not confirmation_store.set(group_id, action, params, description, staged_by=staged_by):
         return {
             "error": "⚠️ Another action is already pending for this group. Please reply 'yes' to confirm or 'no' to cancel it before requesting a new action."
         }

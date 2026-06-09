@@ -89,3 +89,23 @@ def test_confirmation_store_set_after_expiry():
     result = store.set("grp1", "new_action", {}, "new")
     assert result is True
     assert store.get("grp1").action == "new_action"
+
+
+def test_pending_action_stores_staged_by():
+    """PendingAction should record who staged the action."""
+    from app.agent.confirmation import ConfirmationStore
+
+    store = ConfirmationStore()
+    store.set("grp1", "delete", {}, "Delete something", staged_by="972523206175")
+    pending = store.get("grp1")
+    assert pending.staged_by == "972523206175"
+
+
+def test_pending_action_staged_by_defaults_empty():
+    """staged_by defaults to '' for backwards compatibility."""
+    from app.agent.confirmation import ConfirmationStore
+
+    store = ConfirmationStore()
+    store.set("grp1", "delete", {}, "Delete something")
+    pending = store.get("grp1")
+    assert pending.staged_by == ""

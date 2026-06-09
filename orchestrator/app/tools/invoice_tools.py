@@ -93,15 +93,11 @@ async def _exec_request_confirmation(params: dict, **ctx) -> str:
     action_params = params.get("params", {})
     description = params.get("description", action)
 
-    # DIAG: log exactly what is being frozen in the confirmation store
-    logger.info(
-        "DIAG request_confirmation store | group=%s | action=%r | action_params_keys=%s | action_params=%s | description=%r",
-        group_jid, action, list(action_params.keys()), action_params, description,
-    )
+    sender_raw = ctx.get("sender", "")
+    staged_by = sender_raw.split("@")[0].split(":")[0] if sender_raw else ""
 
     try:
-        # ConfirmationStore.set(group_id, action, params, description)
-        if not confirmation_store.set(group_jid, action, action_params, description):
+        if not confirmation_store.set(group_jid, action, action_params, description, staged_by=staged_by):
             return "⚠️ Another action is already pending for this group. Please reply 'yes' to confirm or 'no' to cancel it before requesting a new action."
         return f"Confirmation requested: {description}. Reply 'yes' to confirm or 'no' to cancel."
     except Exception as exc:

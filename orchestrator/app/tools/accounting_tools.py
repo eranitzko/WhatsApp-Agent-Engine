@@ -1064,11 +1064,14 @@ async def _exec_correct_transaction(params: dict, **ctx) -> str:
     # Also set confirmation_store so "yes"/"confirm" applies it
     confirmation_store = ctx.get("confirmation_store")
     if confirmation_store:
+        sender_raw = ctx.get("sender", "")
+        staged_by = sender_raw.split("@")[0].split(":")[0] if sender_raw else ""
         if not confirmation_store.set(
             group_jid,
             "commit_correction",
             {"token": result.token, "admin_phone": admin_phone},
             "\n".join(diff_lines),
+            staged_by=staged_by,
         ):
             return "⚠️ Another action is already pending for this group. Please reply 'yes' to confirm or 'no' to cancel it before requesting a new action."
 

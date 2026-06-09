@@ -99,13 +99,16 @@ class AgentRunner:
         pending = confirmation_store.get(group_jid)
         if pending and not pending.is_expired():
             if confirmation_store.is_confirm(message):
-                # DIAG: log exactly what action and params are being fired at confirmation time
+                # Enforce: only the person who staged the action can confirm it.
+                # If staged_by is empty, any member can confirm (backwards compat).
+                if pending.staged_by and sender_phone != pending.staged_by:
+                    return (
+                        "This confirmation is intended for another user. "
+                        "Only the person who requested this action can confirm or cancel it."
+                    )
                 logger.info(
-                    "DIAG confirmation fired | group=%s | action=%r | params_keys=%s | params=%s",
-                    group_jid, pending.action,
-                    list(pending.params.keys()),
-                    {k: (v[:80] if isinstance(v, str) and len(v) > 80 else v)
-                     for k, v in pending.params.items()},
+                    "Confirmation fired | group=%s | action=%r | staged_by=%s | confirmer=%s",
+                    group_jid, pending.action, pending.staged_by, sender_phone,
                 )
                 result = await self.registry.execute(
                     pending.action, pending.params,

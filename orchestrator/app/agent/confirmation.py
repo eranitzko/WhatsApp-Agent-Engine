@@ -24,6 +24,7 @@ class PendingAction:
     action: str                     # e.g. "remove_invoice", "send_email"
     params: dict[str, Any]          # arguments needed to execute
     description: str                # human-readable summary shown to admin
+    staged_by: str = ""             # phone of the user who requested this action; "" = any member can confirm
     expires: datetime = field(default_factory=lambda: datetime.now(timezone.utc) + timedelta(minutes=TTL_MINUTES))
 
     def is_expired(self) -> bool:
@@ -43,7 +44,7 @@ class ConfirmationStore:
     def __init__(self) -> None:
         self._store: dict[str, PendingAction] = {}
 
-    def set(self, group_id: str, action: str, params: dict, description: str) -> bool:
+    def set(self, group_id: str, action: str, params: dict, description: str, staged_by: str = "") -> bool:
         """Stage a new pending action. Returns False without overwriting if one already exists.
 
         Callers should surface a 'confirm or cancel existing action first' message when
@@ -52,7 +53,9 @@ class ConfirmationStore:
         existing = self.get(group_id)
         if existing is not None:
             return False
-        self._store[group_id] = PendingAction(action=action, params=params, description=description)
+        self._store[group_id] = PendingAction(
+            action=action, params=params, description=description, staged_by=staged_by,
+        )
         return True
 
     def get(self, group_id: str) -> PendingAction | None:

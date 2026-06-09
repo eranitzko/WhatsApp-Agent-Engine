@@ -45,7 +45,7 @@ async def test_stage_action_calls_store():
         group_jid="123@g.us",
         confirmation_store=mock_store,
     )
-    mock_store.set.assert_called_once_with("123@g.us", "remove_invoice", {"invoice_id": "abc"}, "Remove invoice abc")
+    mock_store.set.assert_called_once_with("123@g.us", "remove_invoice", {"invoice_id": "abc"}, "Remove invoice abc", staged_by="")
     assert "yes" in result.lower() or "confirm" in result.lower()
 
 def test_system_prompt_is_substantial():
