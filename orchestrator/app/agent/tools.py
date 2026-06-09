@@ -601,7 +601,10 @@ async def exec_request_confirmation(
         description = f"{description} — will be sent to {to_email}"
 
     from app.agent.confirmation import confirmation_store
-    confirmation_store.set(group_id, action, params, description)
+    if not confirmation_store.set(group_id, action, params, description):
+        return {
+            "error": "⚠️ Another action is already pending for this group. Please reply 'yes' to confirm or 'no' to cancel it before requesting a new action."
+        }
     return {"pending": True, "description": description, "ttl_minutes": 5}
 
 

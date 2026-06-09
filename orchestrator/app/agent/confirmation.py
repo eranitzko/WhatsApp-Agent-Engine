@@ -43,8 +43,17 @@ class ConfirmationStore:
     def __init__(self) -> None:
         self._store: dict[str, PendingAction] = {}
 
-    def set(self, group_id: str, action: str, params: dict, description: str) -> None:
+    def set(self, group_id: str, action: str, params: dict, description: str) -> bool:
+        """Stage a new pending action. Returns False without overwriting if one already exists.
+
+        Callers should surface a 'confirm or cancel existing action first' message when
+        False is returned.
+        """
+        existing = self.get(group_id)
+        if existing is not None:
+            return False
         self._store[group_id] = PendingAction(action=action, params=params, description=description)
+        return True
 
     def get(self, group_id: str) -> PendingAction | None:
         pending = self._store.get(group_id)

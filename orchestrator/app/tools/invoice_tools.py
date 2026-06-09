@@ -101,7 +101,8 @@ async def _exec_request_confirmation(params: dict, **ctx) -> str:
 
     try:
         # ConfirmationStore.set(group_id, action, params, description)
-        confirmation_store.set(group_jid, action, action_params, description)
+        if not confirmation_store.set(group_jid, action, action_params, description):
+            return "⚠️ Another action is already pending for this group. Please reply 'yes' to confirm or 'no' to cancel it before requesting a new action."
         return f"Confirmation requested: {description}. Reply 'yes' to confirm or 'no' to cancel."
     except Exception as exc:
         logger.exception("invoice tool request_confirmation raised: %s", exc)
