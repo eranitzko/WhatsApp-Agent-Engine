@@ -17,17 +17,21 @@ logger = logging.getLogger(__name__)
 def _format_confirmed_result(action: str, result) -> str:
     """Convert a confirmed-action executor result to a human-readable reply."""
     if isinstance(result, str):
-        return result
+        # Executors return JSON-encoded strings — try to parse before formatting
+        try:
+            result = json.loads(result)
+        except (json.JSONDecodeError, ValueError):
+            return result  # not JSON, use as-is
     if not isinstance(result, dict):
         return str(result)
     if error := result.get("error"):
         return f"Error: {error}"
     if result.get("ok"):
         labels = {
-            "remove_invoice":    "Invoice deleted.",
+            "remove_invoice":     "Invoice deleted.",
             "set_invoice_amount": "Invoice amount updated.",
-            "add_date_format":   "Date format added.",
-            "send_email":        "Report sent.",
+            "add_date_format":    "Date format added.",
+            "send_email":         "Report sent.",
         }
         return labels.get(action, "Done.")
     return json.dumps(result, ensure_ascii=False)
