@@ -6,11 +6,11 @@ from app.tools.invoice_tools import get_invoice_tools
 
 EXPECTED_TOOLS = [
     "get_status", "list_invoices", "get_invoice_summary", "update_config",
-    "flag_invoice", "unflag_invoice", "set_invoice_date",
+    "save_invoice", "flag_invoice", "unflag_invoice", "set_invoice_date",
     "set_invoice_amount", "add_date_format", "stage_action",
 ]
 
-def test_get_invoice_tools_returns_all_10_tools():
+def test_get_invoice_tools_returns_all_tools():
     tools = get_invoice_tools()
     assert set(tools.keys()) == set(EXPECTED_TOOLS)
 
@@ -24,7 +24,7 @@ def test_each_tool_has_schema_and_executor():
 def test_get_invoice_tools_accepts_db_session_factory():
     # Should not raise TypeError
     tools = get_invoice_tools(db_session_factory=None)
-    assert len(tools) == 10
+    assert len(tools) == 11
 
 @pytest.mark.asyncio
 async def test_stage_action_without_store_returns_error():

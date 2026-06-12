@@ -108,7 +108,7 @@ async def _exec_request_confirmation(params: dict, **ctx) -> str:
 # ── Public factory ────────────────────────────────────────────────────────────
 
 def get_invoice_tools(db_session_factory=None, **kwargs) -> dict[str, dict]:
-    """Return all 11 invoice tools in ToolRegistry format.
+    """Return all 12 invoice tools in ToolRegistry format.
 
     Returns:
         {
@@ -123,12 +123,13 @@ def get_invoice_tools(db_session_factory=None, **kwargs) -> dict[str, dict]:
     not used: the underlying executors open their own sessions via SessionLocal
     (the same pattern used in app/agent/tools.py).
     """
-    # Build wrapped executors for the 10 straightforward tools
+    # Build wrapped executors for the 11 straightforward tools
     _tool_executor_pairs = [
         ("get_status",           _orig.exec_get_status),
         ("list_invoices",        _orig.exec_list_invoices),
         ("get_invoice_summary",  _orig.exec_get_preview),
         ("update_config",        _orig.exec_update_config),
+        ("save_invoice",         _orig.exec_save_invoice),
         ("flag_invoice",         _orig.exec_flag_invoice),
         ("unflag_invoice",       _orig.exec_unflag_invoice),
         ("set_invoice_date",     _orig.exec_set_invoice_date),

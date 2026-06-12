@@ -2,7 +2,7 @@
 
 Tools exposed to Claude:
   get_status, list_invoices, get_invoice_summary, update_config,
-  flag_invoice, unflag_invoice, set_invoice_date, set_invoice_amount,
+  save_invoice, flag_invoice, unflag_invoice, set_invoice_date, set_invoice_amount,
   add_date_format, stage_action
 
 remove_invoice and send_report_by_email are NOT exposed as tools.
@@ -13,8 +13,11 @@ Admin enforcement happens here in code, independent of Claude's reasoning.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import uuid
 from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
@@ -180,6 +183,28 @@ TOOL_SCHEMAS: list[dict] = [
                 },
             },
             "required": ["format_string"],
+        },
+        "access": "admin",
+    },
+    {
+        "name": "save_invoice",
+        "description": (
+            "Manually save an invoice entered as text (no image). Admin only. "
+            "Use when a user provides invoice details in a message rather than by sending an image. "
+            "Converts non-ILS amounts to ILS automatically using the Bank of Israel rate for the invoice date. "
+            "Returns: the saved invoice ID and ILS amount."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "vendor":          {"type": "string", "description": "Vendor or supplier name."},
+                "amount":          {"type": "number", "description": "Invoice amount in the original currency. Must be positive."},
+                "currency":        {"type": "string", "description": "ISO 4217 currency code (e.g. ILS, USD, EUR)."},
+                "date":            {"type": "string", "description": "Invoice date in YYYY-MM-DD format. Defaults to today if omitted."},
+                "invoice_number":  {"type": "string", "description": "Invoice or receipt number. Optional."},
+                "description":     {"type": "string", "description": "Optional description or notes."},
+            },
+            "required": ["vendor", "amount", "currency"],
         },
         "access": "admin",
     },
@@ -555,6 +580,87 @@ async def exec_add_date_format(
         db.commit()
 
     return {"ok": True, "format_string": normalized, "all_formats": existing}
+
+
+async def exec_save_invoice(
+    group_id: str, is_admin: bool,
+    vendor: str, amount: float, currency: str,
+    date: str = "", invoice_number: str = "", description: str = "",
+    sender: str = "",
+    **_,
+) -> dict:
+    if not is_admin:
+        return {"error": "Admin only."}
+
+    from app.pipeline.converter import convert_to_ils
+
+    try:
+        amount_decimal = Decimal(str(amount))
+    except (InvalidOperation, TypeError):
+        return {"error": f"Invalid amount: {amount!r}"}
+    if amount_decimal <= 0:
+        return {"error": "Amount must be positive."}
+
+    currency = currency.strip().upper()
+    if len(currency) != 3:
+        return {"error": f"Invalid currency code: {currency!r}. Use an ISO 4217 code like ILS, USD, EUR."}
+
+    # Parse date or default to today
+    invoice_date = None
+    if date:
+        try:
+            invoice_date = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            return {"error": f"Invalid date format: {date!r}. Use YYYY-MM-DD."}
+
+    # Convert to ILS
+    conversion = await convert_to_ils(amount_decimal, currency, invoice_date)
+    flagged = bool(conversion.error)
+    flag_reason = conversion.error or None
+
+    invoice_id = str(uuid.uuid4())
+    # Unique hash for manually entered invoices (no image)
+    image_hash = hashlib.sha256(f"manual:{group_id}:{invoice_id}".encode()).hexdigest()
+
+    invoice = Invoice(
+        id=invoice_id,
+        group_id=group_id,
+        message_id=f"manual-{invoice_id}",
+        image_hash=image_hash,
+        r2_key=None,
+        received_at=datetime.now(timezone.utc),
+        invoice_date=invoice_date,
+        invoice_number=invoice_number or None,
+        vendor=vendor,
+        description=description or None,
+        amount_original=amount_decimal,
+        currency_original=currency,
+        amount_ils=conversion.amount_ils,
+        exchange_rate=conversion.exchange_rate,
+        rate_source=conversion.rate_source,
+        rate_date=conversion.rate_date,
+        extraction_confidence=None,
+        flagged=flagged,
+        flag_reason=flag_reason,
+        submitted_by=sender or None,
+    )
+
+    with SessionLocal() as db:
+        db.add(invoice)
+        db.commit()
+
+    result: dict = {
+        "ok": True,
+        "invoice_id": invoice_id,
+        "vendor": vendor,
+        "amount_original": str(amount_decimal),
+        "currency": currency,
+        "amount_ils": str(conversion.amount_ils) if conversion.amount_ils else None,
+        "invoice_date": str(invoice_date) if invoice_date else None,
+    }
+    if flagged:
+        result["warning"] = f"Currency conversion failed: {flag_reason}. ILS amount is not set."
+    return result
 
 
 async def exec_request_confirmation(

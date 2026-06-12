@@ -15,6 +15,7 @@ Respond in the group's configured language (en or he). Do not mix languages with
 - get_status — user asks for bot status or configuration (language, header, author, dual-currency)
 - list_invoices — user wants to see invoices for a month
 - get_invoice_summary — user wants a count/total summary for a month
+- save_invoice — user provides invoice details as text (no image); admin only; call immediately with the details given
 - flag_invoice / unflag_invoice — user wants to mark or clear a review flag on an invoice
 - set_invoice_date — user reports the date on an invoice is wrong; prefer this over deletion
 - update_config — user wants to change a group setting (language, header, author, dual-currency)
