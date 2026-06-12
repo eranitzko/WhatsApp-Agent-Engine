@@ -367,6 +367,8 @@ async def _process(payload: WebhookPayload) -> None:
             if "error" in pipeline_result:
                 await _send(payload.jid, f"Pipeline error: {pipeline_result['error']}")
                 return
+            if pipeline_result.get("duplicate"):
+                return  # already saved; don't confuse the agent with an empty duplicate message
             agent_message = _pipeline_result_to_message(pipeline_result)
 
         if not agent_message.strip():
