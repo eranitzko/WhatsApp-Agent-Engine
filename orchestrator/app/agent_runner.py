@@ -118,44 +118,13 @@ class AgentRunner:
                     context.add(group_jid, "assistant", reply, max_pairs=blueprint.context_window)
                     return reply
 
-        # ── Single-action confirmation intercept ──────────────────────────────
-        pending = confirmation_store.get(group_jid)
-        if pending and not pending.is_expired():
-            if confirmation_store.is_confirm(message):
-                # Enforce: only the person who staged the action can confirm it.
-                # If staged_by is empty, any member can confirm (backwards compat).
-                if pending.staged_by and sender_phone != pending.staged_by:
-                    return (
-                        "This confirmation is intended for another user. "
-                        "Only the person who requested this action can confirm or cancel it."
-                    )
-                logger.info(
-                    "Confirmation fired | group=%s | action=%r | staged_by=%s | confirmer=%s",
-                    group_jid, pending.action, pending.staged_by, sender_phone,
-                )
-                result = await self.registry.execute(
-                    pending.action, pending.params,
-                    group_jid=group_jid, sender=sender, is_admin=is_admin,
-                )
-                confirmation_store.clear(group_jid)
-                reply = _format_confirmed_result(pending.action, result)
-                context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
-                context.add(group_jid, "assistant", reply, max_pairs=blueprint.context_window)
-                return reply
-            elif confirmation_store.is_cancel(message):
-                confirmation_store.clear(group_jid)
-                reply = "Action cancelled."
-                context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
-                context.add(group_jid, "assistant", reply, max_pairs=blueprint.context_window)
-                return reply
-
-        # ── Normal agent loop ─────────────────────────────────────────────────
+        # ── Shared setup — history, system prompt, tool schemas ──────────────
+        # Built once; used by both the confirmation reply and the normal loop.
         history = context.get_history(
             group_jid,
             max_pairs=blueprint.context_window,
             idle_minutes=blueprint.context_idle_reset_minutes,
         )
-        messages = history + [{"role": "user", "content": message}]
         system = [
             {
                 "type": "text",
@@ -186,6 +155,68 @@ class AgentRunner:
             "text": f"Today's date: {datetime.now(timezone.utc).date()}. Sender is_admin: {is_admin}. Sender phone: {sender_phone}.",
         })
         tool_schemas = self.registry.get_schemas(allowed_tools)
+
+        # ── Single-action confirmation intercept ──────────────────────────────
+        pending = confirmation_store.get(group_jid)
+        if pending and not pending.is_expired():
+            if confirmation_store.is_confirm(message):
+                # Enforce: only the person who staged the action can confirm it.
+                # If staged_by is empty, any member can confirm (backwards compat).
+                if pending.staged_by and sender_phone != pending.staged_by:
+                    return (
+                        "This confirmation is intended for another user. "
+                        "Only the person who requested this action can confirm or cancel it."
+                    )
+                logger.info(
+                    "Confirmation fired | group=%s | action=%r | staged_by=%s | confirmer=%s",
+                    group_jid, pending.action, pending.staged_by, sender_phone,
+                )
+                result = await self.registry.execute(
+                    pending.action, pending.params,
+                    group_jid=group_jid, sender=sender, is_admin=is_admin,
+                )
+                confirmation_store.clear(group_jid)
+                # Feed the result to Claude so it replies naturally in the right
+                # language — same as the normal tool-use flow.
+                result_str = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+                fake_id = f"conf_{uuid.uuid4().hex[:8]}"
+                conf_messages = history + [
+                    {"role": "user", "content": message},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": fake_id, "name": pending.action, "input": pending.params}]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": fake_id, "content": result_str}]},
+                ]
+                try:
+                    conf_resp = await self.client.messages.create(
+                        model=blueprint.model,
+                        max_tokens=512,
+                        temperature=0,
+                        system=system,
+                        tools=tool_schemas,
+                        messages=conf_messages,
+                    )
+                    if conf_resp.stop_reason == "end_turn":
+                        reply = next((b.text for b in conf_resp.content if b.type == "text"), "Done.")
+                    else:
+                        reply = _format_confirmed_result(pending.action, result)
+                except Exception:
+                    logger.exception("Failed to generate confirmation reply for %s", group_jid)
+                    reply = _format_confirmed_result(pending.action, result)
+                context.add_turn(group_jid, [
+                    {"role": "user", "content": message},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": fake_id, "name": pending.action, "input": pending.params}]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": fake_id, "content": result_str}]},
+                    {"role": "assistant", "content": reply},
+                ], max_pairs=blueprint.context_window)
+                return reply
+            elif confirmation_store.is_cancel(message):
+                confirmation_store.clear(group_jid)
+                reply = "Action cancelled."
+                context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
+                context.add(group_jid, "assistant", reply, max_pairs=blueprint.context_window)
+                return reply
+
+        # ── Normal agent loop ─────────────────────────────────────────────────
+        messages = history + [{"role": "user", "content": message}]
 
         logger.info(
             "AgentRunner turn | group=%s blueprint=%s sender=%s history_pairs=%d tools=%d [%s]",
