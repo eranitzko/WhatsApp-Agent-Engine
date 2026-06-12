@@ -190,8 +190,11 @@ class AgentRunner:
                         (b.text for b in response.content if hasattr(b, "text") and b.type == "text"),
                         "",
                     )
-                    context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
-                    context.add(group_jid, "assistant", text, max_pairs=blueprint.context_window)
+                    # Save the full turn (user msg + any tool exchanges + final reply)
+                    # so Claude can reference tool results (e.g. UUIDs) in later turns.
+                    turn_msgs = list(messages[len(history):])
+                    turn_msgs.append({"role": "assistant", "content": text})
+                    context.add_turn(group_jid, turn_msgs, max_pairs=blueprint.context_window)
                     return text
 
                 if response.stop_reason == "max_tokens":
@@ -202,7 +205,9 @@ class AgentRunner:
 
                 if response.stop_reason == "tool_use":
                     tc_list = [b for b in response.content if b.type == "tool_use"]
-                    messages.append({"role": "assistant", "content": response.content})
+                    # Serialize SDK objects to plain dicts so messages is JSON-safe
+                    # and can be stored in the context store.
+                    messages.append({"role": "assistant", "content": [b.model_dump() for b in response.content]})
 
                     # Run all tool calls in parallel — independent calls in one turn
                     # are the common case and asyncio.gather cuts latency significantly.
@@ -235,8 +240,9 @@ class AgentRunner:
 
             final_stop_reason = "max_tool_turns"
             fallback = "I reached my processing limit. Please try a simpler request."
-            context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
-            context.add(group_jid, "assistant", fallback, max_pairs=blueprint.context_window)
+            turn_msgs = list(messages[len(history):])
+            turn_msgs.append({"role": "assistant", "content": fallback})
+            context.add_turn(group_jid, turn_msgs, max_pairs=blueprint.context_window)
             return fallback
 
         except Exception as exc:

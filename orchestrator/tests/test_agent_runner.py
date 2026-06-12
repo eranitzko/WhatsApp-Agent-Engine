@@ -58,6 +58,7 @@ def context():
     ctx = MagicMock()
     ctx.get_history = MagicMock(return_value=[])
     ctx.add = MagicMock()
+    ctx.add_turn = MagicMock()
     return ctx
 
 
@@ -100,7 +101,12 @@ async def test_run_persists_history(registry, context, confirmation_store):
         context=context,
         confirmation_store=confirmation_store,
     )
-    assert context.add.call_count == 2  # user message + assistant reply
+    # Now saves the full turn atomically via add_turn (not two separate add calls)
+    context.add_turn.assert_called_once()
+    turn_msgs = context.add_turn.call_args[0][1]  # second positional arg = turn_messages
+    roles = [m["role"] for m in turn_msgs]
+    assert roles == ["user", "assistant"]
+    assert turn_msgs[-1]["content"] == "Done."
 
 
 @pytest.mark.asyncio

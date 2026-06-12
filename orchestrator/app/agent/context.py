@@ -2,6 +2,13 @@
 
 Context survives process restarts (deploys, crashes, watchdog restarts).
 Resets after IDLE_MINUTES of inactivity, same as before.
+
+Tool-call context:
+  Tool use/result blocks are stored alongside text turns so Claude can
+  reference data from tool results (e.g. invoice UUIDs) in later turns,
+  exactly like a chat window.  ``add_turn`` adds a complete logical turn
+  atomically and trims at turn boundaries so the history never contains
+  orphaned tool_use or tool_result blocks.
 """
 
 from __future__ import annotations
@@ -15,8 +22,27 @@ from app.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
 
-MAX_TURNS    = 8   # user+assistant pairs kept
+MAX_TURNS    = 8   # logical turns kept (each turn = user msg + tool exchanges + assistant reply)
 IDLE_MINUTES = 60  # inactivity window before context resets
+
+
+def _is_turn_start(msg: dict) -> bool:
+    """Return True when *msg* opens a new logical turn (human text, not a tool-result message).
+
+    A logical turn starts with a user text message.  Tool-result messages
+    also have role="user" but their content is a list of tool_result blocks —
+    those are mid-turn, not turn starts.
+    """
+    if msg.get("role") != "user":
+        return False
+    content = msg.get("content")
+    if isinstance(content, str):
+        return True
+    if isinstance(content, list) and content:
+        first = content[0]
+        if isinstance(first, dict):
+            return first.get("type") != "tool_result"
+    return True  # empty or unknown format — treat as turn start
 
 
 class GroupContext:
@@ -108,6 +134,29 @@ class GroupContext:
         self.touch()
         self._save()
 
+    def add_turn(self, turn_messages: list[dict], max_pairs: int | None = None) -> None:
+        """Add a complete logical turn atomically and trim at turn boundaries.
+
+        *turn_messages* must be the full sequence for one turn:
+            [user_text_msg, asst_tool_use_msg?, user_tool_result_msg?, ..., asst_text_msg]
+
+        Trimming removes the oldest complete turns so the stored history never
+        has orphaned tool_use / tool_result blocks that would cause API errors.
+        *max_pairs* here means "number of logical turns to keep."
+        """
+        self.messages.extend(turn_messages)
+        effective_pairs = max_pairs if max_pairs is not None else MAX_TURNS
+
+        # Identify where each logical turn starts
+        turn_start_indices = [i for i, m in enumerate(self.messages) if _is_turn_start(m)]
+
+        if len(turn_start_indices) > effective_pairs:
+            trim_to = turn_start_indices[-effective_pairs]
+            self.messages = self.messages[trim_to:]
+
+        self.touch()
+        self._save()
+
     def reset(self) -> None:
         """Clear history and remove DB row."""
         self.messages = []
@@ -154,6 +203,9 @@ class ContextStore:
 
     def add(self, group_id: str, role: str, content, max_pairs: int | None = None) -> None:
         self.get(group_id).add(role=role, content=content, max_pairs=max_pairs)
+
+    def add_turn(self, group_id: str, turn_messages: list[dict], max_pairs: int | None = None) -> None:
+        self.get(group_id).add_turn(turn_messages, max_pairs=max_pairs)
 
     def clear(self, group_id: str) -> None:
         ctx = self._cache.get(group_id)
