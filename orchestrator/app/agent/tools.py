@@ -720,6 +720,9 @@ async def exec_request_confirmation(
 # ── Confirmed action executors (not exposed as tools) ────────────────────────
 
 async def exec_remove_invoice(group_id: str, invoice_id: str) -> dict:
+    # Guard against passing a display number (e.g. "3") instead of a UUID
+    if invoice_id.isdigit():
+        return {"error": f"'{invoice_id}' is a display number, not an invoice ID. Call list_invoices first to get the correct UUID."}
     with SessionLocal() as db:
         invoice = db.get(Invoice, invoice_id)
         if not invoice or invoice.group_id != group_id:
