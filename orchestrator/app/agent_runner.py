@@ -14,6 +14,25 @@ from app.tool_registry import ToolRegistry
 logger = logging.getLogger(__name__)
 
 
+def _format_confirmed_result(action: str, result) -> str:
+    """Convert a confirmed-action executor result to a human-readable reply."""
+    if isinstance(result, str):
+        return result
+    if not isinstance(result, dict):
+        return str(result)
+    if error := result.get("error"):
+        return f"Error: {error}"
+    if result.get("ok"):
+        labels = {
+            "remove_invoice":    "Invoice deleted.",
+            "set_invoice_amount": "Invoice amount updated.",
+            "add_date_format":   "Date format added.",
+            "send_email":        "Report sent.",
+        }
+        return labels.get(action, "Done.")
+    return json.dumps(result, ensure_ascii=False)
+
+
 class AgentRunner:
     # ── disabled_tools cache ──────────────────────────────────────────────────
     # Loaded once at startup; refreshed by refresh_disabled_tools() whenever the
@@ -115,9 +134,10 @@ class AgentRunner:
                     group_jid=group_jid, sender=sender, is_admin=is_admin,
                 )
                 confirmation_store.clear(group_jid)
+                reply = _format_confirmed_result(pending.action, result)
                 context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
-                context.add(group_jid, "assistant", str(result), max_pairs=blueprint.context_window)
-                return str(result)
+                context.add(group_jid, "assistant", reply, max_pairs=blueprint.context_window)
+                return reply
             elif confirmation_store.is_cancel(message):
                 confirmation_store.clear(group_jid)
                 reply = "Action cancelled."
