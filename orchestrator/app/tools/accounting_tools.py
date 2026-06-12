@@ -768,7 +768,7 @@ async def _exec_get_transaction(params: dict, **ctx) -> str:
         return "get_transaction is admin only."
     tx_prefix = params.get("transaction_id", "").strip()
     if len(tx_prefix) < 8:
-        return "Please provide at least 8 characters of the transaction ID."
+        return "Transaction ID prefix must be at least 8 characters. Use the ID shown in get_history."
     with SessionLocal() as db:
         rows = (
             db.query(LedgerEntry)
@@ -864,7 +864,7 @@ async def _exec_cancel_reminder(params: dict, **ctx) -> str:
         return "Error: could not determine sender phone."
     reminder_id_prefix = params.get("reminder_id", "").strip()
     if len(reminder_id_prefix) < 4:
-        return "Please provide at least 4 characters of the reminder ID."
+        return "Reminder ID prefix must be at least 4 characters. Use the ID shown by list_reminders."
     with SessionLocal() as db:
         row = (
             db.query(ScheduledMessage)
