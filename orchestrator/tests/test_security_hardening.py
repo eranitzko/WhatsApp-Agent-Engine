@@ -341,3 +341,22 @@ async def test_cancel_reminder_rejects_short_prefix(db):
         is_admin=False,
     )
     assert "at least 4" in result.lower()
+
+
+# ── No DIAG log lines in production code (M-6) ──────────────────────────────
+
+
+def test_no_diag_log_in_agent_runner():
+    """agent_runner must not contain DIAG log strings."""
+    import inspect
+    import app.agent_runner as ar_mod
+    source = inspect.getsource(ar_mod)
+    assert "DIAG" not in source, "DIAG log lines must be removed from agent_runner.py"
+
+
+def test_no_diag_log_in_executor():
+    """executor must not contain DIAG log strings."""
+    import inspect
+    import app.automation.executor as exec_mod
+    source = inspect.getsource(exec_mod)
+    assert "DIAG" not in source, "DIAG log lines must be removed from executor.py"
