@@ -1,10 +1,11 @@
 """Invoice Curator tools in ToolRegistry format.
 
-Exposes all 11 invoice tools as:
-    {tool_name: {"schema": <Claude tool schema dict>, "executor": async fn}}
+Exposes 11 user-facing invoice tools plus 2 internal confirmed-action executors
+(remove_invoice, send_email) that are only reachable via the confirmation path
+in AgentRunner — not exposed to the Claude agent directly.
 
-Each executor has signature:
-    async def executor(params: dict, **ctx) -> str
+Each entry has signature:
+    {tool_name: {"schema": <dict>, "executor": async fn(params: dict, **ctx) -> str}}
 
 Where ctx contains: group_jid, sender, is_admin, confirmation_store (injected
 by AgentRunner).  The underlying DB access uses SessionLocal directly — each
@@ -35,6 +36,29 @@ logger = logging.getLogger(__name__)
 _SCHEMA_BY_NAME: dict[str, dict] = {
     s["name"]: ({k: v for k, v in s.items() if k != "cache_control"} | {"category": "invoices"})
     for s in _orig.TOOL_SCHEMAS
+}
+
+# Minimal schemas for confirmed-action executors — not in TOOL_SCHEMAS so Claude
+# never sees them, but required by ToolRegistry for the execute() lookup.
+_CONFIRMED_ACTION_SCHEMAS: dict[str, dict] = {
+    "remove_invoice": {
+        "name": "remove_invoice",
+        "description": "Confirmed executor — removes a staged invoice deletion (internal).",
+        "input_schema": {
+            "type": "object",
+            "properties": {"invoice_id": {"type": "string"}},
+            "required": ["invoice_id"],
+        },
+        "access": "internal",
+        "category": "invoices",
+    },
+    "send_email": {
+        "name": "send_email",
+        "description": "Confirmed executor — sends a staged email report (internal).",
+        "input_schema": {"type": "object", "properties": {}},
+        "access": "internal",
+        "category": "invoices",
+    },
 }
 
 
@@ -105,6 +129,36 @@ async def _exec_request_confirmation(params: dict, **ctx) -> str:
         return f"Error requesting confirmation: {str(exc)}"
 
 
+# ── Confirmed-action executors (not exposed as tools) ────────────────────────
+# Called via agent_runner.py's confirmation path: registry.execute(pending.action, ...).
+# Custom wrappers needed because the original functions don't accept **ctx kwargs.
+
+async def _exec_remove_invoice_confirmed(params: dict, **ctx) -> str:
+    group_jid = ctx.get("group_jid", "")
+    invoice_id = params.get("invoice_id", "")
+    if not invoice_id:
+        return json.dumps({"error": "invoice_id is required."})
+    try:
+        result = await _orig.exec_remove_invoice(group_id=group_jid, invoice_id=invoice_id)
+    except Exception as exc:
+        logger.exception("invoice tool remove_invoice raised: %s", exc)
+        return json.dumps({"error": f"Tool execution failed: {exc}"})
+    return _result_to_str(result)
+
+
+async def _exec_send_email_confirmed(params: dict, **ctx) -> str:
+    group_jid = ctx.get("group_jid", "")
+    # stage_action stores the recipient under key "to"; exec_send_email expects "to_email"
+    if "to" in params and "to_email" not in params:
+        params = dict(params, to_email=params["to"])
+    try:
+        result = await _orig.exec_send_email(group_id=group_jid, params=params)
+    except Exception as exc:
+        logger.exception("invoice tool send_email raised: %s", exc)
+        return json.dumps({"error": f"Tool execution failed: {exc}"})
+    return _result_to_str(result)
+
+
 # ── Public factory ────────────────────────────────────────────────────────────
 
 def get_invoice_tools(db_session_factory=None, **kwargs) -> dict[str, dict]:
@@ -149,6 +203,17 @@ def get_invoice_tools(db_session_factory=None, **kwargs) -> dict[str, dict]:
     registry["stage_action"] = {
         "schema":   _SCHEMA_BY_NAME["stage_action"],
         "executor": _exec_request_confirmation,
+    }
+
+    # Confirmed-action executors — reachable via the confirmation path only,
+    # not exposed to the Claude agent (not in TOOL_SCHEMAS / blueprint tool lists).
+    registry["remove_invoice"] = {
+        "schema":   _CONFIRMED_ACTION_SCHEMAS["remove_invoice"],
+        "executor": _exec_remove_invoice_confirmed,
+    }
+    registry["send_email"] = {
+        "schema":   _CONFIRMED_ACTION_SCHEMAS["send_email"],
+        "executor": _exec_send_email_confirmed,
     }
 
     return registry

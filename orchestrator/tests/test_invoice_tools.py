@@ -8,6 +8,8 @@ EXPECTED_TOOLS = [
     "get_status", "list_invoices", "get_invoice_summary", "update_config",
     "save_invoice", "flag_invoice", "unflag_invoice", "set_invoice_date",
     "set_invoice_amount", "add_date_format", "stage_action",
+    # Confirmed-action executors (internal — not exposed to the agent)
+    "remove_invoice", "send_email",
 ]
 
 def test_get_invoice_tools_returns_all_tools():
@@ -24,7 +26,7 @@ def test_each_tool_has_schema_and_executor():
 def test_get_invoice_tools_accepts_db_session_factory():
     # Should not raise TypeError
     tools = get_invoice_tools(db_session_factory=None)
-    assert len(tools) == 11
+    assert len(tools) == 13
 
 @pytest.mark.asyncio
 async def test_stage_action_without_store_returns_error():
@@ -70,7 +72,10 @@ def test_get_status_executor_is_async_callable():
 def test_multiple_calls_return_fresh_executors():
     tools_a = get_invoice_tools()
     tools_b = get_invoice_tools()
-    wrapped_tools = [n for n in EXPECTED_TOOLS if n != "stage_action"]
+    # Only _make_executor-wrapped tools create new closures on each call;
+    # stage_action, remove_invoice, and send_email use module-level functions.
+    _static_executors = {"stage_action", "remove_invoice", "send_email"}
+    wrapped_tools = [n for n in EXPECTED_TOOLS if n not in _static_executors]
     for name in wrapped_tools:
         assert tools_a[name]["executor"] is not tools_b[name]["executor"], (
             f"{name}: executor is the same object across calls"
