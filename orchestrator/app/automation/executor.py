@@ -74,7 +74,7 @@ class AutomationExecutor:
             return
 
         result = await reg.execute(tool_name, params, group_jid=group_jid, is_admin=False, sender="", confirmation_store=_store)
-        logger.info("Automation tool %r returned for %s: %s", tool_name, group_jid, result)
+        logger.debug("Automation tool %r returned for %s: %s", tool_name, group_jid, result)
 
     async def _run_workflow(self, group_jid: str, config: dict, db: "Session | None" = None) -> None:
         """Execute a sequence of tool steps with shared WorkflowContext.
@@ -132,7 +132,7 @@ class AutomationExecutor:
                     sender="",
                     confirmation_store=_store,
                 )
-                logger.info(
+                logger.debug(
                     "Automation workflow step %d (%r) returned for %s: %s",
                     i, tool_name, group_jid, result,
                 )

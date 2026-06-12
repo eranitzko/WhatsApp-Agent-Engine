@@ -124,11 +124,6 @@ async def _fire_recurring_rules() -> None:
                     last_check = last_check.replace(tzinfo=timezone.utc)
                 secs_since = (now - last_check).total_seconds()
                 if secs_since < 3600:
-                    # DIAG: log skipped rule so we can see why it didn't fire on time
-                    logger.info(
-                        "DIAG scheduler skip | rule=%s %r | last_fired=%s | secs_since=%.0f < 3600",
-                        rule.id, rule.name, rule.last_fired_at, secs_since,
-                    )
                     continue
             try:
                 if rule.rule_type == "one_off":
@@ -136,22 +131,12 @@ async def _fire_recurring_rules() -> None:
                     if fire_at.tzinfo is None:
                         fire_at = fire_at.replace(tzinfo=timezone.utc)
                     if fire_at > now:
-                        # DIAG: log future one_off that isn't due yet
-                        logger.info(
-                            "DIAG scheduler not-yet | rule=%s %r | fire_at=%s | now=%s | delta=%.0fs",
-                            rule.id, rule.name, fire_at, now, (fire_at - now).total_seconds(),
-                        )
                         continue
                 else:  # recurring
                     base = now - timedelta(hours=1)
                     itr = croniter(rule.schedule_cron, base)
                     next_dt = itr.get_next(datetime)
                     if next_dt > now:
-                        # DIAG: log recurring rule that isn't due in this window
-                        logger.info(
-                            "DIAG scheduler not-due | rule=%s %r | cron=%r | window=[%s, %s] | next_due=%s",
-                            rule.id, rule.name, rule.schedule_cron, base, now, next_dt,
-                        )
                         continue
             except Exception:
                 logger.exception(
@@ -159,11 +144,6 @@ async def _fire_recurring_rules() -> None:
                 )
                 continue
 
-            # DIAG: log that we're about to fire this rule, with timing details
-            logger.info(
-                "DIAG scheduler FIRING | rule=%s %r | type=%s | cron=%r | last_fired=%s | now=%s",
-                rule.id, rule.name, rule.rule_type, rule.schedule_cron, rule.last_fired_at, now,
-            )
             rule.last_fired_at = now
             if rule.rule_type == "one_off":
                 rule.status = "done"

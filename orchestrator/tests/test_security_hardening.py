@@ -360,3 +360,19 @@ def test_no_diag_log_in_executor():
     import app.automation.executor as exec_mod
     source = inspect.getsource(exec_mod)
     assert "DIAG" not in source, "DIAG log lines must be removed from executor.py"
+
+
+def test_no_diag_log_in_scheduler():
+    """scheduler must not contain DIAG log strings."""
+    import inspect
+    import app.scheduler as sched_mod
+    source = inspect.getsource(sched_mod)
+    assert "DIAG" not in source, "DIAG log lines must be removed from scheduler.py"
+
+
+def test_no_diag_log_in_send_email_tool():
+    """send_email_tool must not contain DIAG log strings."""
+    import inspect
+    import app.tools.send_email_tool as email_mod
+    source = inspect.getsource(email_mod)
+    assert "DIAG" not in source, "DIAG log lines must be removed from send_email_tool.py"
