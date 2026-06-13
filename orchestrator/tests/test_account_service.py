@@ -176,7 +176,7 @@ def test_handle_confirmation_reply_yes_flips_status(db):
 
     svc = AccountService()
     resolved = svc.handle_confirmation_reply(db, "tal_grp2@g.us", "972512", "yes")
-    assert resolved is True
+    assert resolved is not None
     db.refresh(conf)
     assert conf.status == "confirmed"
 
@@ -200,7 +200,7 @@ def test_handle_confirmation_reply_no_flips_status(db):
 
     svc = AccountService()
     resolved = svc.handle_confirmation_reply(db, "tal_grp3@g.us", "972513", "no")
-    assert resolved is True
+    assert resolved is not None
     db.refresh(conf)
     assert conf.status == "rejected"
 
@@ -208,7 +208,7 @@ def test_handle_confirmation_reply_no_flips_status(db):
 def test_handle_confirmation_reply_returns_false_when_no_pending(db):
     svc = AccountService()
     result = svc.handle_confirmation_reply(db, "grp@g.us", "972500", "yes")
-    assert result is False
+    assert result is None
 
 
 from decimal import Decimal

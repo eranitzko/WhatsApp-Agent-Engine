@@ -181,8 +181,8 @@ class AccountService:
         group_jid: str,
         phone: str,
         reply: str,
-    ) -> bool:
-        """Returns True if a pending confirmation was resolved, False if none found.
+    ) -> "CrossGroupConfirmation | None":
+        """Update and return the resolved confirmation, or None if none found.
 
         Tries exact (phone + group) match first.  Falls back to group-JID-only
         match to handle WhatsApp LID vs human phone number mismatches: the agent
@@ -190,6 +190,9 @@ class AccountService:
         the webhook delivers replies with a LID-format sender phone.  For personal
         groups (one human per group) this is safe — any reply in the target group
         is unambiguously from the intended recipient.
+
+        Returns the CrossGroupConfirmation with updated status so callers can act
+        on it directly without a second DB query (which would fail on LID mismatch).
         """
         now = datetime.now(timezone.utc)
 
@@ -216,7 +219,7 @@ class AccountService:
                 conf = pending_for_group[0]
 
         if conf is None:
-            return False
+            return None
 
         reply_lower = reply.strip().lower()
         if reply_lower in ("yes", "כן", "y", "אישור"):
@@ -224,10 +227,10 @@ class AccountService:
         elif reply_lower in ("no", "לא", "n", "ביטול"):
             conf.status = "rejected"
         else:
-            return False
+            return None
 
         db.commit()
-        return True
+        return conf
 
     # ── Transaction processing ────────────────────────────────────────────────
 

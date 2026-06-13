@@ -19,7 +19,7 @@ from app.command_handler import CommandHandler
 from app.agent.context import ContextStore
 from app.agent.confirmation import confirmation_store
 from app.agent.multi_confirmation import multi_confirmation_store
-from app.db.models import GroupParticipant, CrossGroupConfirmation, SplitTransaction, AdminNumbers
+from app.db.models import GroupParticipant, SplitTransaction, AdminNumbers
 from app.accounting.account_service import AccountService
 from app.accounting.group_registration import GroupRegistrationHandler
 from app.participants import build_participant_block
@@ -310,21 +310,11 @@ async def _process(payload: WebhookPayload) -> None:
 
         if text.strip().lower() in ("yes", "no", "כן", "לא", "y", "n", "אישור", "ביטול"):
             sender_phone = payload.sender.split("@")[0].split(":")[0]
-            resolved = account_service.handle_confirmation_reply(
+            conf = account_service.handle_confirmation_reply(
                 db, payload.jid, sender_phone, text
             )
-            if resolved:
-                conf = (
-                    db.query(CrossGroupConfirmation)
-                    .filter(
-                        CrossGroupConfirmation.target_phone == sender_phone,
-                        CrossGroupConfirmation.target_group_jid == payload.jid,
-                        CrossGroupConfirmation.status.in_(["confirmed", "rejected"]),
-                    )
-                    .order_by(CrossGroupConfirmation.created_at.desc())
-                    .first()
-                )
-                if conf and conf.status == "confirmed":
+            if conf is not None:
+                if conf.status == "confirmed":
                     if conf.split_transaction_id:
                         split = db.query(SplitTransaction).filter_by(
                             id=conf.split_transaction_id
@@ -333,7 +323,7 @@ async def _process(payload: WebhookPayload) -> None:
                             await account_service.finalize_split(db, split)
                     else:
                         await account_service.commit_confirmed_transaction(db, conf)
-                elif conf and conf.status == "rejected":
+                elif conf.status == "rejected":
                     if conf.split_transaction_id:
                         await account_service.handle_split_decline(db, conf)
                     else:
