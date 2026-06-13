@@ -73,6 +73,36 @@ class AccountService:
         member = db.query(HouseholdMember).filter_by(phone=phone).first()
         return member.private_group_jid if member else None
 
+    def get_primary_accounting_group(self, db: Session, phone: str) -> str | None:
+        """Return the destination group JID for bot-initiated accounting messages.
+
+        Priority:
+          1. HouseholdMember.primary_accounting_group_jid — explicit admin override.
+          2. First UserAccount for this phone whose group uses the family_accounting
+             blueprint, ordered by created_at ASC (deterministic; first-registered wins).
+
+        Returns None when the person has no family_accounting group at all.
+        Callers MUST surface a user-visible error in that case — never drop silently.
+        Blueprint filter is applied here so invoice_curator or other-blueprint groups
+        are never returned.
+        """
+        member = db.query(HouseholdMember).filter_by(phone=phone).first()
+        if member and member.primary_accounting_group_jid:
+            return member.primary_accounting_group_jid
+
+        accounts = (
+            db.query(UserAccount)
+            .filter_by(phone=phone)
+            .order_by(UserAccount.created_at.asc())
+            .all()
+        )
+        for acct in accounts:
+            reg = db.get(GroupRegistry, acct.group_jid)
+            if reg and reg.blueprint_id == "family_accounting":
+                return acct.group_jid
+
+        return None
+
     def get_household_members(self, db: Session, household_id: str) -> list[HouseholdMember]:
         return db.query(HouseholdMember).filter_by(household_id=household_id).all()
 
@@ -191,9 +221,9 @@ class AccountService:
     # ── Cross-group notifications ─────────────────────────────────────────────
 
     async def notify_user(self, db: Session, target_phone: str, message: str) -> None:
-        target_jid = self.get_personal_group_jid(db, target_phone)
+        target_jid = self.get_primary_accounting_group(db, target_phone)
         if not target_jid:
-            logger.warning("notify_user: no personal group for %s", target_phone)
+            logger.warning("notify_user: no family_accounting group for %s", target_phone)
             return
         try:
             await bridge_client.send_message(target_jid, message)
@@ -226,11 +256,11 @@ class AccountService:
         it to the reporter.  This guarantees the originating action never reports
         success when the counterpart could not be reached.
         """
-        target_jid = self.get_personal_group_jid(db, target_phone)
+        target_jid = self.get_primary_accounting_group(db, target_phone)
         if not target_jid:
             raise ValueError(
-                f"Cannot reach {target_phone}: no registered private group. "
-                f"Ask them to start a conversation with the bot first."
+                f"{target_phone} is not set up for shared accounting — "
+                f"they need to register a family_accounting group first."
             )
 
         # Resolve household_id for LID-safe matching (may be None for legacy setups)

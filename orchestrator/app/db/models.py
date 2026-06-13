@@ -305,13 +305,14 @@ class HouseholdMember(Base):
     """
     __tablename__ = "household_members"
 
-    id                = Column(String(36), primary_key=True, default=_uuid)
-    household_id      = Column(String(36), ForeignKey("households.id"), nullable=False, index=True)
-    phone             = Column(String, nullable=False)
-    private_group_jid = Column(String, ForeignKey("group_registry.group_jid"), nullable=True)
-    display_name      = Column(String, nullable=True)
-    created_at        = Column(DateTime(timezone=True), nullable=False,
-                               default=lambda: datetime.now(timezone.utc))
+    id                         = Column(String(36), primary_key=True, default=_uuid)
+    household_id               = Column(String(36), ForeignKey("households.id"), nullable=False, index=True)
+    phone                      = Column(String, nullable=False)
+    private_group_jid          = Column(String, ForeignKey("group_registry.group_jid"), nullable=True)
+    primary_accounting_group_jid = Column(String, ForeignKey("group_registry.group_jid"), nullable=True)
+    display_name               = Column(String, nullable=True)
+    created_at                 = Column(DateTime(timezone=True), nullable=False,
+                                        default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         UniqueConstraint("household_id", "phone", name="uq_household_members_household_phone"),

@@ -370,6 +370,18 @@ async function renderPeople(app) {
 
 function openPersonEdit(personJson) {
   const p = JSON.parse(personJson);
+  const groups = p.accounting_groups || [];
+  const primaryJid = p.primary_accounting_group_jid || '';
+
+  const acctGroupSection = groups.length > 0 ? `
+    <div class="form-group">
+      <label>Primary Accounting Group</label>
+      <select id="edit-primary-acct-group" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+        ${groups.map(g => `<option value="${escAttr(g.group_jid)}" ${g.group_jid === primaryJid ? 'selected' : ''}>${escHtml(g.group_jid)}${g.is_primary ? ' ★' : ''}</option>`).join('')}
+      </select>
+      <p style="font-size:11px;color:var(--muted);margin:4px 0 0">Bot-initiated accounting messages land here. ★ = current primary.</p>
+    </div>` : '';
+
   document.getElementById('person-modal-wrap').innerHTML = `
     <div class="modal-overlay" onclick="if(event.target===this)closePersonModal()">
       <div class="modal">
@@ -394,6 +406,7 @@ function openPersonEdit(personJson) {
           <label>Admin Label</label>
           <input id="edit-admin-label" type="text" value="${escAttr(p.admin_label || '')}" placeholder="e.g. owner, family">
         </div>
+        ${acctGroupSection}
         <div class="modal-footer">
           <button class="btn" onclick="closePersonModal()">Cancel</button>
           <button class="btn btn-primary" onclick="savePersonEdit('${escAttr(p.phone)}')">Save</button>
@@ -412,9 +425,17 @@ async function savePersonEdit(phone) {
   const email = document.getElementById('edit-email').value.trim();
   const is_admin = document.getElementById('edit-is-admin').checked;
   const admin_label = document.getElementById('edit-admin-label').value.trim();
+  const primarySel = document.getElementById('edit-primary-acct-group');
+  const primary_accounting_group_jid = primarySel ? primarySel.value : undefined;
   await apiFetch('/people/' + encodeURIComponent(phone), {
     method: 'PATCH',
-    body: JSON.stringify({ display_name: display_name || null, email: email || null, is_admin, admin_label: admin_label || null }),
+    body: JSON.stringify({
+      display_name: display_name || null,
+      email: email || null,
+      is_admin,
+      admin_label: admin_label || null,
+      ...(primary_accounting_group_jid !== undefined ? { primary_accounting_group_jid } : {}),
+    }),
   });
   closePersonModal();
   renderPeople(document.getElementById('app'));

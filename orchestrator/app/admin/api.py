@@ -408,6 +408,7 @@ def remove_tool_from_blueprints(tool_name: str):
 @router.get("/people")
 def list_people(_=Depends(require_auth)):
     """Unified list: everyone from admin_numbers + user_accounts."""
+    from app.db.models import HouseholdMember
     with SessionLocal() as db:
         # Collect all unique phones
         admin_rows = {r.phone_number: r for r in db.query(AdminNumbers).all()}
@@ -425,6 +426,26 @@ def list_people(_=Depends(require_auth)):
             accounts = account_by_phone.get(phone, [])
             owner_acct = next((a for a in accounts if a.role == "owner"), accounts[0] if accounts else None)
             grp = db.query(GroupRegistry).filter_by(group_jid=owner_acct.group_jid).first() if owner_acct else None
+
+            # Accounting groups: all UserAccount groups for this phone that use family_accounting
+            acct_groups = []
+            member = db.query(HouseholdMember).filter_by(phone=phone).first()
+            primary_jid = member.primary_accounting_group_jid if member else None
+            first_registered: str | None = None
+            for acct in sorted(accounts, key=lambda a: a.created_at or ""):
+                reg = db.get(GroupRegistry, acct.group_jid)
+                if reg and reg.blueprint_id == "family_accounting":
+                    if first_registered is None:
+                        first_registered = acct.group_jid
+                    acct_groups.append({
+                        "group_jid": acct.group_jid,
+                        "is_primary": (
+                            acct.group_jid == primary_jid
+                            if primary_jid
+                            else acct.group_jid == first_registered
+                        ),
+                    })
+
             result.append({
                 "phone": phone,
                 "display_name": profile.display_name if profile else None,
@@ -435,6 +456,8 @@ def list_people(_=Depends(require_auth)):
                 "role": owner_acct.role if owner_acct else None,
                 "group_type": grp.group_type if grp else None,
                 "created_at": owner_acct.created_at.isoformat() if owner_acct and owner_acct.created_at else None,
+                "primary_accounting_group_jid": primary_jid or first_registered,
+                "accounting_groups": acct_groups,
             })
         return result
 
@@ -593,6 +616,7 @@ class UpdatePersonFullRequest(BaseModel):
     email: str | None = None
     is_admin: bool | None = None
     admin_label: str | None = None
+    primary_accounting_group_jid: str | None = None  # "" clears it
 
 
 @router.patch("/people/{phone}")
@@ -645,6 +669,13 @@ def patch_person(phone: str, body: UpdatePersonFullRequest, _=Depends(require_au
                 db.delete(existing_admin)
             elif body.is_admin and existing_admin and body.admin_label is not None:
                 existing_admin.label = body.admin_label
+
+        if body.primary_accounting_group_jid is not None:
+            from app.db.models import HouseholdMember
+            member = db.query(HouseholdMember).filter_by(phone=phone).first()
+            if member:
+                # Empty string clears the override; any other value sets it
+                member.primary_accounting_group_jid = body.primary_accounting_group_jid or None
 
         db.commit()
         return {"ok": True}
