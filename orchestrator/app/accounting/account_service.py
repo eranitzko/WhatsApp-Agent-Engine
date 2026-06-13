@@ -132,9 +132,17 @@ class AccountService:
 
         Returns (phone, household_id) where either may be None on failure.
         """
+        logger.debug(
+            "resolve_inbound: group_jid=%r raw_sender=%r", group_jid, raw_sender
+        )
+
         # 1. HouseholdMember lookup — LID-safe, provides household_id
         member = db.query(HouseholdMember).filter_by(private_group_jid=group_jid).first()
         if member:
+            logger.info(
+                "resolve_inbound: strategy=household_member phone=%r group=%r sender=%r",
+                member.phone, group_jid, raw_sender,
+            )
             return member.phone, member.household_id
 
         # 2. UserProfile lookup — LID-safe for users not yet household-enrolled.
@@ -143,14 +151,23 @@ class AccountService:
         profile = db.query(UserProfile).filter_by(private_group_jid=group_jid).first()
         if profile:
             household_id = self.get_household_id(db, profile.phone)
+            logger.info(
+                "resolve_inbound: strategy=user_profile phone=%r group=%r sender=%r",
+                profile.phone, group_jid, raw_sender,
+            )
             return profile.phone, household_id
 
         # 3. Sender-JID extraction — NOT LID-safe; last resort only.
+        #    Logs a warning so every fallback to this path is visible in production.
         try:
             phone = normalize_phone(raw_sender.split("@")[0].split(":")[0])
         except ValueError:
             logger.warning("resolve_inbound: could not normalize sender %r", raw_sender)
             return None, None
+        logger.warning(
+            "resolve_inbound: strategy=sender_jid (NOT LID-safe) phone=%r group=%r sender=%r",
+            phone, group_jid, raw_sender,
+        )
         household_id = self.get_household_id(db, phone)
         return phone, household_id
 
