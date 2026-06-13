@@ -157,12 +157,36 @@ class GroupRegistrationHandler:
             existing = db.query(UserAccount).filter_by(phone=phone, group_jid=group_jid).first()
             if not existing:
                 db.add(UserAccount(phone=phone, group_jid=group_jid, role=role))
+
+            # Auto-link HouseholdMember.private_group_jid when a household member's
+            # personal group is approved — this is the only path that populates the
+            # LID-safe group→phone mapping used by resolve_inbound.
+            if group_type == "personal":
+                _autolink_household_member(db, phone, group_jid)
+
         db.commit()
 
         try:
             await bridge_client.send_message(group_jid, welcome)
         except Exception:
             logger.exception("Failed to send welcome to %s", group_jid)
+
+
+def _autolink_household_member(db: Session, phone: str, group_jid: str) -> None:
+    """Set HouseholdMember.private_group_jid when a personal group is approved.
+
+    If a HouseholdMember row already exists for this phone (created via the
+    admin panel during household setup) but has no private_group_jid yet, link
+    it now.  If there is no HouseholdMember row, do nothing — the admin panel
+    household setup must happen first.
+    """
+    from app.db.models import HouseholdMember
+    member = db.query(HouseholdMember).filter_by(phone=phone).first()
+    if member and member.private_group_jid is None:
+        member.private_group_jid = group_jid
+        logger.info(
+            "auto-linked HouseholdMember phone=%s to private_group_jid=%s", phone, group_jid
+        )
 
 
 def _ensure_blueprint(db: Session) -> None:

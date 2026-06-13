@@ -249,6 +249,254 @@ def test_add_admin_duplicate_returns_409(db):
         assert resp.status_code == 409
 
 
+# -- /admin/api/households ---------------------------------------------------
+
+from app.db.models import Household, HouseholdMember
+
+
+def _seed_household_prereqs(db):
+    """Seed blueprint + group so household member FK on private_group_jid can resolve."""
+    from app.db.models import Blueprint, GroupRegistry
+    if db.query(Blueprint).filter_by(id="fa").first() is None:
+        db.add(Blueprint(id="fa", display_name="Family Accounting",
+                         system_prompt="p", tools_enabled="[]"))
+    if db.query(GroupRegistry).filter_by(group_jid="priv_g@g.us").first() is None:
+        db.add(GroupRegistry(group_jid="priv_g@g.us", blueprint_id="fa"))
+    db.commit()
+
+
+def test_list_households_empty(db):
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        resp = TestClient(app).get("/admin/api/households")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_create_and_list_household(db):
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        client = TestClient(app)
+        create_resp = client.post("/admin/api/households", json={"name": "Itzkovitch"})
+        assert create_resp.status_code == 200
+        hid = create_resp.json()["id"]
+        assert create_resp.json()["name"] == "Itzkovitch"
+
+        list_resp = client.get("/admin/api/households")
+        assert list_resp.status_code == 200
+        names = [h["name"] for h in list_resp.json()]
+        assert "Itzkovitch" in names
+        assert any(h["id"] == hid for h in list_resp.json())
+
+
+def test_create_household_empty_name_returns_400(db):
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        resp = TestClient(app, raise_server_exceptions=False).post(
+            "/admin/api/households", json={"name": "  "}
+        )
+    assert resp.status_code == 400
+
+
+def test_delete_household_removes_members(db):
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        client = TestClient(app)
+        h = client.post("/admin/api/households", json={"name": "Family"}).json()
+        hid = h["id"]
+        client.post(f"/admin/api/households/{hid}/members",
+                    json={"phone": "972501234567"})
+        del_resp = client.delete(f"/admin/api/households/{hid}")
+        assert del_resp.status_code == 200
+
+    # Verify household and member are gone
+    verify = Session()
+    assert verify.query(Household).filter_by(id=hid).first() is None
+    assert verify.query(HouseholdMember).filter_by(household_id=hid).count() == 0
+    verify.close()
+
+
+def test_delete_household_not_found(db):
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        resp = TestClient(app, raise_server_exceptions=False).delete(
+            "/admin/api/households/nonexistent-id"
+        )
+    assert resp.status_code == 404
+
+
+def test_add_household_member(db):
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        client = TestClient(app)
+        hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
+        resp = client.post(f"/admin/api/households/{hid}/members",
+                           json={"phone": "972501234567", "display_name": "Alice"})
+        assert resp.status_code == 200
+        assert resp.json()["phone"] == "972501234567"
+        assert resp.json()["updated"] is False
+
+    verify = Session()
+    m = verify.query(HouseholdMember).filter_by(phone="972501234567").first()
+    assert m is not None
+    assert m.display_name == "Alice"
+    assert m.household_id == hid
+    verify.close()
+
+
+def test_add_household_member_idempotent(db):
+    """Second add with same phone in same household updates fields, returns updated=True."""
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        client = TestClient(app)
+        hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
+        client.post(f"/admin/api/households/{hid}/members", json={"phone": "972507777777"})
+        resp = client.post(f"/admin/api/households/{hid}/members",
+                           json={"phone": "972507777777", "display_name": "Bob"})
+        assert resp.status_code == 200
+        assert resp.json()["updated"] is True
+
+    verify = Session()
+    m = verify.query(HouseholdMember).filter_by(phone="972507777777").first()
+    assert m.display_name == "Bob"
+    verify.close()
+
+
+def test_add_household_member_cross_household_conflict_returns_409(db):
+    """Adding a phone that belongs to a different household raises 409."""
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        client = TestClient(app, raise_server_exceptions=False)
+        h1 = client.post("/admin/api/households", json={"name": "H1"}).json()["id"]
+        h2 = client.post("/admin/api/households", json={"name": "H2"}).json()["id"]
+        client.post(f"/admin/api/households/{h1}/members", json={"phone": "972508888888"})
+        resp = client.post(f"/admin/api/households/{h2}/members", json={"phone": "972508888888"})
+    assert resp.status_code == 409
+
+
+def test_add_household_member_invalid_phone_returns_400(db):
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        client = TestClient(app, raise_server_exceptions=False)
+        hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
+        resp = client.post(f"/admin/api/households/{hid}/members", json={"phone": "abc"})
+    assert resp.status_code == 400
+
+
+def test_update_household_member_display_name(db):
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        client = TestClient(app)
+        hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
+        client.post(f"/admin/api/households/{hid}/members",
+                    json={"phone": "972509999999", "display_name": "Old"})
+        patch_resp = client.patch(
+            f"/admin/api/households/{hid}/members/972509999999",
+            json={"display_name": "New"},
+        )
+        assert patch_resp.status_code == 200
+        assert patch_resp.json()["display_name"] == "New"
+
+
+def test_update_household_member_links_private_group_jid(db):
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        client = TestClient(app)
+        hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
+        client.post(f"/admin/api/households/{hid}/members", json={"phone": "972500011111"})
+        patch_resp = client.patch(
+            f"/admin/api/households/{hid}/members/972500011111",
+            json={"private_group_jid": "priv_g@g.us"},
+        )
+        assert patch_resp.status_code == 200
+        assert patch_resp.json()["private_group_jid"] == "priv_g@g.us"
+
+
+def test_remove_household_member(db):
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        client = TestClient(app)
+        hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
+        client.post(f"/admin/api/households/{hid}/members", json={"phone": "972506666666"})
+        del_resp = client.delete(f"/admin/api/households/{hid}/members/972506666666")
+        assert del_resp.status_code == 200
+
+    verify = Session()
+    assert verify.query(HouseholdMember).filter_by(phone="972506666666").first() is None
+    verify.close()
+
+
+def test_remove_household_member_not_found_returns_404(db):
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+        hid = TestClient(app).post("/admin/api/households", json={"name": "F"}).json()["id"]
+        resp = TestClient(app, raise_server_exceptions=False).delete(
+            f"/admin/api/households/{hid}/members/972500000000"
+        )
+    assert resp.status_code == 404
+
+
+def test_approve_registration_autolinks_household_member(db):
+    """approve_registration sets private_group_jid on an existing HouseholdMember."""
+    from app.db.models import Blueprint, GroupRegistry, UserAccount, GroupParticipant
+    db.add(Blueprint(id="fa", display_name="FA", system_prompt="p", tools_enabled="[]"))
+    db.add(GroupRegistry(group_jid="newgrp@g.us", blueprint_id="fa",
+                         group_type="unregistered", status="active"))
+    # Seed the participant so approve_registration can discover the phone
+    db.add(GroupParticipant(group_jid="newgrp@g.us", phone="972501112223", status="active"))
+    h = Household(name="Family")
+    db.add(h)
+    db.flush()
+    m = HouseholdMember(household_id=h.id, phone="972501112223", private_group_jid=None)
+    db.add(m)
+    db.commit()
+
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    from unittest.mock import AsyncMock
+    import app.bridge_client as _bc_mod
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)), \
+         patch.object(_bc_mod, "send_message", new=AsyncMock()):
+        client = TestClient(app)
+        resp = client.post(
+            "/admin/api/people/pending/newgrp%40g.us/approve",
+            json={"group_type": "personal"},
+        )
+        assert resp.status_code == 200
+
+    verify = Session()
+    linked = verify.query(HouseholdMember).filter_by(phone="972501112223").first()
+    assert linked is not None
+    assert linked.private_group_jid == "newgrp@g.us"
+    verify.close()
+
+
 # -- internal helper ---------------------------------------------------------
 
 def _get_session_factory(db):

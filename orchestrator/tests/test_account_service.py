@@ -279,3 +279,72 @@ async def test_process_second_party_creates_confirmation(db):
     assert conf.status == "pending"
     # Tal notified
     mock_bc.send_message.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# resolve_inbound — LID-safe group-JID-first strategy
+# ---------------------------------------------------------------------------
+
+from app.db.models import Household, HouseholdMember
+
+
+def _seed_household(db, phone: str, group_jid: str, blueprint_id: str = "family_accounting") -> tuple:
+    """Create Household + HouseholdMember + GroupRegistry so FK constraints hold."""
+    _seed_blueprint(db)
+    g = db.query(GroupRegistry).filter_by(group_jid=group_jid).first()
+    if g is None:
+        g = GroupRegistry(group_jid=group_jid, blueprint_id=blueprint_id, group_type="personal")
+        db.add(g)
+    h = Household(name="Test Family")
+    db.add(h)
+    db.flush()
+    m = HouseholdMember(household_id=h.id, phone=phone, private_group_jid=group_jid)
+    db.add(m)
+    db.commit()
+    return h, m
+
+
+def test_resolve_inbound_group_jid_first_returns_canonical_phone(db):
+    """When HouseholdMember exists for the group, use its phone — ignores sender JID."""
+    _seed_household(db, "972501234567", "alice_priv@g.us")
+    svc = AccountService()
+    # sender is a LID-format JID — completely different from the stored phone
+    phone, household_id = svc.resolve_inbound(db, "alice_priv@g.us", "8650248708313:3@lid")
+    assert phone == "972501234567"
+    assert household_id is not None
+
+
+def test_resolve_inbound_group_jid_first_ignores_lid_sender(db):
+    """Canonical phone is returned regardless of whether sender is E.164 or LID."""
+    _seed_household(db, "972509876543", "bob_priv@g.us")
+    svc = AccountService()
+    # Even if sender happens to be phone-format but WRONG phone, group-JID lookup wins
+    phone, _ = svc.resolve_inbound(db, "bob_priv@g.us", "972500000001@s.whatsapp.net")
+    assert phone == "972509876543"
+
+
+def test_resolve_inbound_falls_back_to_sender_when_no_household_member(db):
+    """No HouseholdMember for the group → fall back to extracting phone from sender JID."""
+    _seed_blueprint(db)
+    svc = AccountService()
+    phone, household_id = svc.resolve_inbound(db, "unknown_grp@g.us", "972507654321@s.whatsapp.net")
+    assert phone == "972507654321"
+    assert household_id is None
+
+
+def test_resolve_inbound_lid_sender_fallback_returns_lid_numeric(db):
+    """LID sender + no HouseholdMember → returns LID numeric (acceptable degraded mode)."""
+    _seed_blueprint(db)
+    svc = AccountService()
+    # LID numerics are long enough to pass normalize_phone's \d{7,18} check
+    phone, household_id = svc.resolve_inbound(db, "unknown_grp@g.us", "8650248708313:3@lid")
+    assert phone == "8650248708313"
+    assert household_id is None
+
+
+def test_resolve_inbound_household_id_returned(db):
+    """household_id from HouseholdMember is propagated to caller."""
+    h, m = _seed_household(db, "972501112222", "carol_priv@g.us")
+    svc = AccountService()
+    phone, household_id = svc.resolve_inbound(db, "carol_priv@g.us", "whatever:3@lid")
+    assert household_id == h.id

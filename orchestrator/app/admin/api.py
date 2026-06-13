@@ -545,6 +545,7 @@ class ApproveRegistrationRequest(BaseModel):
 @router.post("/people/pending/{group_jid}/approve")
 async def approve_registration(group_jid: str, body: ApproveRegistrationRequest, _=Depends(require_auth)):
     from app import bridge_client as _bc
+    from app.db.models import HouseholdMember
     with SessionLocal() as db:
         grp = db.query(GroupRegistry).filter_by(group_jid=group_jid).first()
         if not grp:
@@ -559,6 +560,11 @@ async def approve_registration(group_jid: str, body: ApproveRegistrationRequest,
             existing = db.query(UserAccount).filter_by(phone=phone, group_jid=group_jid).first()
             if not existing:
                 db.add(UserAccount(phone=phone, group_jid=group_jid, role=role))
+            # Auto-link HouseholdMember.private_group_jid for personal groups
+            if body.group_type == "personal":
+                member = db.query(HouseholdMember).filter_by(phone=phone).first()
+                if member and member.private_group_jid is None:
+                    member.private_group_jid = group_jid
         db.commit()
     try:
         await _bc.send_message(group_jid, "Your account is ready. You can start recording transactions here.")
@@ -756,3 +762,149 @@ def get_logs(limit: int = 100, group_jid: str | None = None, _=Depends(require_a
             }
             for r in rows
         ]
+
+
+# -- Households --------------------------------------------------------------
+# A household is the billing unit (e.g. the family).  Each member has a
+# canonical phone number and a private_group_jid — the 2-person group
+# (member + bot) used for delivery and LID-safe identity resolution.
+
+class CreateHouseholdRequest(BaseModel):
+    name: str
+
+
+class AddMemberRequest(BaseModel):
+    phone: str
+    display_name: str | None = None
+    private_group_jid: str | None = None
+
+
+class UpdateMemberRequest(BaseModel):
+    display_name: str | None = None
+    private_group_jid: str | None = None
+
+
+@router.get("/households", dependencies=[Depends(require_auth)])
+def list_households():
+    from app.db.models import Household, HouseholdMember
+    with SessionLocal() as db:
+        households = db.query(Household).order_by(Household.name).all()
+        result = []
+        for h in households:
+            members = db.query(HouseholdMember).filter_by(household_id=h.id).all()
+            result.append({
+                "id": h.id,
+                "name": h.name,
+                "created_at": h.created_at.isoformat() if h.created_at else None,
+                "members": [
+                    {
+                        "phone": m.phone,
+                        "display_name": m.display_name,
+                        "private_group_jid": m.private_group_jid,
+                        "linked": m.private_group_jid is not None,
+                    }
+                    for m in members
+                ],
+            })
+        return result
+
+
+@router.post("/households", dependencies=[Depends(require_auth)])
+def create_household(body: CreateHouseholdRequest):
+    from app.db.models import Household
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    with SessionLocal() as db:
+        h = Household(name=name)
+        db.add(h)
+        db.commit()
+        db.refresh(h)
+        return {"id": h.id, "name": h.name}
+
+
+@router.delete("/households/{household_id}", dependencies=[Depends(require_auth)])
+def delete_household(household_id: str):
+    from app.db.models import Household, HouseholdMember
+    with SessionLocal() as db:
+        h = db.get(Household, household_id)
+        if not h:
+            raise HTTPException(status_code=404, detail="Household not found")
+        db.query(HouseholdMember).filter_by(household_id=household_id).delete()
+        db.delete(h)
+        db.commit()
+    return {"ok": True}
+
+
+@router.post("/households/{household_id}/members", dependencies=[Depends(require_auth)])
+def add_household_member(household_id: str, body: AddMemberRequest):
+    from app.db.models import Household, HouseholdMember
+    from app.utils.phone import normalize_phone
+    from app.utils.phone import normalize_phone as _np
+    try:
+        phone = _np(body.phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not phone:
+        raise HTTPException(status_code=400, detail="phone is required")
+    with SessionLocal() as db:
+        if not db.get(Household, household_id):
+            raise HTTPException(status_code=404, detail="Household not found")
+        existing = db.query(HouseholdMember).filter_by(phone=phone).first()
+        if existing:
+            if existing.household_id != household_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Phone {phone} already belongs to household {existing.household_id}",
+                )
+            # Idempotent update
+            if body.display_name is not None:
+                existing.display_name = body.display_name
+            if body.private_group_jid is not None:
+                existing.private_group_jid = body.private_group_jid
+            db.commit()
+            return {"phone": phone, "household_id": household_id, "updated": True}
+        m = HouseholdMember(
+            household_id=household_id,
+            phone=phone,
+            display_name=body.display_name,
+            private_group_jid=body.private_group_jid,
+        )
+        db.add(m)
+        db.commit()
+        return {"phone": phone, "household_id": household_id, "updated": False}
+
+
+@router.patch("/households/{household_id}/members/{phone}", dependencies=[Depends(require_auth)])
+def update_household_member(household_id: str, phone: str, body: UpdateMemberRequest):
+    from app.db.models import HouseholdMember
+    with SessionLocal() as db:
+        member = db.query(HouseholdMember).filter_by(
+            household_id=household_id, phone=phone
+        ).first()
+        if not member:
+            raise HTTPException(status_code=404, detail="Member not found")
+        if body.display_name is not None:
+            member.display_name = body.display_name or None
+        if body.private_group_jid is not None:
+            member.private_group_jid = body.private_group_jid or None
+        db.commit()
+        return {
+            "phone": member.phone,
+            "display_name": member.display_name,
+            "private_group_jid": member.private_group_jid,
+        }
+
+
+@router.delete("/households/{household_id}/members/{phone}", dependencies=[Depends(require_auth)])
+def remove_household_member(household_id: str, phone: str):
+    from app.db.models import HouseholdMember
+    with SessionLocal() as db:
+        member = db.query(HouseholdMember).filter_by(
+            household_id=household_id, phone=phone
+        ).first()
+        if not member:
+            raise HTTPException(status_code=404, detail="Member not found")
+        db.delete(member)
+        db.commit()
+    return {"ok": True}

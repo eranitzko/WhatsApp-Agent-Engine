@@ -81,16 +81,24 @@ class AccountService:
     ) -> tuple[str | None, str | None]:
         """Resolve an inbound webhook (group_jid, raw_sender) to (phone, household_id).
 
-        raw_sender may be a WhatsApp JID like '972501234567@s.whatsapp.net',
-        '8650248708313:3@lid', or already a bare numeric string.
+        Strategy (LID-safe — group_jid is primary identity):
+          1. Look up HouseholdMember by private_group_jid.  The group JID of a
+             private 1:1 group is stable regardless of whether WhatsApp sends the
+             member's E.164 or LID in the sender field.  This is the only strategy
+             that survives LID migration without a contacts-store mapping.
+          2. Fall back to normalize_phone on the sender JID prefix.  Works for
+             phone-format senders; may return a LID numeric for LID-format senders
+             (acceptable fallback: handle_confirmation_reply has a group-only
+             fallback of its own).
 
-        Resolution:
-          1. Extract numeric prefix from JID (strip ':N' and '@domain').
-          2. normalize_phone → canonical stored format.
-          3. Look up HouseholdMember by phone → household_id.
-
-        Returns (phone, household_id) where either may be None on lookup failure.
+        Returns (phone, household_id) where either may be None on failure.
         """
+        # 1. Group-based lookup — LID-safe; private group JID is a stable 1:1 key
+        member = db.query(HouseholdMember).filter_by(private_group_jid=group_jid).first()
+        if member:
+            return member.phone, member.household_id
+
+        # 2. Sender-JID-based lookup (phone-format senders)
         try:
             phone = normalize_phone(raw_sender.split("@")[0].split(":")[0])
         except ValueError:
