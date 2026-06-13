@@ -369,6 +369,7 @@ class AgentRunner:
                 for phone in participants:
                     db.add(LedgerEntry(
                         transaction_id=transaction_id,
+                        entry_type="debt",
                         group_jid=group_jid,
                         from_phone=phone,
                         to_phone=payer,
@@ -421,6 +422,7 @@ class AgentRunner:
                         row.amount_settled_ils = new_settled
                 payment_leg = LedgerEntry(
                     transaction_id=str(uuid.uuid4()),
+                    entry_type="payment",
                     group_jid=group_jid,
                     from_phone=payer,
                     to_phone=payee,
