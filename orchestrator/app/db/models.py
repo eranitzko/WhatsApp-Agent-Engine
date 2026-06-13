@@ -150,6 +150,11 @@ class LedgerEntry(Base):
 
     id                 = Column(String(36), primary_key=True, default=_uuid)
     transaction_id     = Column(String(36), nullable=False, index=True)
+    # household_id is the canonical query scope for bilateral ledger entries.
+    # Null for legacy rows written before migration 015; those fall back to group_jid.
+    household_id       = Column(String(36), ForeignKey("households.id"), nullable=True, index=True)
+    # group_jid is kept for backward-compat and as origin audit metadata.
+    # New code: treat as origin_group_jid (which group triggered this entry).
     group_jid          = Column(String(255), nullable=False, index=True)
     from_phone         = Column(String(255), nullable=False)
     to_phone           = Column(String(255), nullable=False)
@@ -270,9 +275,48 @@ class CrossGroupConfirmation(Base):
     expires_at           = Column(DateTime(timezone=True), nullable=False)
     created_at           = Column(DateTime(timezone=True), nullable=False,
                                   default=lambda: datetime.now(timezone.utc))
+    # household_id enables matching by (household_id, target_phone) rather than group_jid,
+    # which survives LID/phone mismatches and group-registration gaps.
+    # Null for legacy rows; populated for all new confirmations after migration 015.
+    household_id         = Column(String(36), ForeignKey("households.id"), nullable=True)
 
     __table_args__ = (
         Index("ix_cross_group_confirmations_target_phone_status", "target_phone", "status"),
+        Index("ix_cross_group_confirmations_household_target", "household_id", "target_phone", "status"),
+    )
+
+
+class Household(Base):
+    __tablename__ = "households"
+
+    id         = Column(String(36), primary_key=True, default=_uuid)
+    name       = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+
+
+class HouseholdMember(Base):
+    """Maps a normalized phone → household, with the person's private group JID.
+
+    phone must be the canonical normalized form (digits only, 7–18 chars).
+    private_group_jid is the WhatsApp group that serves as this person's inbox
+    (one human + the bot).  This replaces the unreliable get_personal_group_jid
+    three-strategy fallback.
+    """
+    __tablename__ = "household_members"
+
+    id                = Column(String(36), primary_key=True, default=_uuid)
+    household_id      = Column(String(36), ForeignKey("households.id"), nullable=False, index=True)
+    phone             = Column(String, nullable=False)
+    private_group_jid = Column(String, ForeignKey("group_registry.group_jid"), nullable=True)
+    display_name      = Column(String, nullable=True)
+    created_at        = Column(DateTime(timezone=True), nullable=False,
+                               default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        UniqueConstraint("household_id", "phone", name="uq_household_members_household_phone"),
+        UniqueConstraint("phone", name="uq_household_members_phone"),  # one household per phone
+        Index("ix_household_members_phone", "phone"),
     )
 
 

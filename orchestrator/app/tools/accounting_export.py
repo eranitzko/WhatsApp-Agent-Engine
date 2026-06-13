@@ -56,7 +56,14 @@ def generate_ledger_xlsx(
     grouping: str = cfg.get("grouping", "none")
 
     with SessionLocal() as db:
-        q = db.query(LedgerEntry).filter(LedgerEntry.group_jid == group_jid)
+        from app.db.models import HouseholdMember as _HM
+        _member = db.query(_HM).filter_by(private_group_jid=group_jid).first()
+        _household_id = _member.household_id if _member else None
+        q = db.query(LedgerEntry)
+        if _household_id:
+            q = q.filter(LedgerEntry.household_id == _household_id)
+        else:
+            q = q.filter(LedgerEntry.group_jid == group_jid)
         if filter_phone:
             q = q.filter(
                 or_(LedgerEntry.from_phone == filter_phone, LedgerEntry.to_phone == filter_phone)
@@ -285,8 +292,14 @@ def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> byte
 
     with SessionLocal() as db:
         names = _phone_to_name_from_db(db, group_jid)
-        from app.db.models import LedgerEntry as _LE
-        query = db.query(_LE).filter(_LE.group_jid == group_jid)
+        from app.db.models import LedgerEntry as _LE, HouseholdMember as _HM2
+        _member2 = db.query(_HM2).filter_by(private_group_jid=group_jid).first()
+        _household_id2 = _member2.household_id if _member2 else None
+        query = db.query(_LE)
+        if _household_id2:
+            query = query.filter(_LE.household_id == _household_id2)
+        else:
+            query = query.filter(_LE.group_jid == group_jid)
         if filter_phone:
             from sqlalchemy import or_
             query = query.filter(or_(

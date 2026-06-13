@@ -53,26 +53,36 @@ class ThresholdEvaluator:
 
     # ── Family Accounting metrics ─────────────────────────────────────────────
 
+    def _get_household_id_for_group(self, db: Session, group_jid: str) -> str | None:
+        """Return household_id for a private group JID, or None if not configured."""
+        from app.db.models import HouseholdMember
+        member = db.query(HouseholdMember).filter_by(private_group_jid=group_jid).first()
+        return member.household_id if member else None
+
     def _metric_open_debt_amount(self, db: Session, group_jid: str) -> float:
         from app.db.models import LedgerEntry
-        result = (
-            db.query(func.sum(LedgerEntry.amount_ils - LedgerEntry.amount_settled_ils))
-            .filter(
-                LedgerEntry.group_jid == group_jid,
-                LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
-            )
-            .scalar()
+        household_id = self._get_household_id_for_group(db, group_jid)
+        q = db.query(func.sum(LedgerEntry.amount_ils - LedgerEntry.amount_settled_ils)).filter(
+            LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
         )
-        return float(result or 0)
+        if household_id:
+            q = q.filter(LedgerEntry.household_id == household_id)
+        else:
+            q = q.filter(LedgerEntry.group_jid == group_jid)
+        return float(q.scalar() or 0)
 
     def _metric_days_since_last_settlement(self, db: Session, group_jid: str) -> float:
         from app.db.models import LedgerSettlement, LedgerEntry
-        result = (
+        household_id = self._get_household_id_for_group(db, group_jid)
+        q = (
             db.query(func.max(LedgerSettlement.created_at))
             .join(LedgerEntry, LedgerSettlement.payment_leg_id == LedgerEntry.id)
-            .filter(LedgerEntry.group_jid == group_jid)
-            .scalar()
         )
+        if household_id:
+            q = q.filter(LedgerEntry.household_id == household_id)
+        else:
+            q = q.filter(LedgerEntry.group_jid == group_jid)
+        result = q.scalar()
         if result is None:
             return float("inf")
         now = datetime.now(timezone.utc)

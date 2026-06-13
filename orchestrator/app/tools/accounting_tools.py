@@ -62,17 +62,20 @@ def _sender_phone(ctx: dict) -> str:
     return sender.split("@")[0].split(":")[0]
 
 
-def _net_owed(db, group_jid: str, from_phone: str, to_phone: str) -> Decimal:
-    rows = (
-        db.query(LedgerEntry)
-        .filter(
-            LedgerEntry.group_jid == group_jid,
-            LedgerEntry.from_phone == from_phone,
-            LedgerEntry.to_phone == to_phone,
-        )
-        .all()
+def _net_owed(
+    db, group_jid: str, from_phone: str, to_phone: str, household_id: str | None = None
+) -> Decimal:
+    q = db.query(LedgerEntry).filter(
+        LedgerEntry.from_phone == from_phone,
+        LedgerEntry.to_phone == to_phone,
     )
-    return sum((r.amount_ils - (r.amount_settled_ils or Decimal("0")) for r in rows), Decimal("0"))
+    if household_id:
+        q = q.filter(LedgerEntry.household_id == household_id)
+    else:
+        q = q.filter(LedgerEntry.group_jid == group_jid)
+    return sum(
+        (r.amount_ils - (r.amount_settled_ils or Decimal("0")) for r in q.all()), Decimal("0")
+    )
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -617,12 +620,17 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
         phone_a = _sender_phone(ctx)
         phone_b = None
 
-    def net_vs_group(db, group_jid, from_phone, to_phones):
-        owes = sum(_net_owed(db, group_jid, from_phone, cp) for cp in to_phones)
-        owed = sum(_net_owed(db, group_jid, cp, from_phone) for cp in to_phones)
-        return owes - owed
-
     with SessionLocal() as db:
+        household_id = (
+            _account_service.get_household_id(db, _sender_phone(ctx))
+            if _account_service else None
+        )
+
+        def net_vs_group(from_phone, to_phones):
+            owes = sum(_net_owed(db, group_jid, from_phone, cp, household_id) for cp in to_phones)
+            owed = sum(_net_owed(db, group_jid, cp, from_phone, household_id) for cp in to_phones)
+            return owes - owed
+
         household = _household_phones_from_db(db, group_jid)
         names = _phone_to_name_from_db(db, group_jid)
 
@@ -634,8 +642,8 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
                 return f"{label(phone_a)} and {label(phone_b)} share a household — no debt tracked between them."
             counterparts_a = household if phone_b in household else {phone_b}
             counterparts_b = household if phone_a in household else {phone_a}
-            net = net_vs_group(db, group_jid, phone_a, counterparts_a) if phone_a not in household \
-                else -net_vs_group(db, group_jid, phone_b, counterparts_b)
+            net = net_vs_group(phone_a, counterparts_a) if phone_a not in household \
+                else -net_vs_group(phone_b, counterparts_b)
             la, lb = label(phone_a), label(phone_b)
             if net > Decimal("0"):
                 return f"{la} owes {lb}: {net:.2f} ILS"
@@ -643,14 +651,15 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
                 return f"{lb} owes {la}: {(-net):.2f} ILS"
             return f"{la} and {lb} are settled up."
 
-        rows = (
-            db.query(LedgerEntry)
-            .filter(
-                LedgerEntry.group_jid == group_jid,
-                or_(LedgerEntry.from_phone == phone_a, LedgerEntry.to_phone == phone_a),
-            )
-            .all()
+        q = db.query(LedgerEntry).filter(
+            or_(LedgerEntry.from_phone == phone_a, LedgerEntry.to_phone == phone_a),
         )
+        if household_id:
+            q = q.filter(LedgerEntry.household_id == household_id)
+        else:
+            q = q.filter(LedgerEntry.group_jid == group_jid)
+        rows = q.all()
+
         all_partners = {r.from_phone if r.to_phone == phone_a else r.to_phone for r in rows}
         all_partners.discard(phone_a)
         if phone_a in household:
@@ -659,15 +668,15 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
         individual_partners = sorted(all_partners - household)
         lines = []
         if household_partners and phone_a not in household:
-            net = net_vs_group(db, group_jid, phone_a, household_partners)
+            net = net_vs_group(phone_a, household_partners)
             la = label(phone_a)
             if net > Decimal("0"):
                 lines.append(f"{la} owes Parents: {net:.2f} ILS")
             elif net < Decimal("0"):
                 lines.append(f"Parents owe {la}: {(-net):.2f} ILS")
         for partner in individual_partners:
-            a_owes = _net_owed(db, group_jid, phone_a, partner)
-            p_owes = _net_owed(db, group_jid, partner, phone_a)
+            a_owes = _net_owed(db, group_jid, phone_a, partner, household_id)
+            p_owes = _net_owed(db, group_jid, partner, phone_a, household_id)
             net = a_owes - p_owes
             la, lp = label(phone_a), label(partner)
             if net > Decimal("0"):
@@ -684,10 +693,17 @@ async def _exec_get_debt_summary(params: dict, **ctx) -> str:
     sender_phone = _sender_phone(ctx)
 
     with SessionLocal() as db:
+        household_id = (
+            _account_service.get_household_id(db, sender_phone)
+            if _account_service and sender_phone else None
+        )
         q = db.query(LedgerEntry).filter(
-            LedgerEntry.group_jid == group_jid,
             LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
         )
+        if household_id:
+            q = q.filter(LedgerEntry.household_id == household_id)
+        else:
+            q = q.filter(LedgerEntry.group_jid == group_jid)
         if not is_admin and sender_phone:
             q = q.filter(
                 or_(
@@ -735,7 +751,16 @@ async def _exec_get_history(params: dict, **ctx) -> str:
         phone = _sender_phone(ctx)
 
     with SessionLocal() as db:
-        q = db.query(LedgerEntry).filter(LedgerEntry.group_jid == group_jid)
+        _scope_phone = _sender_phone(ctx)
+        household_id = (
+            _account_service.get_household_id(db, _scope_phone)
+            if _account_service and _scope_phone else None
+        )
+        q = db.query(LedgerEntry)
+        if household_id:
+            q = q.filter(LedgerEntry.household_id == household_id)
+        else:
+            q = q.filter(LedgerEntry.group_jid == group_jid)
         if phone:
             q = q.filter(or_(LedgerEntry.from_phone == phone, LedgerEntry.to_phone == phone))
         if from_date:
@@ -770,14 +795,17 @@ async def _exec_get_transaction(params: dict, **ctx) -> str:
     if len(tx_prefix) < 8:
         return "Transaction ID prefix must be at least 8 characters. Use the ID shown in get_history."
     with SessionLocal() as db:
-        rows = (
-            db.query(LedgerEntry)
-            .filter(
-                LedgerEntry.group_jid == group_jid,
-                LedgerEntry.transaction_id.startswith(tx_prefix),
-            )
-            .all()
+        _admin_phone = _sender_phone(ctx)
+        _household_id = (
+            _account_service.get_household_id(db, _admin_phone)
+            if _account_service and _admin_phone else None
         )
+        q = db.query(LedgerEntry).filter(LedgerEntry.transaction_id.startswith(tx_prefix))
+        if _household_id:
+            q = q.filter(LedgerEntry.household_id == _household_id)
+        else:
+            q = q.filter(LedgerEntry.group_jid == group_jid)
+        rows = q.all()
     if not rows:
         return f"No transaction found matching '{tx_prefix}'."
     first = rows[0]
@@ -998,14 +1026,16 @@ async def _exec_correct_transaction(params: dict, **ctx) -> str:
         return "No changes specified. Provide at least one of: new_date, new_amount_ils, add_phones, remove_phones."
 
     with SessionLocal() as db:
-        legs = (
-            db.query(LedgerEntry)
-            .filter(
-                LedgerEntry.group_jid == group_jid,
-                LedgerEntry.transaction_id.like(f"{tx_prefix}%"),
-            )
-            .all()
+        _corr_household_id = (
+            _account_service.get_household_id(db, admin_phone)
+            if _account_service and admin_phone else None
         )
+        q = db.query(LedgerEntry).filter(LedgerEntry.transaction_id.like(f"{tx_prefix}%"))
+        if _corr_household_id:
+            q = q.filter(LedgerEntry.household_id == _corr_household_id)
+        else:
+            q = q.filter(LedgerEntry.group_jid == group_jid)
+        legs = q.all()
         if not legs:
             return f"No transaction found with ID starting '{tx_prefix}'."
         if len({leg.transaction_id for leg in legs}) > 1:
@@ -1097,14 +1127,17 @@ async def _exec_apply_correction(params: dict, **ctx) -> str:
     payer = changes["payer"]
 
     with SessionLocal() as db:
-        legs = (
-            db.query(LedgerEntry)
-            .filter(
-                LedgerEntry.group_jid == group_jid,
-                LedgerEntry.transaction_id == transaction_id,
-            )
-            .all()
+        _apply_admin_phone = _sender_phone(ctx)
+        _apply_household_id = (
+            _account_service.get_household_id(db, _apply_admin_phone)
+            if _account_service and _apply_admin_phone else None
         )
+        q = db.query(LedgerEntry).filter(LedgerEntry.transaction_id == transaction_id)
+        if _apply_household_id:
+            q = q.filter(LedgerEntry.household_id == _apply_household_id)
+        else:
+            q = q.filter(LedgerEntry.group_jid == group_jid)
+        legs = q.all()
         if not legs:
             correction_queue.remove(group_jid, token)
             return "Transaction no longer exists."
@@ -1150,6 +1183,7 @@ async def _exec_apply_correction(params: dict, **ctx) -> str:
             tx_date = new_date_val or legs[0].transaction_date
             db.add(LedgerEntry(
                 transaction_id=transaction_id,
+                household_id=_apply_household_id,
                 group_jid=group_jid,
                 from_phone=phone,
                 to_phone=payer,

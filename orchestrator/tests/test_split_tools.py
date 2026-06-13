@@ -19,9 +19,9 @@ def _setup(db):
     )
     db.add(bp)
     for jid, phone in [
-        ("eran_g@g.us", "972530"),
-        ("eden_g@g.us", "972531"),
-        ("tal_g@g.us", "972532"),
+        ("eran_g@g.us", "9725300"),
+        ("eden_g@g.us", "9725310"),
+        ("tal_g@g.us", "9725320"),
     ]:
         db.add(GroupRegistry(group_jid=jid, blueprint_id="family_accounting", group_type="personal"))
         db.add(UserAccount(phone=phone, group_jid=jid, role="owner"))
@@ -36,12 +36,12 @@ async def test_process_split_creates_split_transaction(db):
         mock_bc.send_message = AsyncMock()
         split = await svc.process_split(
             db=db,
-            reporter_phone="972530",
+            reporter_phone="9725300",
             reporter_group_jid="eran_g@g.us",
-            payer_phone="972530",
+            payer_phone="9725300",
             shares=[
-                {"phone": "972531", "amount_ils": Decimal("66.67")},
-                {"phone": "972532", "amount_ils": Decimal("66.67")},
+                {"phone": "9725310", "amount_ils": Decimal("66.67")},
+                {"phone": "9725320", "amount_ils": Decimal("66.67")},
             ],
             total_amount=Decimal("200"),
             description="restaurant",
@@ -53,7 +53,7 @@ async def test_process_split_creates_split_transaction(db):
     confs = db.query(CrossGroupConfirmation).filter_by(split_transaction_id=split.id).all()
     assert len(confs) == 2
     phones = {c.target_phone for c in confs}
-    assert phones == {"972531", "972532"}
+    assert phones == {"9725310", "9725320"}
 
 
 @pytest.mark.asyncio
@@ -65,12 +65,12 @@ async def test_process_split_reporter_is_participant_writes_own_share_pending(db
         # Eden reports that Eran paid; Eden's own share is 1st-party
         split = await svc.process_split(
             db=db,
-            reporter_phone="972531",          # Eden is reporter
+            reporter_phone="9725310",          # Eden is reporter
             reporter_group_jid="eden_g@g.us",
-            payer_phone="972530",             # Eran paid
+            payer_phone="9725300",             # Eran paid
             shares=[
-                {"phone": "972531", "amount_ils": Decimal("66.67")},  # Eden — 1st-party
-                {"phone": "972532", "amount_ils": Decimal("66.67")},  # Tal — 2nd-party
+                {"phone": "9725310", "amount_ils": Decimal("66.67")},  # Eden — 1st-party
+                {"phone": "9725320", "amount_ils": Decimal("66.67")},  # Tal — 2nd-party
             ],
             total_amount=Decimal("200"),
             description="restaurant",
@@ -82,8 +82,8 @@ async def test_process_split_reporter_is_participant_writes_own_share_pending(db
     assert len(confs) == 2  # one self_confirmed (Eden) + one pending (Tal)
     pending_confs = [c for c in confs if c.status == "pending"]
     assert len(pending_confs) == 1
-    assert pending_confs[0].target_phone == "972532"
-    assert split.reporter_phone == "972531"
+    assert pending_confs[0].target_phone == "9725320"
+    assert split.reporter_phone == "9725310"
 
 
 @pytest.mark.asyncio

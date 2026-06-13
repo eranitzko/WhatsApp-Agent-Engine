@@ -291,27 +291,19 @@ async def _process(payload: WebhookPayload) -> None:
         if _bot_phone and payload.sender.split("@")[0].split(":")[0] == _bot_phone:
             return
 
-        # Resolve blueprint via TTL cache — 0 DB hits on the hot path after first lookup
-        blueprint, entry = router.resolve(db, payload.jid)
-        if blueprint is None:
-            return
+        # Resolve inbound identity before blueprint gate — needed for confirmation intercept
+        # on groups that may not be registered (counterpart's private group with LID sender).
+        _inbound_phone, _inbound_household_id = account_service.resolve_inbound(
+            db, payload.jid, payload.sender
+        )
 
-        # Yes/no intercepts — only relevant for registered groups
-        if text.strip().lower() in ("yes", "no", "כן", "לא", "y", "n"):
-            sender_phone = payload.sender.split("@")[0].split(":")[0]
-            group_type = account_service.get_group_type(db, payload.jid)
-            if group_type == "sys_admin":
-                if group_registration_handler.is_pending_reply(db, payload.jid, text):
-                    handled = await group_registration_handler.handle_admin_reply(
-                        db, payload.jid, text
-                    )
-                    if handled:
-                        return
-
+        # Cross-group confirmation intercept — BEFORE router.resolve so an unregistered
+        # counterpart group cannot silently drop a "yes" reply.
         if text.strip().lower() in ("yes", "no", "כן", "לא", "y", "n", "אישור", "ביטול"):
-            sender_phone = payload.sender.split("@")[0].split(":")[0]
+            _phone_for_lookup = _inbound_phone or payload.sender.split("@")[0].split(":")[0]
             conf = account_service.handle_confirmation_reply(
-                db, payload.jid, sender_phone, text
+                db, payload.jid, _phone_for_lookup, text,
+                household_id=_inbound_household_id,
             )
             if conf is not None:
                 if conf.status == "confirmed":
@@ -332,6 +324,22 @@ async def _process(payload: WebhookPayload) -> None:
                             "Your transaction was declined by the other party."
                         )
                 return
+
+        # Resolve blueprint via TTL cache — 0 DB hits on the hot path after first lookup
+        blueprint, entry = router.resolve(db, payload.jid)
+        if blueprint is None:
+            return
+
+        # Yes/no intercepts — only relevant for registered sys_admin groups
+        if text.strip().lower() in ("yes", "no", "כן", "לא", "y", "n"):
+            group_type = account_service.get_group_type(db, payload.jid)
+            if group_type == "sys_admin":
+                if group_registration_handler.is_pending_reply(db, payload.jid, text):
+                    handled = await group_registration_handler.handle_admin_reply(
+                        db, payload.jid, text
+                    )
+                    if handled:
+                        return
 
         # Rate limiting (async — uses asyncio.Lock)
         if payload.type == "image":

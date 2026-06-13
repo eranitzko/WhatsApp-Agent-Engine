@@ -11,10 +11,12 @@ from sqlalchemy.orm import Session
 
 from app import bridge_client
 from app.db.models import (
-    AdminNumbers, CrossGroupConfirmation, GroupRegistry, LedgerEntry,
-    LedgerSettlement, SplitTransaction, UserAccount, UserProfile,
+    AdminNumbers, CrossGroupConfirmation, GroupRegistry, Household,
+    HouseholdMember, LedgerEntry, LedgerSettlement, SplitTransaction,
+    UserAccount, UserProfile,
 )
 from app.tools.accounting_fifo import DebtLeg, apply_payment
+from app.utils.phone import normalize_phone
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,11 @@ class AccountService:
         return [r.phone for r in rows]
 
     def get_display_name(self, db: Session, phone: str) -> str:
+        # Check HouseholdMember display name first (most authoritative)
+        member = db.query(HouseholdMember).filter_by(phone=phone).first()
+        if member and member.display_name:
+            return member.display_name
+        # Fall back to UserProfile
         row = db.query(UserProfile).filter_by(phone=phone).first()
         if row and row.display_name:
             return row.display_name
@@ -50,27 +57,71 @@ class AccountService:
             return "unregistered"
         return row.group_type or "unregistered"
 
-    def get_personal_group_jid(self, db: Session, phone: str) -> str | None:
-        """Return the personal group JID for a user identified by phone.
+    # ── Household resolution (replaces get_personal_group_jid guessing) ───────
 
-        Tries three strategies in order:
-        1. UserAccount table (the canonical path for registered personal groups).
-        2. GroupParticipant.phone exact match — handles WhatsApp LID-format phone
-           numbers that bypass the UserAccount table.
-        3. AdminNumbers label → GroupParticipant push_name fuzzy match — handles
-           the case where the agent uses a human-format phone number (e.g.
-           "972528695501") but GroupParticipant stores a WhatsApp LID ("8650248708313").
-           Matches when the AdminNumbers label appears anywhere in the push_name
-           (case-insensitive).  Prefers family_accounting groups.
+    def get_household_id(self, db: Session, phone: str) -> str | None:
+        """Return the household_id for a normalized phone, or None."""
+        member = db.query(HouseholdMember).filter_by(phone=phone).first()
+        return member.household_id if member else None
+
+    def get_member_private_group(self, db: Session, phone: str) -> str | None:
+        """Return the private group JID for a normalized phone via HouseholdMember.
+
+        This is the canonical deterministic replacement for get_personal_group_jid.
+        Returns None if the phone is not registered as a household member.
         """
-        from app.db.models import GroupParticipant, GroupRegistry
+        member = db.query(HouseholdMember).filter_by(phone=phone).first()
+        return member.private_group_jid if member else None
 
-        # 1. UserAccount (intended path)
+    def get_household_members(self, db: Session, household_id: str) -> list[HouseholdMember]:
+        return db.query(HouseholdMember).filter_by(household_id=household_id).all()
+
+    def resolve_inbound(
+        self, db: Session, group_jid: str, raw_sender: str
+    ) -> tuple[str | None, str | None]:
+        """Resolve an inbound webhook (group_jid, raw_sender) to (phone, household_id).
+
+        raw_sender may be a WhatsApp JID like '972501234567@s.whatsapp.net',
+        '8650248708313:3@lid', or already a bare numeric string.
+
+        Resolution:
+          1. Extract numeric prefix from JID (strip ':N' and '@domain').
+          2. normalize_phone → canonical stored format.
+          3. Look up HouseholdMember by phone → household_id.
+
+        Returns (phone, household_id) where either may be None on lookup failure.
+        """
+        try:
+            phone = normalize_phone(raw_sender.split("@")[0].split(":")[0])
+        except ValueError:
+            logger.warning("resolve_inbound: could not normalize sender %r", raw_sender)
+            return None, None
+        household_id = self.get_household_id(db, phone)
+        return phone, household_id
+
+    def get_personal_group_jid(self, db: Session, phone: str) -> str | None:
+        """Return the delivery group JID for a phone.
+
+        Strategy order (most to least authoritative):
+        1. HouseholdMember.private_group_jid  ← new deterministic path
+        2. UserAccount (legacy)
+        3. GroupParticipant exact match (legacy)
+        4. AdminNumbers label fuzzy match (legacy, last resort)
+
+        Callers should migrate to get_member_private_group() for new code.
+        """
+        # 1. Deterministic household path
+        member_jid = self.get_member_private_group(db, phone)
+        if member_jid:
+            return member_jid
+
+        # 2. UserAccount (intended path for legacy registrations)
         acct = self.resolve_user(db, phone)
         if acct:
             return acct.group_jid
 
-        # 2. Direct GroupParticipant match (phone may already be a LID)
+        # 3. Direct GroupParticipant match
+        from app.db.models import GroupParticipant
         gps = (
             db.query(GroupParticipant)
             .filter_by(phone=phone, status="active")
@@ -86,7 +137,7 @@ class AccountService:
         if fallback_jid:
             return fallback_jid
 
-        # 3. AdminNumbers label → push_name fuzzy match
+        # 4. AdminNumbers label → push_name fuzzy match
         admin_row = db.query(AdminNumbers).filter_by(phone_number=phone).first()
         if admin_row and admin_row.label and admin_row.label.lower() != "owner":
             label_lower = admin_row.label.lower()
@@ -102,8 +153,6 @@ class AccountService:
                     reg = db.get(GroupRegistry, gp.group_jid)
                     if reg and reg.blueprint_id == "family_accounting":
                         return gp.group_jid
-                    # Non-family_accounting groups are never a valid personal group
-                    # destination — do not fall back to them.
 
         return None
 
@@ -118,6 +167,18 @@ class AccountService:
             except ValueError:
                 pass
         return _DEFAULT_CONFIRMATION_TIMEOUT_HOURS
+
+    # ── Ledger scope helpers ──────────────────────────────────────────────────
+
+    def get_ledger_scope(
+        self, db: Session, phone: str, group_jid: str
+    ) -> tuple[str | None, str]:
+        """Return (household_id_or_None, group_jid) for use in ledger queries.
+
+        When household_id is not None, callers should filter by household_id.
+        When None, callers fall back to group_jid (legacy data).
+        """
+        return self.get_household_id(db, phone), group_jid
 
     # ── Cross-group notifications ─────────────────────────────────────────────
 
@@ -150,9 +211,24 @@ class AccountService:
         confirmation_message: str,
         split_transaction_id: str | None = None,
     ) -> CrossGroupConfirmation:
+        """Create a CrossGroupConfirmation and deliver the request to the target.
+
+        Delivery robustness: if the bridge send fails, the CrossGroupConfirmation
+        row is NOT committed — the caller receives a RuntimeError and must surface
+        it to the reporter.  This guarantees the originating action never reports
+        success when the counterpart could not be reached.
+        """
         target_jid = self.get_personal_group_jid(db, target_phone)
         if not target_jid:
-            raise ValueError(f"No personal group found for {target_phone}")
+            raise ValueError(
+                f"Cannot reach {target_phone}: no registered private group. "
+                f"Ask them to start a conversation with the bot first."
+            )
+
+        # Resolve household_id for LID-safe matching (may be None for legacy setups)
+        initiator_household_id = self.get_household_id(db, initiator_phone)
+        target_household_id = self.get_household_id(db, target_phone)
+        household_id = initiator_household_id or target_household_id  # prefer whichever is set
 
         timeout_hours = self._confirmation_timeout_hours(db)
         expires_at = datetime.now(timezone.utc) + timedelta(hours=timeout_hours)
@@ -167,12 +243,23 @@ class AccountService:
             action_payload=json.dumps(action_payload),
             status="pending",
             expires_at=expires_at,
+            household_id=household_id,
         )
         db.add(conf)
+        db.flush()  # assign id without committing — we commit only after successful send
+
+        try:
+            await bridge_client.send_message(target_jid, confirmation_message)
+        except Exception as exc:
+            # Roll back: don't leave a dangling pending conf if delivery failed
+            db.rollback()
+            raise RuntimeError(
+                f"Could not deliver confirmation request to {target_phone}: {exc}. "
+                f"Transaction NOT recorded. Please try again."
+            ) from exc
+
         db.commit()
         db.refresh(conf)
-
-        await bridge_client.send_message(target_jid, confirmation_message)
         return conf
 
     def handle_confirmation_reply(
@@ -181,33 +268,56 @@ class AccountService:
         group_jid: str,
         phone: str,
         reply: str,
+        household_id: str | None = None,
     ) -> "CrossGroupConfirmation | None":
         """Update and return the resolved confirmation, or None if none found.
 
-        Tries exact (phone + group) match first.  Falls back to group-JID-only
-        match to handle WhatsApp LID vs human phone number mismatches: the agent
-        stores confirmations using the human-format phone from the tool call, but
-        the webhook delivers replies with a LID-format sender phone.  For personal
-        groups (one human per group) this is safe — any reply in the target group
-        is unambiguously from the intended recipient.
+        Match priority:
+        1. (household_id, phone, status=pending) — LID-safe, used when household
+           is configured.
+        2. (phone, group_jid, status=pending) — exact phone+group match.
+        3. (group_jid, status=pending) group-only fallback — safe only when
+           exactly one pending conf exists for this group.
 
         Returns the CrossGroupConfirmation with updated status so callers can act
         on it directly without a second DB query (which would fail on LID mismatch).
         """
         now = datetime.now(timezone.utc)
 
-        # 1. Exact match (phone + group)
-        conf = (
-            db.query(CrossGroupConfirmation)
-            .filter_by(target_phone=phone, target_group_jid=group_jid, status="pending")
-            .filter(CrossGroupConfirmation.expires_at > now)
-            .order_by(CrossGroupConfirmation.created_at.asc())
-            .first()
-        )
+        conf: CrossGroupConfirmation | None = None
 
-        # 2. Group-only fallback (handles LID ↔ phone mismatch).
-        # Only safe when there is exactly one pending confirmation for this group —
-        # if multiple are pending we cannot tell which user is responding.
+        # 1. Household-based match (LID-safe)
+        if household_id:
+            pending = (
+                db.query(CrossGroupConfirmation)
+                .filter_by(household_id=household_id, target_phone=phone, status="pending")
+                .filter(CrossGroupConfirmation.expires_at > now)
+                .order_by(CrossGroupConfirmation.created_at.asc())
+                .all()
+            )
+            if len(pending) == 1:
+                conf = pending[0]
+            elif len(pending) > 1:
+                # Multiple pending for this person — cannot auto-resolve; caller
+                # must present them sequentially.  Return first (oldest) for now.
+                conf = pending[0]
+                logger.info(
+                    "handle_confirmation_reply: %d pending confs for household=%s phone=%s, "
+                    "resolving oldest first (%s)",
+                    len(pending), household_id, phone, conf.id,
+                )
+
+        # 2. Exact phone + group match
+        if conf is None:
+            conf = (
+                db.query(CrossGroupConfirmation)
+                .filter_by(target_phone=phone, target_group_jid=group_jid, status="pending")
+                .filter(CrossGroupConfirmation.expires_at > now)
+                .order_by(CrossGroupConfirmation.created_at.asc())
+                .first()
+            )
+
+        # 3. Group-only fallback (handles LID ↔ phone mismatch when not on household model)
         if conf is None:
             pending_for_group = (
                 db.query(CrossGroupConfirmation)
@@ -234,9 +344,9 @@ class AccountService:
 
     # ── Transaction processing ────────────────────────────────────────────────
 
-    def _is_first_party(self, reporter_phone: str, debtor_phone: str) -> bool:
-        """True when reporter is voluntarily taking on debt (1st-party action)."""
-        return reporter_phone == debtor_phone
+    def _is_first_party(self, reporter_phone: str, other_phone: str) -> bool:
+        """True when reporter and other_phone are the same normalized phone."""
+        return normalize_phone(reporter_phone) == normalize_phone(other_phone)
 
     async def process_transaction(
         self,
@@ -250,16 +360,20 @@ class AccountService:
         transaction_date,
         split_transaction_id: str | None = None,
     ) -> str:
-        from app.db.models import LedgerEntry
-        import uuid as _uuid_mod
+        reporter_phone = normalize_phone(reporter_phone)
+        payer_phone = normalize_phone(payer_phone)
+        debtor_phone = normalize_phone(debtor_phone)
 
         payer_name = self.get_display_name(db, payer_phone)
         debtor_name = self.get_display_name(db, debtor_phone)
 
+        household_id = self.get_household_id(db, reporter_phone)
+
         if self._is_first_party(reporter_phone, debtor_phone):
-            # Debtor is self-reporting → write immediately
+            # "I owe C" — debtor self-reporting → works AGAINST reporter → RECORD immediately
             entry = LedgerEntry(
                 transaction_id=str(_uuid_mod.uuid4()),
+                household_id=household_id,
                 group_jid=reporter_group_jid,
                 from_phone=debtor_phone,
                 to_phone=payer_phone,
@@ -277,29 +391,33 @@ class AccountService:
             await self.notify_user(db, payer_phone, notify_msg)
             return f"Recorded. {payer_name} has been notified."
         else:
-            # Reporter is creditor claiming debt on debtor's behalf → confirmation needed
+            # "C owes me" — reporter asserting debtor's obligation → works IN FAVOR → CONFIRM
             confirm_msg = (
                 f"{payer_name} says you owe ₪{float(amount_ils):.2f} ({description}). "
                 f"Confirm? (yes / no)"
             )
-            await self.request_confirmation(
-                db=db,
-                initiator_phone=reporter_phone,
-                initiator_group_jid=reporter_group_jid,
-                target_phone=debtor_phone,
-                action_type="record_expense",
-                action_payload={
-                    "group_jid": reporter_group_jid,
-                    "payer_phone": payer_phone,
-                    "debtor_phone": debtor_phone,
-                    "amount_ils": str(amount_ils),
-                    "description": description,
-                    "transaction_date": str(transaction_date),
-                    "split_transaction_id": split_transaction_id,
-                },
-                confirmation_message=confirm_msg,
-                split_transaction_id=split_transaction_id,
-            )
+            try:
+                await self.request_confirmation(
+                    db=db,
+                    initiator_phone=reporter_phone,
+                    initiator_group_jid=reporter_group_jid,
+                    target_phone=debtor_phone,
+                    action_type="record_expense",
+                    action_payload={
+                        "group_jid": reporter_group_jid,
+                        "household_id": household_id,
+                        "payer_phone": payer_phone,
+                        "debtor_phone": debtor_phone,
+                        "amount_ils": str(amount_ils),
+                        "description": description,
+                        "transaction_date": str(transaction_date),
+                        "split_transaction_id": split_transaction_id,
+                    },
+                    confirmation_message=confirm_msg,
+                    split_transaction_id=split_transaction_id,
+                )
+            except (ValueError, RuntimeError) as exc:
+                return str(exc)
             return f"Confirmation request sent to {debtor_name}. I'll notify you when they respond."
 
     # ── Payment FIFO settlement ───────────────────────────────────────────────
@@ -312,20 +430,24 @@ class AccountService:
         payee_phone: str,
         amount_ils: Decimal,
         payment_date: _date,
+        household_id: str | None = None,
     ) -> str:
-        """Apply FIFO settlement for a payment and return a summary string."""
+        """Apply FIFO settlement. Scopes debt query by household_id when available."""
         now = datetime.now(timezone.utc)
-        open_rows = (
-            db.query(LedgerEntry)
-            .filter(
-                LedgerEntry.group_jid == group_jid,
-                LedgerEntry.from_phone == payer_phone,
-                LedgerEntry.to_phone == payee_phone,
-                LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
-            )
-            .order_by(LedgerEntry.transaction_date)
-            .all()
+
+        # Build debt query — prefer household scope, fall back to group_jid
+        q = db.query(LedgerEntry).filter(
+            LedgerEntry.from_phone == payer_phone,
+            LedgerEntry.to_phone == payee_phone,
+            LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
         )
+        if household_id:
+            q = q.filter(LedgerEntry.household_id == household_id)
+        else:
+            q = q.filter(LedgerEntry.group_jid == group_jid)
+
+        open_rows = q.order_by(LedgerEntry.transaction_date).all()
+
         debt_legs = [
             DebtLeg(
                 id=r.id,
@@ -342,6 +464,7 @@ class AccountService:
                 row.amount_settled_ils = new_settled
         payment_leg = LedgerEntry(
             transaction_id=str(_uuid_mod.uuid4()),
+            household_id=household_id,
             group_jid=group_jid,
             from_phone=payer_phone,
             to_phone=payee_phone,
@@ -375,55 +498,78 @@ class AccountService:
         amount_ils: Decimal,
         payment_date: _date,
     ) -> str:
-        """Route a payment through the correct path.
+        """Route a payment through the correct confirm/record path.
 
-        First-party (payer self-reports): record immediately and notify payee.
-        Second-party (payee reports): send a confirmation request to the payer's
-        personal group and wait for their reply.
+        Canonical rule (works AGAINST reporter's interest → RECORD):
+          "C paid me" (reporter == payee): payee records receipt → reduces what C
+          owes them → RECORD immediately + notify the payer C.
+
+          "I paid C" (reporter == payer): payer asserts they paid → reduces their
+          own debt → works IN FAVOR of reporter → payee C must CONFIRM receipt.
         """
+        reporter_phone = normalize_phone(reporter_phone)
+        payer_phone = normalize_phone(payer_phone)
+        payee_phone = normalize_phone(payee_phone)
+
         payer_name = self.get_display_name(db, payer_phone)
         payee_name = self.get_display_name(db, payee_phone)
 
-        if self._is_first_party(reporter_phone, payer_phone):
-            # Payer is self-reporting → record immediately
+        household_id = self.get_household_id(db, reporter_phone)
+
+        if reporter_phone == payee_phone:
+            # "C paid me" — payee self-reports receiving payment
+            # Works AGAINST reporter (reduces what they're owed) → RECORD immediately
             summary = await self._apply_payment_fifo(
-                db, reporter_group_jid, payer_phone, payee_phone, amount_ils, payment_date
+                db, reporter_group_jid, payer_phone, payee_phone,
+                amount_ils, payment_date, household_id=household_id,
             )
             notify_msg = (
-                f"{payer_name} reported a ₪{float(amount_ils):.2f} payment to you. "
+                f"{payee_name} confirmed your ₪{float(amount_ils):.2f} payment. "
                 f"Your balance has been updated."
             )
-            await self.notify_user(db, payee_phone, notify_msg)
-            return f"Recorded. {payee_name} has been notified."
+            await self.notify_user(db, payer_phone, notify_msg)
+            return f"Recorded. {payer_name} has been notified."
         else:
-            # Payee is reporting → payer must confirm in their own personal group
+            # "I paid C" — payer self-reports making a payment
+            # Works IN FAVOR of reporter (reduces own debt) → payee must CONFIRM receipt
             confirm_msg = (
-                f"{payee_name} says you paid them ₪{float(amount_ils):.2f} on {payment_date}. "
+                f"{payer_name} says they paid you ₪{float(amount_ils):.2f} on {payment_date}. "
                 f"Confirm? (yes / no)"
             )
-            await self.request_confirmation(
-                db=db,
-                initiator_phone=reporter_phone,
-                initiator_group_jid=reporter_group_jid,
-                target_phone=payer_phone,
-                action_type="record_payment",
-                action_payload={
-                    "group_jid": reporter_group_jid,
-                    "payer_phone": payer_phone,
-                    "payee_phone": payee_phone,
-                    "amount_ils": str(amount_ils),
-                    "payment_date": str(payment_date),
-                },
-                confirmation_message=confirm_msg,
-            )
-            return f"Confirmation request sent to {payer_name}. I'll notify you when they respond."
+            try:
+                await self.request_confirmation(
+                    db=db,
+                    initiator_phone=reporter_phone,
+                    initiator_group_jid=reporter_group_jid,
+                    target_phone=payee_phone,
+                    action_type="record_payment",
+                    action_payload={
+                        "group_jid": reporter_group_jid,
+                        "household_id": household_id,
+                        "payer_phone": payer_phone,
+                        "payee_phone": payee_phone,
+                        "amount_ils": str(amount_ils),
+                        "payment_date": str(payment_date),
+                    },
+                    confirmation_message=confirm_msg,
+                )
+            except (ValueError, RuntimeError) as exc:
+                return str(exc)
+            return f"Confirmation request sent to {payee_name}. I'll notify you when they respond."
 
     async def commit_confirmed_transaction(self, db: Session, conf: CrossGroupConfirmation) -> None:
-        """Write the ledger entry for a confirmed 2nd-party transaction."""
+        """Write the ledger entry (or payment) for a confirmed 2nd-party transaction.
+
+        Atomicity: the LedgerEntry write and the conf status are updated in the
+        same DB commit.  The conf status was already set to 'confirmed' by
+        handle_confirmation_reply before this is called, so here we only write
+        the ledger entry and send notifications.
+        """
         payload = json.loads(conf.action_payload)
+        household_id = payload.get("household_id") or conf.household_id
 
         if conf.action_type == "record_payment":
-            # FIFO settlement for a confirmed payment
+            # Payee confirmed receiving payer's payment ("I paid C" flow)
             payment_date = _date.fromisoformat(payload["payment_date"])
             amount_ils = Decimal(payload["amount_ils"])
             await self._apply_payment_fifo(
@@ -433,22 +579,27 @@ class AccountService:
                 payload["payee_phone"],
                 amount_ils,
                 payment_date,
+                household_id=household_id,
             )
             payer_name = self.get_display_name(db, payload["payer_phone"])
             payee_name = self.get_display_name(db, payload["payee_phone"])
+            # Notify the payer (initiator) that payee confirmed receipt
             await self.notify_user(
-                db, payload["payee_phone"],
-                f"{payer_name} confirmed the ₪{float(amount_ils):.2f} payment."
+                db, payload["payer_phone"],
+                f"{payee_name} confirmed your ₪{float(amount_ils):.2f} payment. "
+                f"Your balance has been updated."
             )
+            # Acknowledge to the payee (target who just confirmed)
             await bridge_client.send_message(
                 conf.target_group_jid,
-                f"Confirmed. Your payment to {payee_name} has been recorded."
+                f"Confirmed. {payer_name}'s payment of ₪{float(amount_ils):.2f} has been recorded."
             )
             return
 
-        # Default: record_expense — write a new ledger debt entry
+        # Default: record_expense — "C owes me" confirmed by C
         entry = LedgerEntry(
             transaction_id=str(_uuid_mod.uuid4()),
+            household_id=household_id,
             group_jid=payload["group_jid"],
             from_phone=payload["debtor_phone"],
             to_phone=payload["payer_phone"],
@@ -459,16 +610,19 @@ class AccountService:
         db.add(entry)
         db.commit()
 
-        # Notify both parties
         debtor_name = self.get_display_name(db, payload["debtor_phone"])
         payer_name = self.get_display_name(db, payload["payer_phone"])
+        # Notify the creditor (initiator/payer) that debtor confirmed
         await self.notify_user(
             db, payload["payer_phone"],
-            f"{debtor_name} confirmed the ₪{float(entry.amount_ils):.2f} debt ({payload['description']})."
+            f"{debtor_name} confirmed the ₪{float(entry.amount_ils):.2f} debt "
+            f"({payload['description']}). Your balance has been updated."
         )
+        # Acknowledge to the debtor (target who just confirmed)
         await bridge_client.send_message(
             conf.target_group_jid,
-            f"Confirmed. Your balance with {payer_name} has been updated."
+            f"Confirmed. Your debt of ₪{float(entry.amount_ils):.2f} to {payer_name} "
+            f"has been recorded."
         )
 
     # ── Split transaction management ──────────────────────────────────────────
@@ -484,6 +638,11 @@ class AccountService:
         description: str,
         transaction_date,
     ) -> SplitTransaction:
+        reporter_phone = normalize_phone(reporter_phone)
+        payer_phone = normalize_phone(payer_phone)
+
+        household_id = self.get_household_id(db, reporter_phone)
+
         split = SplitTransaction(
             reporter_group_jid=reporter_group_jid,
             reporter_phone=reporter_phone,
@@ -498,7 +657,7 @@ class AccountService:
         payer_name = self.get_display_name(db, payer_phone)
 
         for share in shares:
-            phone = share["phone"]
+            phone = normalize_phone(share["phone"])
             amount = share["amount_ils"]
 
             if phone == payer_phone:
@@ -515,6 +674,7 @@ class AccountService:
                     action_type="split_share",
                     action_payload=json.dumps({
                         "group_jid": reporter_group_jid,
+                        "household_id": household_id,
                         "payer_phone": payer_phone,
                         "debtor_phone": phone,
                         "amount_ils": str(amount),
@@ -524,6 +684,7 @@ class AccountService:
                     }),
                     status="self_confirmed",
                     expires_at=datetime.now(timezone.utc) + timedelta(hours=self._confirmation_timeout_hours(db)),
+                    household_id=household_id,
                 )
                 db.add(conf)
             else:
@@ -533,24 +694,33 @@ class AccountService:
                     f"{description} with {payer_name} is ₪{float(amount):.2f}. "
                     f"Confirm? (yes / no)"
                 )
-                await self.request_confirmation(
-                    db=db,
-                    initiator_phone=reporter_phone,
-                    initiator_group_jid=reporter_group_jid,
-                    target_phone=phone,
-                    action_type="split_share",
-                    action_payload={
-                        "group_jid": reporter_group_jid,
-                        "payer_phone": payer_phone,
-                        "debtor_phone": phone,
-                        "amount_ils": str(amount),
-                        "description": description,
-                        "transaction_date": str(transaction_date),
-                        "split_transaction_id": split.id,
-                    },
-                    confirmation_message=confirm_msg,
-                    split_transaction_id=split.id,
-                )
+                try:
+                    await self.request_confirmation(
+                        db=db,
+                        initiator_phone=reporter_phone,
+                        initiator_group_jid=reporter_group_jid,
+                        target_phone=phone,
+                        action_type="split_share",
+                        action_payload={
+                            "group_jid": reporter_group_jid,
+                            "household_id": household_id,
+                            "payer_phone": payer_phone,
+                            "debtor_phone": phone,
+                            "amount_ils": str(amount),
+                            "description": description,
+                            "transaction_date": str(transaction_date),
+                            "split_transaction_id": split.id,
+                        },
+                        confirmation_message=confirm_msg,
+                        split_transaction_id=split.id,
+                    )
+                except (ValueError, RuntimeError) as exc:
+                    logger.warning(
+                        "process_split: could not reach %s for split %s: %s",
+                        phone, split.id, exc,
+                    )
+                    # Mark this share as undeliverable so the reporter knows
+                    db.flush()
 
         db.commit()
         return split
@@ -579,13 +749,11 @@ class AccountService:
         decliner_name = self.get_display_name(db, declined_conf.target_phone)
         reporter_name = self.get_display_name(db, split.reporter_phone)
 
-        # Notify reporter
         await bridge_client.send_message(
             split.reporter_group_jid,
             f"{decliner_name} declined their share of the ₪{float(split.total_amount):.2f} "
             f"{split.description}. The split is suspended — re-submit if you agree on new amounts."
         )
-        # Notify payer if different from reporter
         if split.payer_phone != split.reporter_phone:
             await self.notify_user(
                 db, split.payer_phone,
@@ -614,3 +782,60 @@ class AccountService:
             f"All shares confirmed. The ₪{float(split.total_amount):.2f} "
             f"{split.description} split has been recorded."
         )
+
+    # ── Household management ──────────────────────────────────────────────────
+
+    def create_household(self, db: Session, name: str) -> Household:
+        household = Household(name=name)
+        db.add(household)
+        db.commit()
+        db.refresh(household)
+        return household
+
+    def add_household_member(
+        self,
+        db: Session,
+        household_id: str,
+        phone: str,
+        private_group_jid: str | None = None,
+        display_name: str | None = None,
+    ) -> HouseholdMember:
+        phone = normalize_phone(phone)
+        existing = db.query(HouseholdMember).filter_by(phone=phone).first()
+        if existing:
+            if existing.household_id != household_id:
+                raise ValueError(
+                    f"Phone {phone} is already a member of household {existing.household_id}"
+                )
+            # Update fields if provided
+            if private_group_jid is not None:
+                existing.private_group_jid = private_group_jid
+            if display_name is not None:
+                existing.display_name = display_name
+            db.commit()
+            return existing
+
+        member = HouseholdMember(
+            household_id=household_id,
+            phone=phone,
+            private_group_jid=private_group_jid,
+            display_name=display_name,
+        )
+        db.add(member)
+        db.commit()
+        db.refresh(member)
+        return member
+
+    def remove_household_member(self, db: Session, household_id: str, phone: str) -> bool:
+        phone = normalize_phone(phone)
+        row = db.query(HouseholdMember).filter_by(
+            household_id=household_id, phone=phone
+        ).first()
+        if not row:
+            return False
+        db.delete(row)
+        db.commit()
+        return True
+
+    def list_households(self, db: Session) -> list[Household]:
+        return db.query(Household).order_by(Household.name).all()
