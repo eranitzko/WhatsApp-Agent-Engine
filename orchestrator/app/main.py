@@ -399,6 +399,7 @@ async def _process(payload: WebhookPayload) -> None:
             multi_confirmation_store=multi_confirmation_store,
             custom_instructions=entry.custom_instructions,
             participant_block=participant_block,
+            resolved_phone=_inbound_phone,
         )
         await _send(payload.jid, reply)
     except Exception:

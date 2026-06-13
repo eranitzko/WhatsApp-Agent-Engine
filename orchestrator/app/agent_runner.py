@@ -77,6 +77,7 @@ class AgentRunner:
         multi_confirmation_store=None,
         custom_instructions: str | None = None,
         participant_block: str | None = None,
+        resolved_phone: str | None = None,
     ) -> str:
         start_ms = time.monotonic()
         allowed_tools = blueprint.tools_list()
@@ -88,7 +89,9 @@ class AgentRunner:
         # Filter by access level — admin tools are invisible to non-admins
         allowed_tools = self.registry.get_allowed_tool_names(allowed_tools, is_admin)
 
-        sender_phone = sender.split("@")[0].split(":")[0]
+        # Use the resolve_inbound canonical phone when available (LID-safe).
+        # Fall back to splitting the raw sender JID only when no resolved phone was passed.
+        sender_phone = resolved_phone or sender.split("@")[0].split(":")[0]
 
         # ── Multi-party confirmation intercept ────────────────────────────────
         if multi_confirmation_store and sender_phone:
