@@ -154,6 +154,7 @@ async def list_groups():
 
 @router.post("/groups", dependencies=[Depends(require_auth)])
 def register_group(body: RegisterGroupRequest):
+    from app import main as _main
     with SessionLocal() as db:
         existing = db.get(GroupRegistry, body.group_jid)
         if existing:
@@ -163,12 +164,14 @@ def register_group(body: RegisterGroupRequest):
             raise HTTPException(status_code=404, detail="Blueprint not found")
         db.add(GroupRegistry(group_jid=body.group_jid, blueprint_id=body.blueprint_id))
         db.commit()
+    _main.router.invalidate(body.group_jid)
     return {"ok": True}
 
 
 @router.delete("/groups/{group_jid:path}", dependencies=[Depends(require_auth)])
 def delete_group(group_jid: str):
     from app.db.models import AutomationRule, UserAccount
+    from app import main as _main
     with SessionLocal() as db:
         row = db.get(GroupRegistry, group_jid)
         if not row:
@@ -180,6 +183,7 @@ def delete_group(group_jid: str):
         db.query(UserAccount).filter_by(group_jid=group_jid).delete()
         db.delete(row)
         db.commit()
+    _main.router.invalidate(group_jid)
     return {"ok": True}
 
 

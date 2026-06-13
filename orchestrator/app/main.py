@@ -244,7 +244,10 @@ async def _process(payload: WebhookPayload) -> None:
                     if not phone:
                         continue
                     if payload.action == "add":
-                        _upsert_participant(db, payload.jid, phone, status="active")
+                        try:
+                            _upsert_participant(db, payload.jid, phone, status="active")
+                        except Exception:
+                            db.rollback()
                         if bot_phone and phone == bot_phone:
                             try:
                                 meta = await bridge_client.fetch_group_meta(payload.jid)
@@ -263,9 +266,12 @@ async def _process(payload: WebhookPayload) -> None:
                                     "Failed to handle bot-join for group %s", payload.jid
                                 )
                     else:
-                        _upsert_participant(db, payload.jid, phone,
-                                            status="removed",
-                                            removed_at=datetime.now(timezone.utc))
+                        try:
+                            _upsert_participant(db, payload.jid, phone,
+                                                status="removed",
+                                                removed_at=datetime.now(timezone.utc))
+                        except Exception:
+                            db.rollback()
             return
 
         text = payload.text or payload.caption or ""
