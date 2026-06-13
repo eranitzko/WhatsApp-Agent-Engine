@@ -430,7 +430,12 @@ def list_people(_=Depends(require_auth)):
             # Accounting groups: all UserAccount groups for this phone that use family_accounting
             acct_groups = []
             member = db.query(HouseholdMember).filter_by(phone=phone).first()
-            primary_jid = member.primary_accounting_group_jid if member else None
+            profile_row = db.query(UserProfile).filter_by(phone=phone).first()
+            # primary_jid: HouseholdMember takes precedence, then UserProfile
+            primary_jid = (
+                (member.primary_accounting_group_jid if member else None)
+                or (profile_row.primary_accounting_group_jid if profile_row else None)
+            )
             first_registered: str | None = None
             for acct in sorted(accounts, key=lambda a: a.created_at or ""):
                 reg = db.get(GroupRegistry, acct.group_jid)
@@ -583,11 +588,17 @@ async def approve_registration(group_jid: str, body: ApproveRegistrationRequest,
             existing = db.query(UserAccount).filter_by(phone=phone, group_jid=group_jid).first()
             if not existing:
                 db.add(UserAccount(phone=phone, group_jid=group_jid, role=role))
-            # Auto-link HouseholdMember.private_group_jid for personal groups
             if body.group_type == "personal":
+                # Auto-link HouseholdMember.private_group_jid (household-enrolled users)
                 member = db.query(HouseholdMember).filter_by(phone=phone).first()
                 if member and member.private_group_jid is None:
                     member.private_group_jid = group_jid
+                # Always upsert UserProfile.private_group_jid (covers everyone)
+                profile = db.query(UserProfile).filter_by(phone=phone).first()
+                if profile is None:
+                    db.add(UserProfile(phone=phone, private_group_jid=group_jid))
+                elif profile.private_group_jid is None:
+                    profile.private_group_jid = group_jid
         db.commit()
     try:
         await _bc.send_message(group_jid, "Your account is ready. You can start recording transactions here.")
@@ -617,6 +628,7 @@ class UpdatePersonFullRequest(BaseModel):
     is_admin: bool | None = None
     admin_label: str | None = None
     primary_accounting_group_jid: str | None = None  # "" clears it
+    private_group_jid: str | None = None             # "" clears it; manual backfill for existing members
 
 
 @router.patch("/people/{phone}")
@@ -670,12 +682,26 @@ def patch_person(phone: str, body: UpdatePersonFullRequest, _=Depends(require_au
             elif body.is_admin and existing_admin and body.admin_label is not None:
                 existing_admin.label = body.admin_label
 
-        if body.primary_accounting_group_jid is not None:
+        # Routing overrides — persist to both UserProfile (always) and HouseholdMember
+        # (if enrolled) so resolution works regardless of enrollment status.
+        if body.primary_accounting_group_jid is not None or body.private_group_jid is not None:
+            profile = db.query(UserProfile).filter_by(phone=phone).first()
+            if profile is None:
+                profile = UserProfile(phone=phone)
+                db.add(profile)
+            if body.primary_accounting_group_jid is not None:
+                profile.primary_accounting_group_jid = body.primary_accounting_group_jid or None
+            if body.private_group_jid is not None:
+                profile.private_group_jid = body.private_group_jid or None
+
+            # Mirror to HouseholdMember if the person is enrolled
             from app.db.models import HouseholdMember
             member = db.query(HouseholdMember).filter_by(phone=phone).first()
             if member:
-                # Empty string clears the override; any other value sets it
-                member.primary_accounting_group_jid = body.primary_accounting_group_jid or None
+                if body.primary_accounting_group_jid is not None:
+                    member.primary_accounting_group_jid = body.primary_accounting_group_jid or None
+                if body.private_group_jid is not None:
+                    member.private_group_jid = body.private_group_jid or None
 
         db.commit()
         return {"ok": True}

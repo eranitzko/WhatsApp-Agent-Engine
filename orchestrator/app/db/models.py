@@ -158,6 +158,7 @@ class LedgerEntry(Base):
     group_jid          = Column(String(255), nullable=False, index=True)
     from_phone         = Column(String(255), nullable=False)
     to_phone           = Column(String(255), nullable=False)
+    entry_type         = Column(String(16), nullable=False, default="debt")  # 'debt' | 'payment'
     amount_ils         = Column(Numeric(18, 4), nullable=False)
     amount_settled_ils = Column(Numeric(18, 4), nullable=False, default=Decimal("0"))
     description        = Column(Text, nullable=False, default="")
@@ -324,11 +325,17 @@ class HouseholdMember(Base):
 class UserProfile(Base):
     __tablename__ = "user_profiles"
 
-    phone        = Column(String, primary_key=True)
-    email        = Column(String, nullable=True)
-    display_name = Column(String, nullable=True)
-    created_at   = Column(DateTime(timezone=True), nullable=False,
-                          default=lambda: datetime.now(timezone.utc))
+    phone                        = Column(String, primary_key=True)
+    email                        = Column(String, nullable=True)
+    display_name                 = Column(String, nullable=True)
+    # Routing fields — populated automatically on personal group registration.
+    # These exist on UserProfile (not only HouseholdMember) so that LID-safe
+    # inbound resolution and primary-group overrides work for every person who
+    # has registered a group, regardless of household enrollment status.
+    private_group_jid            = Column(String, ForeignKey("group_registry.group_jid"), nullable=True, index=True)
+    primary_accounting_group_jid = Column(String, ForeignKey("group_registry.group_jid"), nullable=True)
+    created_at                   = Column(DateTime(timezone=True), nullable=False,
+                                          default=lambda: datetime.now(timezone.utc))
 
 
 class EmailAllowlist(Base):

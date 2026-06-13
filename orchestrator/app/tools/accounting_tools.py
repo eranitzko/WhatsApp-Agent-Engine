@@ -514,6 +514,7 @@ async def _legacy_record_transaction(params: dict, **ctx) -> str:
             for phone in participants:
                 db.add(LedgerEntry(
                     transaction_id=transaction_id,
+                    entry_type="debt",
                     group_jid=group_jid,
                     from_phone=phone,
                     to_phone=payer,
@@ -1183,6 +1184,7 @@ async def _exec_apply_correction(params: dict, **ctx) -> str:
             tx_date = new_date_val or legs[0].transaction_date
             db.add(LedgerEntry(
                 transaction_id=transaction_id,
+                entry_type="debt",
                 household_id=_apply_household_id,
                 group_jid=group_jid,
                 from_phone=phone,

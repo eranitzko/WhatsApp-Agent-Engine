@@ -15,6 +15,8 @@ from app.db.models import (
     HouseholdMember, LedgerEntry, LedgerSettlement, SplitTransaction,
     UserAccount, UserProfile,
 )
+_PAYMENT_ENTRY_TYPE = "payment"
+_DEBT_ENTRY_TYPE = "debt"
 from app.tools.accounting_fifo import DebtLeg, apply_payment
 from app.utils.phone import normalize_phone
 
@@ -77,18 +79,25 @@ class AccountService:
         """Return the destination group JID for bot-initiated accounting messages.
 
         Priority:
-          1. HouseholdMember.primary_accounting_group_jid — explicit admin override.
-          2. First UserAccount for this phone whose group uses the family_accounting
+          1. HouseholdMember.primary_accounting_group_jid — highest authority
+             (household-enrolled users).
+          2. UserProfile.primary_accounting_group_jid — override for users not
+             yet enrolled in a household (covers everyone with a UserProfile).
+          3. First UserAccount for this phone whose group uses the family_accounting
              blueprint, ordered by created_at ASC (deterministic; first-registered wins).
 
         Returns None when the person has no family_accounting group at all.
-        Callers MUST surface a user-visible error in that case — never drop silently.
-        Blueprint filter is applied here so invoice_curator or other-blueprint groups
-        are never returned.
+        Callers MUST surface a user-visible error — never drop silently.
+        Blueprint filter in step 3 ensures invoice_curator and other-blueprint
+        groups are never returned.
         """
         member = db.query(HouseholdMember).filter_by(phone=phone).first()
         if member and member.primary_accounting_group_jid:
             return member.primary_accounting_group_jid
+
+        profile = db.query(UserProfile).filter_by(phone=phone).first()
+        if profile and profile.primary_accounting_group_jid:
+            return profile.primary_accounting_group_jid
 
         accounts = (
             db.query(UserAccount)
@@ -123,12 +132,20 @@ class AccountService:
 
         Returns (phone, household_id) where either may be None on failure.
         """
-        # 1. Group-based lookup — LID-safe; private group JID is a stable 1:1 key
+        # 1. HouseholdMember lookup — LID-safe, provides household_id
         member = db.query(HouseholdMember).filter_by(private_group_jid=group_jid).first()
         if member:
             return member.phone, member.household_id
 
-        # 2. Sender-JID-based lookup (phone-format senders)
+        # 2. UserProfile lookup — LID-safe for users not yet household-enrolled.
+        #    UserProfile.private_group_jid is set automatically on personal group
+        #    registration so every person who has ever registered a group is covered.
+        profile = db.query(UserProfile).filter_by(private_group_jid=group_jid).first()
+        if profile:
+            household_id = self.get_household_id(db, profile.phone)
+            return profile.phone, household_id
+
+        # 3. Sender-JID extraction — NOT LID-safe; last resort only.
         try:
             phone = normalize_phone(raw_sender.split("@")[0].split(":")[0])
         except ValueError:
@@ -411,6 +428,7 @@ class AccountService:
             # "I owe C" — debtor self-reporting → works AGAINST reporter → RECORD immediately
             entry = LedgerEntry(
                 transaction_id=str(_uuid_mod.uuid4()),
+                entry_type=_DEBT_ENTRY_TYPE,
                 household_id=household_id,
                 group_jid=reporter_group_jid,
                 from_phone=debtor_phone,
@@ -502,6 +520,7 @@ class AccountService:
                 row.amount_settled_ils = new_settled
         payment_leg = LedgerEntry(
             transaction_id=str(_uuid_mod.uuid4()),
+            entry_type=_PAYMENT_ENTRY_TYPE,
             household_id=household_id,
             group_jid=group_jid,
             from_phone=payer_phone,
@@ -637,6 +656,7 @@ class AccountService:
         # Default: record_expense — "C owes me" confirmed by C
         entry = LedgerEntry(
             transaction_id=str(_uuid_mod.uuid4()),
+            entry_type=_DEBT_ENTRY_TYPE,
             household_id=household_id,
             group_jid=payload["group_jid"],
             from_phone=payload["debtor_phone"],

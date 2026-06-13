@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app import bridge_client
 from app.db.models import (
-    AdminNumbers, GroupRegistry, UserAccount, Blueprint,
+    AdminNumbers, GroupRegistry, UserAccount, Blueprint, UserProfile,
 )
 
 logger = logging.getLogger(__name__)
@@ -158,11 +158,12 @@ class GroupRegistrationHandler:
             if not existing:
                 db.add(UserAccount(phone=phone, group_jid=group_jid, role=role))
 
-            # Auto-link HouseholdMember.private_group_jid when a household member's
-            # personal group is approved — this is the only path that populates the
-            # LID-safe group→phone mapping used by resolve_inbound.
             if group_type == "personal":
+                # Auto-link HouseholdMember.private_group_jid (household-enrolled users)
                 _autolink_household_member(db, phone, group_jid)
+                # Always upsert UserProfile.private_group_jid so LID-safe inbound
+                # resolution works for everyone, even before household enrollment.
+                _upsert_profile_private_group(db, phone, group_jid)
 
         db.commit()
 
@@ -187,6 +188,23 @@ def _autolink_household_member(db: Session, phone: str, group_jid: str) -> None:
         logger.info(
             "auto-linked HouseholdMember phone=%s to private_group_jid=%s", phone, group_jid
         )
+
+
+def _upsert_profile_private_group(db: Session, phone: str, group_jid: str) -> None:
+    """Set UserProfile.private_group_jid so resolve_inbound is LID-safe for everyone.
+
+    This runs on every personal-group registration, ensuring the mapping exists
+    regardless of whether the person has been enrolled in a household.
+    Only sets the field if it is not already populated (first group wins, matching
+    the first-registered convention for primary routing).
+    """
+    profile = db.query(UserProfile).filter_by(phone=phone).first()
+    if profile is None:
+        db.add(UserProfile(phone=phone, private_group_jid=group_jid))
+        logger.info("created UserProfile phone=%s with private_group_jid=%s", phone, group_jid)
+    elif profile.private_group_jid is None:
+        profile.private_group_jid = group_jid
+        logger.info("set UserProfile.private_group_jid phone=%s → %s", phone, group_jid)
 
 
 def _ensure_blueprint(db: Session) -> None:
