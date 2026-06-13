@@ -131,6 +131,59 @@ async def test_confirmation_lands_in_primary_not_second_or_other_blueprint(db):
 
 
 # ---------------------------------------------------------------------------
+# Test 1b: No override, full process_transaction path.
+#          TWO accounting groups + invoice_curator → first-registered wins.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_no_override_confirmation_lands_in_first_registered_full_flow(db):
+    """End-to-end: no HouseholdMember override → first-registered accounting group."""
+    # Three groups: two accounting (acct1=early, acct2=late), one invoice_curator
+    _group(db, "eden_fa1@g.us", "family_accounting")   # first registered
+    _group(db, "eden_fa2@g.us", "family_accounting")   # second accounting group
+    _group(db, "eden_inv2@g.us", "invoice_curator")    # different blueprint — must be excluded
+
+    t_first  = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    t_second = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    _account(db, "972509000061", "eden_fa1@g.us", created_at=t_first)
+    _account(db, "972509000061", "eden_fa2@g.us", created_at=t_second)
+    _account(db, "972509000061", "eden_inv2@g.us")
+
+    _group(db, "alon_fa@g.us", "family_accounting")
+    _account(db, "972509000062", "alon_fa@g.us")
+    # No HouseholdMember → override field has nowhere to live → deterministic fallback applies
+    db.commit()
+
+    svc = AccountService()
+    sent_to: list[str] = []
+
+    async def _capture_send(jid, msg):
+        sent_to.append(jid)
+
+    with patch("app.accounting.account_service.bridge_client") as mock_bc:
+        mock_bc.send_message = _capture_send
+        result = await svc.process_transaction(
+            db=db,
+            reporter_phone="972509000062",    # Alon
+            reporter_group_jid="alon_fa@g.us",
+            payer_phone="972509000062",
+            debtor_phone="972509000061",       # Eden
+            amount_ils=Decimal("200"),
+            description="dinner",
+            transaction_date=date.today(),
+        )
+
+    # Confirmation must land in first-registered (eden_fa1@g.us), never second or invoice
+    assert "eden_fa1@g.us" in sent_to, f"Expected first-registered group, sent to: {sent_to}"
+    assert "eden_fa2@g.us" not in sent_to, f"Second group must never receive the message"
+    assert "eden_inv2@g.us" not in sent_to, f"invoice_curator must be filtered out"
+
+    conf = db.query(CrossGroupConfirmation).filter_by(target_phone="972509000061").first()
+    assert conf is not None
+    assert conf.target_group_jid == "eden_fa1@g.us"
+
+
+# ---------------------------------------------------------------------------
 # Test 2: Primary unset → first-registered accounting group (by created_at).
 # ---------------------------------------------------------------------------
 
