@@ -427,7 +427,7 @@ async def _exec_record_transaction(params: dict, **ctx) -> str:
     from datetime import date as _date
     group_jid = ctx.get("group_jid", "")
     sender = ctx.get("sender", "")
-    sender_phone = sender.split("@")[0].split(":")[0]
+    sender_phone = ctx.get("resolved_phone") or sender.split("@")[0].split(":")[0]
 
     payer_phone: str = params["payer_phone"]
     participant_phones: list[str] = params["participant_phones"]
@@ -472,7 +472,7 @@ async def _exec_record_transaction(params: dict, **ctx) -> str:
 async def _legacy_record_transaction(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
     sender = ctx.get("sender", "")
-    sender_phone = sender.split("@")[0].split(":")[0]
+    sender_phone = ctx.get("resolved_phone") or sender.split("@")[0].split(":")[0]
     payer = params["payer_phone"]
     participants = params["participant_phones"]
     amount = Decimal(str(params["amount"]))
@@ -560,7 +560,7 @@ async def _legacy_record_transaction(params: dict, **ctx) -> str:
 async def _exec_record_payment(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
     sender = ctx.get("sender", "")
-    sender_phone = sender.split("@")[0].split(":")[0]
+    sender_phone = ctx.get("resolved_phone") or sender.split("@")[0].split(":")[0]
     payer = params["payer_phone"]
     payee = params["payee_phone"]
     amount_ils = Decimal(str(params["amount_ils"]))

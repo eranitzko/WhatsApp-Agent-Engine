@@ -279,6 +279,7 @@ class AgentRunner:
                         raw = await self.registry.execute(
                             tc.name, tc.input,
                             group_jid=group_jid, sender=sender, is_admin=is_admin,
+                            resolved_phone=sender_phone,
                             confirmation_store=confirmation_store,
                             multi_confirmation_store=multi_confirmation_store,
                         )
