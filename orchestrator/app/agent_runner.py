@@ -233,14 +233,36 @@ class AgentRunner:
 
         try:
             for _ in range(blueprint.max_tool_turns):
-                response = await self.client.messages.create(
-                    model=blueprint.model,
-                    max_tokens=4096,
-                    temperature=0,
-                    system=system,
-                    tools=tool_schemas,
-                    messages=messages,
-                )
+                try:
+                    response = await self.client.messages.create(
+                        model=blueprint.model,
+                        max_tokens=4096,
+                        temperature=0,
+                        system=system,
+                        tools=tool_schemas,
+                        messages=messages,
+                    )
+                except anthropic.BadRequestError as api_err:
+                    # Corrupted context: orphaned tool_result without matching tool_use.
+                    # This happens when a confirmation intercept bypasses the agent loop
+                    # mid-conversation. Self-heal by clearing history and retrying once.
+                    if "unexpected `tool_use_id`" in str(api_err):
+                        logger.warning(
+                            "Corrupted context detected for group=%s — clearing and retrying",
+                            group_jid,
+                        )
+                        context.clear(group_jid)
+                        messages = [{"role": "user", "content": message}]
+                        response = await self.client.messages.create(
+                            model=blueprint.model,
+                            max_tokens=4096,
+                            temperature=0,
+                            system=system,
+                            tools=tool_schemas,
+                            messages=messages,
+                        )
+                    else:
+                        raise
                 final_stop_reason = response.stop_reason
 
                 if response.stop_reason == "end_turn":
