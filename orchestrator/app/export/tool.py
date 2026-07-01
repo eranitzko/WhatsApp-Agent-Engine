@@ -33,6 +33,21 @@ def _blueprint_for_group(group_jid: str, db) -> str | None:
     return row.blueprint_id if row else None
 
 
+def _load_report_format(group_jid: str, db) -> dict:
+    """Load the group's saved report format (see create_report_format), if any.
+
+    Prefers a format explicitly named "default"; otherwise falls back to the
+    first saved format for the group. Returns {} when none exists, in which
+    case generators fall back to their own built-in defaults.
+    """
+    from app.db.models import ReportFormat
+    row = (
+        db.query(ReportFormat).filter_by(group_jid=group_jid, name="default").first()
+        or db.query(ReportFormat).filter_by(group_jid=group_jid).order_by(ReportFormat.created_at).first()
+    )
+    return row.config() if row else {}
+
+
 async def _exec_export_report(params: dict, **ctx) -> str:
     if not ctx.get("is_admin", False):
         return "Export is admin only."
@@ -76,12 +91,14 @@ async def _exec_export_report(params: dict, **ctx) -> str:
                 files.append((name, _XLSX_MIME, data))
 
         elif blueprint_id == "family_accounting":
+            with SessionLocal() as db:
+                report_fmt_config = _load_report_format(group_jid, db)
             gen = AccountingGenerator(group_jid)
             if fmt in ("pdf", "both"):
-                data, name = gen.build_pdf()
+                data, name = gen.build_pdf(fmt_config=report_fmt_config)
                 files.append((name, "application/pdf", data))
             if fmt in ("xlsx", "both"):
-                data, name = gen.build_xlsx()
+                data, name = gen.build_xlsx(fmt_config=report_fmt_config)
                 files.append((name, _XLSX_MIME, data))
 
         else:

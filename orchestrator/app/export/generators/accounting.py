@@ -10,8 +10,8 @@ class AccountingGenerator:
         self._jid = group_jid
         self._filter = filter_phone
 
-    def build_pdf(self) -> tuple[bytes, str]:
-        data = generate_ledger_pdf(self._jid, filter_phone=self._filter)
+    def build_pdf(self, fmt_config: dict | None = None) -> tuple[bytes, str]:
+        data = generate_ledger_pdf(self._jid, filter_phone=self._filter, fmt_config=fmt_config or {})
         return data, "ledger.pdf"
 
     def build_xlsx(self, fmt_config: dict | None = None) -> tuple[bytes, str]:

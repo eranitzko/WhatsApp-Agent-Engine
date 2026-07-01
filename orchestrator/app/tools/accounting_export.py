@@ -20,14 +20,39 @@ _DATE_FORMATS = {
 }
 
 
-def _phone_to_name_from_db(db, group_jid: str) -> dict[str, str]:
-    from app.db.models import GroupParticipant
+def _phone_to_name_from_db(db, group_jid: str, phones: set[str] | None = None) -> dict[str, str]:
+    """Best display name per phone.
+
+    Priority: HouseholdMember.display_name / UserProfile.display_name (set via
+    the admin "management page") > GroupParticipant.admin_name/push_name
+    (derived from the WhatsApp conversation) > raw phone.
+
+    `phones` should include every phone appearing in the report (e.g. from
+    ledger entries) so names resolve even for people not registered as a
+    GroupParticipant of this group.  GroupParticipant.is_household participants
+    keep the collective "Parents" label regardless of any individual display
+    name — that grouping is intentional, not a missing name.
+    """
+    from app.db.models import GroupParticipant, HouseholdMember, UserProfile
+
     rows = db.query(GroupParticipant).filter_by(group_jid=group_jid).all()
     household = {r.phone for r in rows if r.is_household}
-    result = {}
+    result: dict[str, str] = {}
     for r in rows:
         name = r.admin_name or r.push_name or r.phone
         result[r.phone] = "Parents" if r.phone in household else name
+
+    all_phones = set(result.keys()) | (phones or set())
+    if all_phones:
+        for profile in db.query(UserProfile).filter(UserProfile.phone.in_(all_phones)).all():
+            if profile.display_name and result.get(profile.phone) != "Parents":
+                result[profile.phone] = profile.display_name
+        for member in db.query(HouseholdMember).filter(HouseholdMember.phone.in_(all_phones)).all():
+            if member.display_name and result.get(member.phone) != "Parents":
+                result[member.phone] = member.display_name
+
+    for phone in all_phones:
+        result.setdefault(phone, phone)
     return result
 
 
@@ -69,7 +94,8 @@ def generate_ledger_xlsx(
                 or_(LedgerEntry.from_phone == filter_phone, LedgerEntry.to_phone == filter_phone)
             )
         entries = q.order_by(LedgerEntry.transaction_date).all()
-        names = _phone_to_name_from_db(db, group_jid)
+        phones = {e.from_phone for e in entries} | {e.to_phone for e in entries}
+        names = _phone_to_name_from_db(db, group_jid, phones)
 
     if not include_settled:
         entries = [e for e in entries if (e.amount_ils - (e.amount_settled_ils or Decimal("0"))) > Decimal("0")]
@@ -205,8 +231,23 @@ def _write_settlements_sheet(ws, settlements, names, date_format, currency_displ
         ])
 
 
-def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> bytes:
-    """Generate a PDF ledger summary. Supports Hebrew/RTL via pdf_report helpers."""
+def generate_ledger_pdf(
+    group_jid: str,
+    filter_phone: str | None = None,
+    fmt_config: dict | None = None,
+) -> bytes:
+    """Generate a PDF ledger report. Supports Hebrew/RTL via pdf_report helpers.
+
+    Layout:
+      - Net balances summary (unchanged).
+      - One ledger table per counterparty pair: date | description | {name A} |
+        {name B} | comments. Each row's amount is placed under whichever side
+        is the from_phone (the one who owed or paid), with a totals row summing
+        each column so the two sums reproduce the net-balance figure above.
+
+    fmt_config keys (from ReportFormat, same as generate_ledger_xlsx):
+      date_format, currency_display, include_settled, sort_by.
+    """
     import io as _io
     from datetime import datetime, timezone
 
@@ -219,14 +260,20 @@ def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> byte
     # Import RTL/Hebrew utilities from pdf_report
     from app.reports.pdf_report import _bidi, _font, _register_font, _xml
 
+    cfg = fmt_config or {}
+    date_format: str = cfg.get("date_format", "YYYY-MM-DD")
+    currency_display: str = cfg.get("currency_display", "ILS")
+    include_settled: bool = cfg.get("include_settled", True)
+    sort_by: str = cfg.get("sort_by", "date")
+
     # Detect language from group config
     lang = "en"
     try:
         with SessionLocal() as _db:
             from app.db.models import GroupConfig
-            cfg = _db.get(GroupConfig, group_jid)
-            if cfg and cfg.feedback_language:
-                lang = cfg.feedback_language
+            gcfg = _db.get(GroupConfig, group_jid)
+            if gcfg and gcfg.feedback_language:
+                lang = gcfg.feedback_language
     except Exception:
         pass
 
@@ -243,8 +290,12 @@ def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> byte
             "to": "To",
             "amount": "Amount (₪)",
             "date": "Date",
-            "settled": "Settled",
             "description": "Description",
+            "comments": "Comments",
+            "settled": "Settled",
+            "payment": "Payment",
+            "remaining": "remaining",
+            "total": "Total",
             "all_settled": "All debts settled.",
             "no_transactions": "No transactions found.",
         },
@@ -257,8 +308,12 @@ def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> byte
             "to": "ל",
             "amount": "סכום (₪)",
             "date": "תאריך",
-            "settled": "שולם",
             "description": "תיאור",
+            "comments": "הערות",
+            "settled": "שולם",
+            "payment": "תשלום",
+            "remaining": "נותר",
+            "total": 'סה"כ',
             "all_settled": "כל החובות סולקו.",
             "no_transactions": "לא נמצאו עסקאות.",
         },
@@ -283,6 +338,9 @@ def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> byte
                                   alignment=2 if rtl else 0, textColor=colors.HexColor("#555555"))
     h2_style     = ParagraphStyle("LH2", fontName=font_b, fontSize=11, leading=14,
                                   alignment=2 if rtl else 0, spaceBefore=8, spaceAfter=4)
+    h3_style     = ParagraphStyle("LH3", fontName=font_b, fontSize=9.5, leading=12,
+                                  alignment=2 if rtl else 0, spaceBefore=6, spaceAfter=2,
+                                  textColor=colors.HexColor("#1a3c5e"))
 
     def _p(text: str, style=None) -> Paragraph:
         return Paragraph(_t(text), style or normal_style)
@@ -291,7 +349,6 @@ def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> byte
         return Paragraph(_t(text), bold_style)
 
     with SessionLocal() as db:
-        names = _phone_to_name_from_db(db, group_jid)
         from app.db.models import LedgerEntry as _LE, HouseholdMember as _HM2
         _member2 = db.query(_HM2).filter_by(private_group_jid=group_jid).first()
         _household_id2 = _member2.household_id if _member2 else None
@@ -306,7 +363,10 @@ def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> byte
                 _LE.from_phone == filter_phone,
                 _LE.to_phone == filter_phone,
             ))
-        entries = query.order_by(_LE.transaction_date.desc()).all()
+        entries = query.order_by(_LE.transaction_date).all()
+
+        phones = {e.from_phone for e in entries} | {e.to_phone for e in entries}
+        names = _phone_to_name_from_db(db, group_jid, phones)
 
     buf = _io.BytesIO()
     MARGIN = 2.0 * cm
@@ -320,7 +380,7 @@ def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> byte
     story.append(Paragraph(_t(f"{L['generated']}: {generated}"), meta_style))
     story.append(Spacer(1, 0.5 * cm))
 
-    # ── Net balances ──────────────────────────────────────────────────────────
+    # ── Net balances (kept as-is) ─────────────────────────────────────────────
     story.append(Paragraph(_t(L["net_balances"]), h2_style))
 
     net: dict[tuple[str, str], Decimal] = {}
@@ -330,8 +390,9 @@ def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> byte
             key = (e.from_phone, e.to_phone)
             net[key] = net.get(key, Decimal("0")) + unsettled
 
-    HDR_BG = colors.HexColor("#1a3c5e")
-    ALT_BG = colors.HexColor("#f0f4f8")
+    HDR_BG   = colors.HexColor("#1a3c5e")
+    ALT_BG   = colors.HexColor("#f0f4f8")
+    TOTAL_BG = colors.HexColor("#e8f0fe")
 
     if net:
         if rtl:
@@ -342,7 +403,10 @@ def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> byte
         for (frm, to), amt in sorted(net.items()):
             frm_name = _p(names.get(frm, frm))
             to_name  = _p(names.get(to, to))
-            amt_p    = Paragraph(f"₪{float(amt):,.2f}", ParagraphStyle("R", fontName=font_n, fontSize=9, alignment=2))
+            amt_p    = Paragraph(
+                _fmt_currency(float(amt), currency_display),
+                ParagraphStyle("R", fontName=font_n, fontSize=9, alignment=2),
+            )
             if rtl:
                 bal_rows.append([amt_p, to_name, frm_name])
             else:
@@ -368,63 +432,111 @@ def generate_ledger_pdf(group_jid: str, filter_phone: str | None = None) -> byte
 
     story.append(Spacer(1, 0.5 * cm))
 
-    # ── Transactions ──────────────────────────────────────────────────────────
+    # ── Ledger: one date/description/side-A/side-B/comments table per pair ────
     story.append(Paragraph(_t(L["transactions"]), h2_style))
 
-    if entries:
-        if rtl:
-            tx_hdrs = [_pb(L["description"]), _pb(L["settled"]), _pb(L["amount"]), _pb(L["to"]), _pb(L["from"]), _pb(L["date"])]
-        else:
-            tx_hdrs = [_pb(L["date"]), _pb(L["from"]), _pb(L["to"]), _pb(L["amount"]), _pb(L["settled"]), _pb(L["description"])]
+    ledger_entries = entries
+    if not include_settled:
+        ledger_entries = [
+            e for e in entries
+            if e.entry_type == "payment"
+            or (e.amount_ils - (e.amount_settled_ils or Decimal("0"))) > 0
+        ]
 
-        tx_rows = [tx_hdrs]
-        for e in entries:
-            date_s = e.transaction_date.isoformat() if e.transaction_date else "—"
-            frm_s  = names.get(e.from_phone, e.from_phone)
-            to_s   = names.get(e.to_phone, e.to_phone)
-            amt_s  = f"₪{float(e.amount_ils):,.2f}"
-            set_s  = f"₪{float(e.amount_settled_ils or 0):,.2f}"
-            desc_s = (e.description or "")[:50]
+    pairs: dict[tuple[str, str], list] = {}
+    for e in ledger_entries:
+        key = tuple(sorted((e.from_phone, e.to_phone)))
+        pairs.setdefault(key, []).append(e)
 
-            right_p = ParagraphStyle("RP", fontName=font_n, fontSize=7, alignment=2)
-            if rtl:
-                tx_rows.append([
-                    Paragraph(_t(desc_s), ParagraphStyle("TD", fontName=font_n, fontSize=7, alignment=2)),
-                    Paragraph(set_s, right_p),
-                    Paragraph(amt_s, right_p),
-                    _p(to_s,   ParagraphStyle("TN", fontName=font_n, fontSize=7, alignment=2)),
-                    _p(frm_s,  ParagraphStyle("TN2", fontName=font_n, fontSize=7, alignment=2)),
-                    Paragraph(date_s, ParagraphStyle("TDT", fontName=font_n, fontSize=7, alignment=2)),
-                ])
-            else:
-                tx_rows.append([
-                    Paragraph(date_s, ParagraphStyle("TDT", fontName=font_n, fontSize=7, alignment=0)),
-                    Paragraph(_t(frm_s), ParagraphStyle("TN", fontName=font_n, fontSize=7, alignment=0)),
-                    Paragraph(_t(to_s),  ParagraphStyle("TN2", fontName=font_n, fontSize=7, alignment=0)),
-                    Paragraph(amt_s, right_p),
-                    Paragraph(set_s, right_p),
-                    Paragraph(_t(desc_s), ParagraphStyle("TD", fontName=font_n, fontSize=7, alignment=0)),
-                ])
-
+    if not pairs:
+        story.append(Paragraph(_t(L["no_transactions"]), normal_style))
+    else:
         avail = A4[0] - 2 * MARGIN
-        col_w = [avail*0.12, avail*0.14, avail*0.14, avail*0.12, avail*0.12, avail*0.36]
+        col_w = [avail * 0.11, avail * 0.29, avail * 0.16, avail * 0.16, avail * 0.28]
         if rtl:
             col_w = list(reversed(col_w))
-        tx_table = Table(tx_rows, colWidths=col_w, repeatRows=1)
-        tx_table.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, 0),  HDR_BG),
-            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
-            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, ALT_BG]),
-            ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#c0ccd8")),
-            ("TOPPADDING",    (0, 0), (-1, -1), 3),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 4),
-            ("RIGHTPADDING",  (0, 0), (-1, -1), 4),
-            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
-        ]))
-        story.append(tx_table)
-    else:
-        story.append(Paragraph(_t(L["no_transactions"]), normal_style))
+
+        right_style      = ParagraphStyle("PR",  fontName=font_n, fontSize=7, alignment=2)
+        right_bold_style = ParagraphStyle("PRB", fontName=font_b, fontSize=7, alignment=2)
+        cell_style       = ParagraphStyle("PC",  fontName=font_n, fontSize=7, alignment=2 if rtl else 0)
+
+        for (phone_a, phone_b), rows in sorted(
+            pairs.items(),
+            key=lambda kv: (names.get(kv[0][0], kv[0][0]), names.get(kv[0][1], kv[0][1])),
+        ):
+            name_a = names.get(phone_a, phone_a)
+            name_b = names.get(phone_b, phone_b)
+
+            story.append(Paragraph(_t(f"{name_a} — {name_b}"), h3_style))
+
+            if sort_by == "amount":
+                rows_sorted = sorted(rows, key=lambda e: e.amount_ils, reverse=True)
+            else:
+                rows_sorted = sorted(rows, key=lambda e: (e.transaction_date, e.created_at or e.transaction_date))
+
+            headers = [L["date"], L["description"], name_a, name_b, L["comments"]]
+            hdr_row = [_pb(h) for h in (reversed(headers) if rtl else headers)]
+            table_rows = [hdr_row]
+
+            sum_a = Decimal("0")
+            sum_b = Decimal("0")
+            for e in rows_sorted:
+                date_s = _fmt_date(e.transaction_date, date_format)
+                desc_s = (e.description or "")[:60]
+                remaining = e.amount_ils - (e.amount_settled_ils or Decimal("0"))
+                amt_s = _fmt_currency(float(e.amount_ils), currency_display)
+
+                if e.entry_type == "payment":
+                    comment_s = L["payment"]
+                elif remaining <= Decimal("0"):
+                    comment_s = L["settled"]
+                else:
+                    comment_s = f"{_fmt_currency(float(remaining), currency_display)} {L['remaining']}"
+
+                if e.from_phone == phone_a:
+                    col_a, col_b = amt_s, ""
+                    sum_a += e.amount_ils
+                else:
+                    col_a, col_b = "", amt_s
+                    sum_b += e.amount_ils
+
+                cells = [
+                    Paragraph(date_s, cell_style),
+                    Paragraph(_t(desc_s), cell_style),
+                    Paragraph(col_a, right_style),
+                    Paragraph(col_b, right_style),
+                    Paragraph(_t(comment_s), cell_style),
+                ]
+                if rtl:
+                    cells = list(reversed(cells))
+                table_rows.append(cells)
+
+            total_cells = [
+                Paragraph("", cell_style),
+                _pb(L["total"]),
+                Paragraph(_fmt_currency(float(sum_a), currency_display), right_bold_style),
+                Paragraph(_fmt_currency(float(sum_b), currency_display), right_bold_style),
+                Paragraph("", cell_style),
+            ]
+            if rtl:
+                total_cells = list(reversed(total_cells))
+            table_rows.append(total_cells)
+
+            t = Table(table_rows, colWidths=col_w, repeatRows=1)
+            t.setStyle(TableStyle([
+                ("BACKGROUND",     (0, 0), (-1, 0),  HDR_BG),
+                ("TEXTCOLOR",      (0, 0), (-1, 0),  colors.white),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, ALT_BG]),
+                ("BACKGROUND",     (0, -1), (-1, -1), TOTAL_BG),
+                ("GRID",           (0, 0), (-1, -1), 0.4, colors.HexColor("#c0ccd8")),
+                ("TOPPADDING",     (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING",  (0, 0), (-1, -1), 3),
+                ("LEFTPADDING",    (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING",   (0, 0), (-1, -1), 4),
+                ("VALIGN",         (0, 0), (-1, -1), "TOP"),
+            ]))
+            story.append(t)
+            story.append(Spacer(1, 0.4 * cm))
 
     doc.build(story)
     return buf.getvalue()
