@@ -78,7 +78,7 @@ A cell is either a plain string (the common case) or a list of `Run`s for finer-
 
 ## Formatting stays outside the renderer
 
-`app/reports/formatting.py` (new, small) holds `format_date(d, date_format) -> str` and `format_currency(amount, currency_display) -> str` (sign-aware — a negative amount renders with a leading `-`), consolidated from the duplicated versions currently in `accounting_export.py`. Blueprint code calls these to turn raw `Decimal`/`date` values into final display strings *before* building `Row`/`Cell` objects. `render_pdf` never inspects a raw number or date — every cell it receives is already a string (or run list). This keeps the renderer honestly generic: it has no currency symbols, no date format knowledge, no business logic at all.
+`app/reports/formatting.py` (new, small) holds `format_date(d, date_format) -> str` and `format_currency(amount, currency_display) -> str` (sign-aware — a negative amount renders with a leading `-`), consolidated from the duplicated versions currently in `accounting_export.py`. It also holds `format_amount(amount, currency) -> str`, the multi-currency formatter used by `invoice_curator` (ILS gets the `₪` symbol, any other ISO currency code renders as a suffix; amounts here are never negative), consolidated from `pdf_report.py`'s existing `_fmt_amount`/`_fmt_ils`. Blueprint code calls these to turn raw `Decimal`/`date` values into final display strings *before* building `Row`/`Cell` objects. `render_pdf` never inspects a raw number or date — every cell it receives is already a string (or run list). This keeps the renderer honestly generic: it has no currency symbols, no date format knowledge, no business logic at all.
 
 ## The renderer: `app/reports/render_pdf.py`
 
