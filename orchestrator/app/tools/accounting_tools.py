@@ -1269,6 +1269,133 @@ async def _exec_delete_report_format(params: dict, **ctx) -> str:
     return f"Report format '{name}' not found."
 
 
+# ── Resend confirmation ────────────────────────────────────────────────────────
+
+_RESEND_MAX = 2
+_RESEND_WINDOW_HOURS = 24
+_RESEND_COOLDOWN_HOURS = 2
+
+
+async def _exec_resend_confirmation(params: dict, **ctx) -> str:
+    from datetime import timedelta
+    from app.db.models import CrossGroupConfirmation
+    from app import bridge_client
+
+    group_jid: str = ctx.get("group_jid", "")
+    sender_phone: str = ctx.get("resolved_phone") or ctx.get("sender", "").split("@")[0].split(":")[0]
+    target_hint: str | None = params.get("target_name", "").strip() or None
+
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        q = (
+            db.query(CrossGroupConfirmation)
+            .filter_by(initiator_phone=sender_phone, status="pending")
+            .filter(CrossGroupConfirmation.expires_at > now)
+            .order_by(CrossGroupConfirmation.created_at.desc())
+        )
+        if target_hint:
+            # narrow by target_phone containing the hint or display name match
+            from app.db.models import UserProfile
+            profiles = db.query(UserProfile).filter(
+                UserProfile.display_name.ilike(f"%{target_hint}%")
+            ).all()
+            target_phones = [p.phone for p in profiles]
+            if target_hint.replace("+", "").isdigit():
+                target_phones.append(target_hint.replace("+", ""))
+            if target_phones:
+                from sqlalchemy import or_
+                q = q.filter(
+                    or_(*[CrossGroupConfirmation.target_phone == p for p in target_phones])
+                )
+
+        conf: CrossGroupConfirmation | None = q.first()
+
+        if conf is None:
+            return "No pending confirmation found that you initiated."
+
+        # Rate limit: max _RESEND_MAX re-sends in _RESEND_WINDOW_HOURS
+        if conf.resend_count >= _RESEND_MAX:
+            return (
+                f"You've already re-sent this confirmation {conf.resend_count} time(s). "
+                f"Maximum {_RESEND_MAX} re-sends allowed per confirmation."
+            )
+
+        # Rate limit: at least _RESEND_COOLDOWN_HOURS between re-sends
+        if conf.last_resent_at is not None:
+            last = conf.last_resent_at
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            wait_until = last + timedelta(hours=_RESEND_COOLDOWN_HOURS)
+            if now < wait_until:
+                remaining = int((wait_until - now).total_seconds() / 60)
+                return (
+                    f"Please wait {remaining} more minute(s) before re-sending "
+                    f"(minimum {_RESEND_COOLDOWN_HOURS} hours between re-sends)."
+                )
+
+        # Reconstruct the original confirmation message from the payload
+        import json as _json
+        payload = _json.loads(conf.action_payload)
+        if conf.action_type == "record_payment":
+            payer_name = _account_service.get_display_name(db, payload["payer_phone"]) if _account_service else payload["payer_phone"]
+            amount = float(payload["amount_ils"])
+            pay_date = payload.get("payment_date", "")
+            msg = (
+                f"[Reminder] {payer_name} says they paid you ₪{amount:.2f} on {pay_date}. "
+                f"Confirm? (yes / no)"
+            )
+        elif conf.action_type == "record_expense":
+            payer_name = _account_service.get_display_name(db, payload["payer_phone"]) if _account_service else payload["payer_phone"]
+            amount = float(payload["amount_ils"])
+            desc = payload.get("description", "")
+            msg = (
+                f"[Reminder] {payer_name} says you owe ₪{amount:.2f} ({desc}). "
+                f"Confirm? (yes / no)"
+            )
+        else:
+            return f"Cannot re-send confirmation type '{conf.action_type}'."
+
+        try:
+            await bridge_client.send_message(conf.target_group_jid, msg)
+        except Exception as exc:
+            return f"Failed to re-send confirmation: {exc}"
+
+        conf.resend_count = (conf.resend_count or 0) + 1
+        conf.last_resent_at = now
+        db.commit()
+
+        target_name = _account_service.get_display_name(db, conf.target_phone) if _account_service else conf.target_phone
+        remaining = _RESEND_MAX - conf.resend_count
+        return (
+            f"Confirmation re-sent to {target_name}. "
+            f"You have {remaining} re-send(s) remaining for this request."
+        )
+
+
+_SCHEMAS["resend_confirmation"] = {
+    "name": "resend_confirmation",
+    "category": "accounting",
+    "access": "user",
+    "description": (
+        "Re-send a pending confirmation request to the other party when they haven't responded. "
+        "Can only re-send confirmations YOU initiated. "
+        f"Rate-limited to {_RESEND_MAX} re-sends per confirmation, "
+        f"with at least {_RESEND_COOLDOWN_HOURS} hours between re-sends."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "target_name": {
+                "type": "string",
+                "description": "Name or phone of the person who hasn't confirmed yet (optional if only one pending).",
+            },
+        },
+        "required": [],
+    },
+}
+
+
 # ── Public factory ─────────────────────────────────────────────────────────────
 
 def get_accounting_tools() -> dict[str, dict]:
@@ -1289,10 +1416,11 @@ def get_accounting_tools() -> dict[str, dict]:
             ("rename_participant",   _exec_rename_participant),
             ("set_household",        _exec_set_household),
             ("list_participants",    _exec_list_participants),
-            ("correct_transaction",  _exec_correct_transaction),
-            ("commit_correction",    _exec_apply_correction),
-            ("create_report_format", _exec_create_report_format),
-            ("list_report_formats",  _exec_list_report_formats),
-            ("delete_report_format", _exec_delete_report_format),
+            ("correct_transaction",   _exec_correct_transaction),
+            ("commit_correction",     _exec_apply_correction),
+            ("create_report_format",  _exec_create_report_format),
+            ("list_report_formats",   _exec_list_report_formats),
+            ("delete_report_format",  _exec_delete_report_format),
+            ("resend_confirmation",   _exec_resend_confirmation),
         ]
     }

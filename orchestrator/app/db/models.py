@@ -280,6 +280,10 @@ class CrossGroupConfirmation(Base):
     # which survives LID/phone mismatches and group-registration gaps.
     # Null for legacy rows; populated for all new confirmations after migration 015.
     household_id         = Column(String(36), ForeignKey("households.id"), nullable=True)
+    # Re-send tracking: initiator may re-send the confirmation message to the target,
+    # subject to rate limits (max 2 per 24h, at least 2h apart).
+    resend_count         = Column(Integer, nullable=False, default=0, server_default="0")
+    last_resent_at       = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         Index("ix_cross_group_confirmations_target_phone_status", "target_phone", "status"),

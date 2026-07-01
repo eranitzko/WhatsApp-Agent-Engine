@@ -314,15 +314,33 @@ async def _process(payload: WebhookPayload) -> None:
                         if split:
                             await account_service.finalize_split(db, split)
                     else:
-                        await account_service.commit_confirmed_transaction(db, conf)
+                        try:
+                            await account_service.commit_confirmed_transaction(db, conf)
+                        except Exception:
+                            # Ledger write failed — reset to pending so the recipient can retry.
+                            # If the write partially succeeded (payment committed but ack failed),
+                            # this won't happen because Bug 2 (bare bridge_client call) is now
+                            # wrapped in try/except inside commit_confirmed_transaction.
+                            logger.exception(
+                                "commit_confirmed_transaction failed for conf %s — resetting to pending",
+                                conf.id,
+                            )
+                            try:
+                                conf.status = "pending"
+                                db.commit()
+                            except Exception:
+                                logger.exception("Also failed to reset conf %s to pending", conf.id)
                 elif conf.status == "rejected":
                     if conf.split_transaction_id:
                         await account_service.handle_split_decline(db, conf)
                     else:
-                        await bridge_client.send_message(
-                            conf.initiator_group_jid,
-                            "Your transaction was declined by the other party."
-                        )
+                        try:
+                            await bridge_client.send_message(
+                                conf.initiator_group_jid,
+                                "Your transaction was declined by the other party."
+                            )
+                        except Exception:
+                            logger.exception("Failed to notify initiator of rejection for conf %s", conf.id)
                 return
 
         # Resolve blueprint via TTL cache — 0 DB hits on the hot path after first lookup

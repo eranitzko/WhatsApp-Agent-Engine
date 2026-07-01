@@ -664,10 +664,13 @@ class AccountService:
                 f"Your balance has been updated."
             )
             # Acknowledge to the payee (target who just confirmed)
-            await bridge_client.send_message(
-                conf.target_group_jid,
-                f"Confirmed. {payer_name}'s payment of ₪{float(amount_ils):.2f} has been recorded."
-            )
+            try:
+                await bridge_client.send_message(
+                    conf.target_group_jid,
+                    f"Confirmed. {payer_name}'s payment of ₪{float(amount_ils):.2f} has been recorded."
+                )
+            except Exception:
+                logger.exception("commit_confirmed_transaction: failed to ack payee %s", conf.target_group_jid)
             return
 
         # Default: record_expense — "C owes me" confirmed by C
@@ -694,11 +697,14 @@ class AccountService:
             f"({payload['description']}). Your balance has been updated."
         )
         # Acknowledge to the debtor (target who just confirmed)
-        await bridge_client.send_message(
-            conf.target_group_jid,
-            f"Confirmed. Your debt of ₪{float(entry.amount_ils):.2f} to {payer_name} "
-            f"has been recorded."
-        )
+        try:
+            await bridge_client.send_message(
+                conf.target_group_jid,
+                f"Confirmed. Your debt of ₪{float(entry.amount_ils):.2f} to {payer_name} "
+                f"has been recorded."
+            )
+        except Exception:
+            logger.exception("commit_confirmed_transaction: failed to ack debtor %s", conf.target_group_jid)
 
     # ── Split transaction management ──────────────────────────────────────────
 
