@@ -24,7 +24,13 @@ def format_date(d: date_type | None, date_format: str) -> str:
 def format_currency(amount: float, currency_display: str) -> str:
     """Sign-aware ILS-only formatter: currency_display picks symbol ("₪") vs
     suffix ("ILS") display style for an amount that is always ILS. Used by
-    family_accounting, where amounts can be negative (payments)."""
+    family_accounting, where amounts can be negative (payments).
+
+    Note: uses thousands separators (:,.2f) — the pre-migration _fmt_currency
+    in accounting_export.py used plain .2f without them. This is an
+    intentional fix (consolidating with format_amount's existing
+    thousands-separator behavior), not an accidental behavior change.
+    """
     sign = "-" if amount < 0 else ""
     amount = abs(amount)
     if currency_display == "₪":
