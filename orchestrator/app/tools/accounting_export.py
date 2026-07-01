@@ -313,7 +313,7 @@ def generate_ledger_pdf(
             "settled": "שולם",
             "payment": "תשלום",
             "remaining": "נותר",
-            "total": 'סה"כ',
+            "total": "סה״כ",
             "all_settled": "כל החובות סולקו.",
             "no_transactions": "לא נמצאו עסקאות.",
         },
@@ -321,7 +321,10 @@ def generate_ledger_pdf(
     L = LABELS.get(lang, LABELS["en"])
 
     def _t(text: str) -> str:
-        return _bidi(_xml(text)) if rtl else _xml(text)
+        # Bidi reorder the raw text first, THEN XML-escape — reversing this
+        # order corrupts any text containing a literal ", &, <, or > because
+        # bidi would reorder the escaped entity's characters individually.
+        return _xml(_bidi(text)) if rtl else _xml(text)
 
     font_n = _font(lang, bold=False)
     font_b = _font(lang, bold=True)
