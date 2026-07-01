@@ -58,6 +58,8 @@ def _count_admins(db) -> int:
 
 
 def _sender_phone(ctx: dict) -> str:
+    if resolved := ctx.get("resolved_phone"):
+        return resolved
     sender = ctx.get("sender", "")
     return sender.split("@")[0].split(":")[0]
 
