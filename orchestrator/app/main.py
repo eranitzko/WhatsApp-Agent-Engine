@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re as _re
@@ -122,6 +123,26 @@ command_handler = CommandHandler(bridge_url=settings.bridge_url)
 context_store = ContextStore()
 tool_registry = ToolRegistry()
 agent_runner: AgentRunner | None = None
+
+# Per-group processing lock. Each webhook event is handled as a FastAPI
+# BackgroundTask, so two events for the same group (duplicate delivery, or
+# the user sending a second message before the first reply lands) can run
+# _process() concurrently. Both would read the same in-memory GroupContext,
+# and could interleave their reads/writes across the conversation history
+# (context_store / ConversationHistory), producing a stored message list
+# with a tool_use in one turn whose tool_result got interleaved with or
+# trimmed against another turn — the "orphaned tool_use_id" corruption seen
+# in AgentRunner. Serializing per-group processing removes the race instead
+# of just self-healing after the fact.
+_group_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_group_lock(group_jid: str) -> asyncio.Lock:
+    lock = _group_locks.get(group_jid)
+    if lock is None:
+        lock = asyncio.Lock()
+        _group_locks[group_jid] = lock
+    return lock
 account_service: AccountService = AccountService()
 group_registration_handler: GroupRegistrationHandler = GroupRegistrationHandler()
 _http_client: Optional[httpx.AsyncClient] = None
@@ -220,6 +241,8 @@ async def webhook(request: Request, payload: WebhookPayload, background_tasks: B
 
 
 async def _process(payload: WebhookPayload) -> None:
+    group_lock = _get_group_lock(payload.jid)
+    await group_lock.acquire()
     db = SessionLocal()
     try:
         logger.debug("Processing event: type=%s jid=%s", payload.type, payload.jid)
@@ -306,6 +329,10 @@ async def _process(payload: WebhookPayload) -> None:
                 household_id=_inbound_household_id,
             )
             if conf is not None:
+                logger.info(
+                    "yes/no %r claimed by CrossGroupConfirmation intercept | group=%s conf=%s status=%s",
+                    text, payload.jid, conf.id, conf.status,
+                )
                 if conf.status == "confirmed":
                     if conf.split_transaction_id:
                         split = db.query(SplitTransaction).filter_by(
@@ -424,6 +451,7 @@ async def _process(payload: WebhookPayload) -> None:
         logger.exception("Unhandled error processing event for group %s", payload.jid)
     finally:
         db.close()
+        group_lock.release()
 
 
 def _pipeline_result_to_message(result: dict) -> str:

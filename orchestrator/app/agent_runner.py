@@ -97,28 +97,41 @@ class AgentRunner:
         if multi_confirmation_store and sender_phone:
             pending_mc = multi_confirmation_store.find_for_phone(group_jid, sender_phone)
             if pending_mc:
+                logger.info(
+                    "message %r claimed by multi-party confirmation intercept | group=%s sender=%s",
+                    message, group_jid, sender_phone,
+                )
                 if multi_confirmation_store.is_confirm(message):
                     status, mc = multi_confirmation_store.confirm(group_jid, sender_phone)
-                    context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
                     if status == "all_confirmed":
                         result = await self._commit_pending(mc)
-                        context.add(group_jid, "assistant", result, max_pairs=blueprint.context_window)
+                        context.add_turn(group_jid, [
+                            {"role": "user", "content": message},
+                            {"role": "assistant", "content": result},
+                        ], max_pairs=blueprint.context_window)
                         return result
                     else:
                         still = ", ".join(f"@{p}" for p in mc.pending_phones())
                         reply = f"Confirmed. Still waiting for: {still}"
-                        context.add(group_jid, "assistant", reply, max_pairs=blueprint.context_window)
+                        context.add_turn(group_jid, [
+                            {"role": "user", "content": message},
+                            {"role": "assistant", "content": reply},
+                        ], max_pairs=blueprint.context_window)
                         return reply
                 elif multi_confirmation_store.is_cancel(message):
                     mc = multi_confirmation_store.reject(group_jid, sender_phone)
-                    context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
                     reply = f"Transaction cancelled.\n{mc.description if mc else ''}"
-                    context.add(group_jid, "assistant", reply, max_pairs=blueprint.context_window)
+                    context.add_turn(group_jid, [
+                        {"role": "user", "content": message},
+                        {"role": "assistant", "content": reply},
+                    ], max_pairs=blueprint.context_window)
                     return reply
                 else:
-                    context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
                     reply = f"You have a pending confirmation. Please reply 'yes' or 'no':\n{pending_mc.description}"
-                    context.add(group_jid, "assistant", reply, max_pairs=blueprint.context_window)
+                    context.add_turn(group_jid, [
+                        {"role": "user", "content": message},
+                        {"role": "assistant", "content": reply},
+                    ], max_pairs=blueprint.context_window)
                     return reply
 
         # ── Shared setup — history, system prompt, tool schemas ──────────────
@@ -162,6 +175,12 @@ class AgentRunner:
         # ── Single-action confirmation intercept ──────────────────────────────
         pending = confirmation_store.get(group_jid)
         if pending and not pending.is_expired():
+            if confirmation_store.is_confirm(message) or confirmation_store.is_cancel(message):
+                logger.info(
+                    "message %r claimed by single-action confirmation intercept | group=%s "
+                    "pending_action=%s staged_by=%s sender=%s",
+                    message, group_jid, pending.action, pending.staged_by, sender_phone,
+                )
             if confirmation_store.is_confirm(message):
                 # Enforce: only the person who staged the action can confirm it.
                 # If staged_by is empty, any member can confirm (backwards compat).
@@ -214,8 +233,10 @@ class AgentRunner:
             elif confirmation_store.is_cancel(message):
                 confirmation_store.clear(group_jid)
                 reply = "Action cancelled."
-                context.add(group_jid, "user", message, max_pairs=blueprint.context_window)
-                context.add(group_jid, "assistant", reply, max_pairs=blueprint.context_window)
+                context.add_turn(group_jid, [
+                    {"role": "user", "content": message},
+                    {"role": "assistant", "content": reply},
+                ], max_pairs=blueprint.context_window)
                 return reply
 
         # ── Normal agent loop ─────────────────────────────────────────────────
@@ -278,10 +299,22 @@ class AgentRunner:
                     return text
 
                 if response.stop_reason == "max_tokens":
+                    # Falling through here would re-send the identical `messages` list
+                    # next iteration (nothing was appended), just repeating the same
+                    # truncated response until max_tool_turns is exhausted. Return
+                    # immediately instead, same as the end_turn path.
                     logger.warning(
                         "AgentRunner hit max_tokens | group=%s blueprint=%s turn_tools=%s",
                         group_jid, blueprint.id, [b.type for b in response.content],
                     )
+                    text = next(
+                        (b.text for b in response.content if hasattr(b, "text") and b.type == "text"),
+                        "I ran out of room to finish that response — try asking again, maybe more narrowly.",
+                    )
+                    turn_msgs = list(messages[len(history):])
+                    turn_msgs.append({"role": "assistant", "content": text})
+                    context.add_turn(group_jid, turn_msgs, max_pairs=blueprint.context_window)
+                    return text
 
                 if response.stop_reason == "tool_use":
                     tc_list = [b for b in response.content if b.type == "tool_use"]

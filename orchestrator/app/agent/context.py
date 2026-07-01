@@ -45,6 +45,24 @@ def _is_turn_start(msg: dict) -> bool:
     return True  # empty or unknown format — treat as turn start
 
 
+def _trim_from_index(messages: list[dict], effective_pairs: int) -> int:
+    """Return the index to slice *messages* from so at most *effective_pairs*
+    complete logical turns remain, always cutting at a turn-start boundary.
+
+    A naive count-based slice (``messages[-n:]``) can land between an
+    assistant tool_use block and its paired user tool_result block, orphaning
+    the tool_result — which the Anthropic API rejects with "unexpected
+    tool_use_id". This must be used for every read AND write path that
+    trims the message list (get_history, add, add_turn), not just writes,
+    since a bad slice on read produces the identical corrupted payload.
+    Returns 0 (no trim) when the turn count is already within budget.
+    """
+    turn_start_indices = [i for i, m in enumerate(messages) if _is_turn_start(m)]
+    if len(turn_start_indices) > effective_pairs:
+        return turn_start_indices[-effective_pairs]
+    return 0
+
+
 class GroupContext:
     """In-process view of a group's conversation history.
 
@@ -114,23 +132,23 @@ class GroupContext:
         if datetime.now(timezone.utc) - self.last_active > timedelta(minutes=effective_idle):
             return []
         effective_pairs = max_pairs if max_pairs is not None else MAX_TURNS
-        max_messages = effective_pairs * 2
-        return self.messages[-max_messages:] if len(self.messages) > max_messages else list(self.messages)
+        trim_from = _trim_from_index(self.messages, effective_pairs)
+        return list(self.messages[trim_from:])
 
     def add(self, role: str, content, max_pairs: int | None = None) -> None:
-        """Append a message, trim to max_pairs pairs, and persist.
+        """Append a message, trim at a turn boundary, and persist.
 
         Args:
             role: ``"user"`` or ``"assistant"``.
             content: Message content (string or list of content blocks).
-            max_pairs: If provided, trim to this many user+assistant pairs instead of
+            max_pairs: If provided, trim to this many logical turns instead of
                 the module-level ``MAX_TURNS`` default.
         """
         self.messages.append({"role": role, "content": content})
         effective_pairs = max_pairs if max_pairs is not None else MAX_TURNS
-        max_messages = effective_pairs * 2
-        if len(self.messages) > max_messages:
-            self.messages = self.messages[-max_messages:]
+        trim_from = _trim_from_index(self.messages, effective_pairs)
+        if trim_from:
+            self.messages = self.messages[trim_from:]
         self.touch()
         self._save()
 
@@ -146,14 +164,9 @@ class GroupContext:
         """
         self.messages.extend(turn_messages)
         effective_pairs = max_pairs if max_pairs is not None else MAX_TURNS
-
-        # Identify where each logical turn starts
-        turn_start_indices = [i for i, m in enumerate(self.messages) if _is_turn_start(m)]
-
-        if len(turn_start_indices) > effective_pairs:
-            trim_to = turn_start_indices[-effective_pairs]
-            self.messages = self.messages[trim_to:]
-
+        trim_from = _trim_from_index(self.messages, effective_pairs)
+        if trim_from:
+            self.messages = self.messages[trim_from:]
         self.touch()
         self._save()
 
