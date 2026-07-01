@@ -62,9 +62,11 @@ def _fmt_date(d: date_type | None, date_format: str) -> str:
 
 
 def _fmt_currency(amount: float, currency_display: str) -> str:
+    sign = "-" if amount < 0 else ""
+    amount = abs(amount)
     if currency_display == "₪":
-        return f"₪{amount:.2f}"
-    return f"{amount:.2f} ILS"
+        return f"{sign}₪{amount:.2f}"
+    return f"{sign}{amount:.2f} ILS"
 
 
 def generate_ledger_xlsx(
@@ -266,16 +268,19 @@ def generate_ledger_pdf(
     include_settled: bool = cfg.get("include_settled", True)
     sort_by: str = cfg.get("sort_by", "date")
 
-    # Detect language from group config
-    lang = "en"
-    try:
-        with SessionLocal() as _db:
-            from app.db.models import GroupConfig
-            gcfg = _db.get(GroupConfig, group_jid)
-            if gcfg and gcfg.feedback_language:
-                lang = gcfg.feedback_language
-    except Exception:
-        pass
+    # Language: explicit fmt_config (call-time override or saved ReportFormat)
+    # takes priority; else fall back to GroupConfig.feedback_language.
+    lang = cfg.get("language")
+    if not lang:
+        lang = "en"
+        try:
+            with SessionLocal() as _db:
+                from app.db.models import GroupConfig
+                gcfg = _db.get(GroupConfig, group_jid)
+                if gcfg and gcfg.feedback_language:
+                    lang = gcfg.feedback_language
+        except Exception:
+            pass
 
     rtl = (lang == "he")
     _register_font()
@@ -321,10 +326,14 @@ def generate_ledger_pdf(
     L = LABELS.get(lang, LABELS["en"])
 
     def _t(text: str) -> str:
+        # Bidi is applied unconditionally, not gated on the report's overall
+        # language: a Hebrew description/name can appear inside an English
+        # report (or vice versa) since users write free text in either script.
+        # get_display() is a no-op for pure-LTR text, so this is always safe.
         # Bidi reorder the raw text first, THEN XML-escape — reversing this
         # order corrupts any text containing a literal ", &, <, or > because
         # bidi would reorder the escaped entity's characters individually.
-        return _xml(_bidi(text)) if rtl else _xml(text)
+        return _xml(_bidi(text))
 
     font_n = _font(lang, bold=False)
     font_b = _font(lang, bold=True)
@@ -383,15 +392,13 @@ def generate_ledger_pdf(
     story.append(Paragraph(_t(f"{L['generated']}: {generated}"), meta_style))
     story.append(Spacer(1, 0.5 * cm))
 
-    # ── Net balances (kept as-is) ─────────────────────────────────────────────
+    # ── Net balances: one netted line per pair (who owes whom, net amount) ────
     story.append(Paragraph(_t(L["net_balances"]), h2_style))
 
-    net: dict[tuple[str, str], Decimal] = {}
-    for e in entries:
-        unsettled = e.amount_ils - (e.amount_settled_ils or Decimal("0"))
-        if unsettled > 0:
-            key = (e.from_phone, e.to_phone)
-            net[key] = net.get(key, Decimal("0")) + unsettled
+    # Reuses the same netting logic as the XLSX balances sheet: opposing
+    # debts between the same two people are offset against each other so
+    # each pair produces exactly one directional line, not two raw gross ones.
+    net = _compute_net_balances(entries, names)
 
     HDR_BG   = colors.HexColor("#1a3c5e")
     ALT_BG   = colors.HexColor("#f0f4f8")
@@ -404,8 +411,8 @@ def generate_ledger_pdf(
             hdrs = [_pb(L["from"]), _pb(L["to"]), _pb(L["amount"])]
         bal_rows = [hdrs]
         for (frm, to), amt in sorted(net.items()):
-            frm_name = _p(names.get(frm, frm))
-            to_name  = _p(names.get(to, to))
+            frm_name = _p(frm)
+            to_name  = _p(to)
             amt_p    = Paragraph(
                 _fmt_currency(float(amt), currency_display),
                 ParagraphStyle("R", fontName=font_n, fontSize=9, alignment=2),
@@ -487,7 +494,13 @@ def generate_ledger_pdf(
                 date_s = _fmt_date(e.transaction_date, date_format)
                 desc_s = (e.description or "")[:60]
                 remaining = e.amount_ils - (e.amount_settled_ils or Decimal("0"))
-                amt_s = _fmt_currency(float(e.amount_ils), currency_display)
+
+                # Payments reduce what the payer owes, so they're signed negative;
+                # debts increase it, so they stay positive. The column totals
+                # below are the signed sum, which is what reproduces the net
+                # balance figure shown in the summary above.
+                signed_amount = -e.amount_ils if e.entry_type == "payment" else e.amount_ils
+                amt_s = _fmt_currency(float(signed_amount), currency_display)
 
                 if e.entry_type == "payment":
                     comment_s = L["payment"]
@@ -498,10 +511,10 @@ def generate_ledger_pdf(
 
                 if e.from_phone == phone_a:
                     col_a, col_b = amt_s, ""
-                    sum_a += e.amount_ils
+                    sum_a += signed_amount
                 else:
                     col_a, col_b = "", amt_s
-                    sum_b += e.amount_ils
+                    sum_b += signed_amount
 
                 cells = [
                     Paragraph(date_s, cell_style),

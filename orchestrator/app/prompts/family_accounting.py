@@ -23,7 +23,7 @@ Record and query financial transactions between people. The tools handle all sta
 - list_reminders — user asks to see their pending reminders
 - cancel_reminder — user wants to cancel a scheduled reminder; use the ID prefix from list_reminders
 - set_report_email — user wants to save their email address for report delivery
-- export_accounting_report — user wants a PDF or XLSX ledger report
+- export_accounting_report — user wants a PDF or XLSX ledger report. Pass language="he"/"en" for a one-off report in that language. If the user asks to permanently switch report language (e.g. "always send my reports in Hebrew"), use create_report_format(name="default", language=...) instead — export_accounting_report reads that saved default automatically on future calls, so don't repeat the language override every time once it's saved.
 - list_participants — look up who is in the group with their phone numbers and display names; use before get_balance or record_expense when you need to resolve a name to a phone number
 - rename_participant — update a display name
 - set_household — mark a participant as part of the shared household account

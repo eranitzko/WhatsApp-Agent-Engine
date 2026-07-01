@@ -64,6 +64,7 @@ async def _exec_export_report(params: dict, **ctx) -> str:
     end_date = params.get("end_date")
     custom_subject = params.get("subject", "").strip()
     custom_body = params.get("body", "").strip()
+    language = params.get("language", "").strip()
 
     email = _resolve_email(params, sender_phone) if delivery in ("email", "both") else None
     if delivery in ("email", "both") and not email:
@@ -93,6 +94,8 @@ async def _exec_export_report(params: dict, **ctx) -> str:
         elif blueprint_id == "family_accounting":
             with SessionLocal() as db:
                 report_fmt_config = _load_report_format(group_jid, db)
+            if language:
+                report_fmt_config = {**report_fmt_config, "language": language}
             gen = AccountingGenerator(group_jid)
             if fmt in ("pdf", "both"):
                 data, name = gen.build_pdf(fmt_config=report_fmt_config)
@@ -293,6 +296,17 @@ _SCHEMA_ACCOUNTING = {
             "email": {
                 "type": "string",
                 "description": "Recipient email. Optional — uses saved email if omitted.",
+            },
+            "language": {
+                "type": "string",
+                "enum": ["en", "he"],
+                "description": (
+                    "One-off report language override. Optional — uses the group's saved "
+                    "report format (see create_report_format) if omitted. To make a language "
+                    "change persist across future reports, save it with "
+                    "create_report_format(name='default', language=...) instead of repeating "
+                    "this on every call."
+                ),
             },
             "subject": {
                 "type": "string",
