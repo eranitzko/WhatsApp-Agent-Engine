@@ -17,7 +17,7 @@ from reportlab.platypus import Image as RLImage, PageBreak, Paragraph, Spacer, T
 
 from app.reports.data import ReportRow
 from app.reports.labels import get as L
-from app.reports.render_pdf import MARGIN, PAGE_H, PAGE_W, _bidi, _font, _xml
+from app.reports.render_pdf import MARGIN, PAGE_H, PAGE_W, _bidi_then_xml, _font
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ def build_appendix_flowables(rows: list[ReportRow], lang: str, image_loader) -> 
 
     story.append(PageBreak())
     raw_title = L(lang, "appendix_title")
-    title_text = _bidi(_xml(raw_title)) if rtl else _xml(raw_title)
+    title_text = _bidi_then_xml(raw_title)
     story.append(Paragraph(title_text, ParagraphStyle(
         "AppendixTitle",
         parent=styles["Heading1"],
@@ -90,7 +90,7 @@ def build_appendix_flowables(rows: list[ReportRow], lang: str, image_loader) -> 
     for row in rows:
         rl_img = _load_rl_image(row, image_loader, cell_w, img_cell_h)
         raw_label = L(lang, "appendix_label", number=row.invoice_number or "—", vendor=row.vendor or "—")
-        label_text = _bidi(_xml(raw_label)) if rtl else _xml(raw_label)
+        label_text = _bidi_then_xml(raw_label)
         caption = Paragraph(label_text, caption_style)
         cells.append([rl_img, caption])
 

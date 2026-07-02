@@ -172,6 +172,39 @@ def test_invoice_generator_build_pdf_flagged_row_gets_flagged_style():
     assert len(extra_flowables) >= 1
 
 
+def test_invoice_generator_build_pdf_real_render_pdf_returns_bytes(db):
+    """Un-mocked test: exercises InvoiceGenerator.build_pdf through the real
+    render_pdf (not patched away), including a flagged row so the
+    flagged-note extra_flowables path actually executes. Mirrors the pattern
+    used by test_generate_ledger_pdf_returns_bytes — a real in-memory DB
+    fixture, not a mocked-away DB layer."""
+    from datetime import date
+    from decimal import Decimal
+
+    from app.db.models import GroupConfig, Invoice
+
+    db.add(GroupConfig(group_id="123@g.us", feedback_language="en"))
+    db.add(Invoice(
+        id="inv-1", group_id="123@g.us", message_id="msg-1", image_hash="hash1",
+        invoice_date=date(2026, 5, 3), invoice_number="INV-1", vendor="Acme",
+        description="Widgets", amount_original=Decimal("100"), currency_original="ILS",
+        amount_ils=Decimal("100"), flagged=True,
+    ))
+    db.commit()
+
+    from app.export.generators.invoice import InvoiceGenerator
+
+    with patch("app.export.generators.invoice.SessionLocal", return_value=_CM(db)), \
+         patch("app.reports.data.SessionLocal", return_value=_CM(db)):
+        gen = InvoiceGenerator("123@g.us")
+        result_bytes, filename = gen.build_pdf(month=5, year=2026)
+
+    assert isinstance(result_bytes, bytes)
+    assert len(result_bytes) > 100
+    assert result_bytes[:4] == b"%PDF"
+    assert filename == "invoices_May_2026.pdf"
+
+
 def test_invoice_generator_generate_xlsx_returns_bytes():
     from app.export.generators.invoice import InvoiceGenerator
 
