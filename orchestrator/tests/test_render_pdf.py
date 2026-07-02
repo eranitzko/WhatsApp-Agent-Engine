@@ -12,6 +12,28 @@ def _extract_text(pdf_bytes: bytes) -> str:
         return "\n".join(page.extract_text() or "" for page in pdf.pages)
 
 
+# Rounded (3 dp) RGB fractions for render_pdf.py's _TOTAL_BG (#e8f0fe) and
+# _FLAG_BG (#fff3cd), as reportlab.lib.colors.HexColor exposes them and as
+# pdfplumber reports a rect's non_stroking_color. Verified empirically against
+# the real generated PDF, not derived by hand from the hex codes.
+_TOTAL_BG_RGB = (0.910, 0.941, 0.996)
+_FLAG_BG_RGB = (1.0, 0.953, 0.804)
+
+
+def _has_rect_with_fill(page, rgb: tuple[float, float, float], tol: float = 0.005) -> bool:
+    """True if any filled rect on the page has a non_stroking_color matching
+    rgb within tol. Searches all rects rather than assuming a position/order,
+    since row-style background overrides are drawn as extra rects layered on
+    top of the base alternating-row backgrounds."""
+    for r in page.rects:
+        color = r.get("non_stroking_color")
+        if not color or len(color) != 3:
+            continue
+        if all(abs(c - t) <= tol for c, t in zip(color, rgb)):
+            return True
+    return False
+
+
 def test_render_pdf_english_table_returns_valid_pdf_with_content():
     spec = ReportSpec(
         title="Test Report",
@@ -80,6 +102,14 @@ def test_render_pdf_total_row_is_styled_and_readable():
     assert "Total" in text
     assert "Eran" in text
 
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        page = pdf.pages[0]
+        assert _has_rect_with_fill(page, _TOTAL_BG_RGB), (
+            "expected a rect filled with the total-row background color "
+            f"{_TOTAL_BG_RGB}, found fills: "
+            f"{[r.get('non_stroking_color') for r in page.rects]}"
+        )
+
 
 def test_render_pdf_flagged_row_and_run_level_bold():
     spec = ReportSpec(
@@ -99,6 +129,38 @@ def test_render_pdf_flagged_row_and_run_level_bold():
     text = _extract_text(pdf_bytes)
     assert "Important" in text
     assert "check this" in text
+
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        page = pdf.pages[0]
+        assert _has_rect_with_fill(page, _FLAG_BG_RGB), (
+            "expected a rect filled with the flagged-row background color "
+            f"{_FLAG_BG_RGB}, found fills: "
+            f"{[r.get('non_stroking_color') for r in page.rects]}"
+        )
+
+        # Locate the "Important" and "check this" substrings within the page's
+        # character stream (in reading order) so we can inspect their fontname
+        # directly — pdfplumber doesn't expose bold as a boolean, but the
+        # registered bold font's name contains "Bold" (see _FONT_BOLD /
+        # Helvetica-Bold in render_pdf.py's _font()).
+        full_text = "".join(c["text"] for c in page.chars)
+        idx_important = full_text.find("Important")
+        idx_check = full_text.find("check this")
+        assert idx_important != -1
+        assert idx_check != -1
+
+        important_chars = page.chars[idx_important: idx_important + len("Important")]
+        check_chars = page.chars[idx_check: idx_check + len("check this")]
+
+        important_fonts = {c["fontname"] for c in important_chars}
+        check_fonts = {c["fontname"] for c in check_chars}
+
+        assert important_fonts and all("Bold" in f for f in important_fonts), (
+            f"expected 'Important' to render in a bold font, got: {important_fonts}"
+        )
+        assert check_fonts and all("Bold" not in f for f in check_fonts), (
+            f"expected 'check this' to render in a non-bold font, got: {check_fonts}"
+        )
 
 
 def test_render_pdf_empty_section_shows_message_not_empty_table():
