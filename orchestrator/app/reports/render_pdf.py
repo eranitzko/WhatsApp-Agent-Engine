@@ -182,7 +182,15 @@ def _cell_paragraph(cell: Cell, column: Column, lang: str, row_bold: bool) -> Pa
         fontSize=8,
         leading=10,
         alignment=align,
-        wordWrap="RTL" if rtl else "LTR",
+        # Always "LTR": _cell_markup already bidi-reordered the text into final
+        # visual order via python-bidi. ReportLab's own wordWrap="RTL" performs
+        # a SECOND, independent bidi/line-break pass on top of that — for a
+        # narrow cell this double-processing corrupts pure-LTR content with
+        # trailing punctuation (e.g. "Ben & Jerry's" -> "s'Ben & Jerry").
+        # Alignment (TA_RIGHT above) handles the visual right-justification;
+        # wordWrap must stay LTR since the text handed to Paragraph is already
+        # in display order, not logical order.
+        wordWrap="LTR",
     )
     return Paragraph(_cell_markup(cell, column), style)
 

@@ -88,6 +88,34 @@ def test_render_pdf_hebrew_table_with_mixed_english_content():
     assert "-50.00 ILS" in text
 
 
+def test_render_pdf_hebrew_report_narrow_column_english_punctuation_not_reordered():
+    """Regression test for a bug found via production-shaped verification: in
+    an RTL (Hebrew) report, a narrow column containing pure-English text with
+    trailing punctuation (e.g. a vendor name like "Ben & Jerry's") rendered as
+    "s'Ben & Jerry" — the apostrophe-s got shifted to the front. Root cause:
+    ReportLab's own wordWrap="RTL" line-layout performs a second, independent
+    bidi pass on top of the text this module already bidi-reordered via
+    python-bidi, and that double-processing only surfaces once a column is
+    narrow enough to force a wrap/line-layout decision. A wide column (as in
+    test_render_pdf_hebrew_table_with_mixed_english_content above) does not
+    trigger it, hence a dedicated narrow-column test."""
+    spec = ReportSpec(
+        title="Test", lang="he", generated_label="Generated: today",
+        sections=[TableSection(
+            columns=[
+                Column(header="תאריך", type="number", width_weight=2.2),
+                Column(header="ספק", type="text", width_weight=2.2),
+                Column(header="תיאור", type="text", width_weight=5.5),
+            ],
+            rows=[Row(cells=["01/07/2026", "Ben & Jerry's", "Netflix subscription"])],
+        )],
+    )
+    pdf_bytes = render_pdf(spec)
+    text = _extract_text(pdf_bytes)
+    assert "Ben & Jerry's" in text
+    assert "s'Ben & Jerry" not in text
+
+
 def test_render_pdf_total_row_is_styled_and_readable():
     spec = ReportSpec(
         title="Test", lang="en", generated_label="Generated: today",
