@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from calendar import month_name
+from datetime import datetime, timezone
 
 from app.db.models import GroupConfig
 from app.db.session import SessionLocal
 from app.pipeline.storage import download_image_sync
 from app.reports.data import fetch_report_data
 from app.reports.excel_report import generate_excel
-from app.reports.pdf_report import generate_pdf
+from app.reports.formatting import format_amount, format_currency, format_date
+from app.reports.labels import get as L
+from app.reports.pdf_report import build_appendix_flowables
+from app.reports.render_pdf import _bidi_then_xml, _font, render_pdf
+from app.reports.spec import Column, ReportSpec, Row, TableSection
 
 
 class NoDataError(Exception):
@@ -47,6 +52,70 @@ class InvoiceGenerator:
     def _period_str(self, data) -> str:
         return data.period_label or f"{month_name[data.month]}_{data.year}"
 
+    def _build_spec(self, data, cfg) -> ReportSpec:
+        lang = cfg.feedback_language
+        dual = data.show_dual_currency
+
+        # width_weight values reproduce the old generate_pdf's fixed cm widths
+        # ([2.4, 2.8, 4.0, 7.0, 3.0] non-dual / [2.2, 2.4, 3.5, 5.5, 2.8, 2.8]
+        # dual) as proportions — render_pdf normalizes by total weight, so
+        # using the old cm values directly reproduces the same visual ratios.
+        columns = [
+            Column(header=L(lang, "col_date"), width_weight=2.4 if not dual else 2.2),
+            Column(header=L(lang, "col_invoice_no"), width_weight=2.8 if not dual else 2.4),
+            Column(header=L(lang, "col_vendor"), width_weight=4.0 if not dual else 3.5),
+            Column(header=L(lang, "col_description"), width_weight=7.0 if not dual else 5.5),
+        ]
+        if dual:
+            columns += [
+                Column(header=L(lang, "col_amount_orig"), type="number", width_weight=2.8),
+                Column(header=L(lang, "col_amount_ils"), type="number", width_weight=2.8),
+            ]
+        else:
+            columns.append(Column(header=L(lang, "col_amount"), type="number", width_weight=3.0))
+
+        rows: list[Row] = []
+        for r in data.rows:
+            date_s = format_date(r.invoice_date, "DD/MM/YYYY") or "—"
+            if r.flagged:
+                date_s = f"{date_s} *"
+            inv_num = r.invoice_number or "—"
+            vendor = r.vendor or "—"
+            desc = r.description or "—"
+
+            if dual:
+                # amount_original can be any currency (USD, EUR, ILS, ...) -> format_amount.
+                # amount_ils is always ILS by definition of this column -> format_currency
+                # with the symbol style, matching the old _fmt_ils behavior exactly.
+                orig = format_amount(float(r.amount_original) if r.amount_original else None, r.currency_original)
+                ils = format_currency(float(r.amount_ils), "₪") if r.amount_ils else "—"
+                cells = [date_s, inv_num, vendor, desc, orig, ils]
+            else:
+                amt = format_amount(float(r.amount_original) if r.amount_original else None, r.currency_original)
+                cells = [date_s, inv_num, vendor, desc, amt]
+
+            rows.append(Row(cells=cells, style="flagged" if r.flagged else "normal"))
+
+        n_cols = len(columns)
+        total_cells = ["" for _ in range(n_cols)]
+        total_cells[n_cols - 2] = L(lang, "total")
+        total_cells[n_cols - 1] = format_currency(float(data.total_ils), "₪")
+        totals_row = Row(cells=total_cells, style="total")
+
+        period = data.period_label or f"{month_name[data.month]} {data.year}"
+        meta_lines = [f"{L(lang, 'period')}: {period}"]
+        if cfg.report_author:
+            meta_lines.append(f"{L(lang, 'prepared_by')}: {cfg.report_author}")
+        generated_label = f"{L(lang, 'generated')}: {datetime.now(timezone.utc).strftime('%d/%m/%Y')}"
+
+        return ReportSpec(
+            title=cfg.report_header or L(lang, "report_title_default"),
+            lang=lang,
+            generated_label=generated_label,
+            meta_lines=meta_lines,
+            sections=[TableSection(columns=columns, rows=rows, totals_row=totals_row)],
+        )
+
     def build_pdf(
         self,
         month: int | None = None,
@@ -57,15 +126,24 @@ class InvoiceGenerator:
         force_dual_currency: bool | None = None,
     ) -> tuple[bytes, str]:
         data, cfg = self._fetch(month, year, start_date, end_date, force_dual_currency)
-        loader = download_image_sync if attach_images else None
-        pdf_bytes = generate_pdf(
-            data,
-            lang=cfg.feedback_language,
-            title=cfg.report_header or None,
-            author=cfg.report_author or None,
-            attach_images=attach_images,
-            image_loader=loader,
-        )
+        spec = self._build_spec(data, cfg)
+
+        extra_flowables: list = []
+        flagged_count = sum(1 for r in data.rows if r.flagged)
+        if flagged_count:
+            from reportlab.lib.styles import ParagraphStyle
+            note_style = ParagraphStyle(
+                "FlaggedNote", fontName=_font(bold=False), fontSize=9,
+                textColor="#555555", alignment=2 if cfg.feedback_language == "he" else 0,
+            )
+            from reportlab.platypus import Paragraph
+            extra_flowables.append(Paragraph(_bidi_then_xml(L(cfg.feedback_language, "flagged_note")), note_style))
+
+        if attach_images:
+            loader = download_image_sync
+            extra_flowables.extend(build_appendix_flowables(data.rows, cfg.feedback_language, loader))
+
+        pdf_bytes = render_pdf(spec, extra_flowables=extra_flowables or None)
         filename = f"invoices_{self._period_str(data)}.pdf"
         return pdf_bytes, filename
 

@@ -81,15 +81,26 @@ async def test_deliver_files_both_calls_send_file_and_email():
 
 # ── invoice generator tests ───────────────────────────────────────────────────
 
-def test_invoice_generator_generate_pdf_returns_bytes():
+def test_invoice_generator_build_pdf_returns_bytes():
     from app.export.generators.invoice import InvoiceGenerator
 
+    mock_row = MagicMock()
+    mock_row.invoice_date = None
+    mock_row.invoice_number = "INV-1"
+    mock_row.vendor = "Acme"
+    mock_row.description = "Widgets"
+    mock_row.amount_original = 100
+    mock_row.currency_original = "ILS"
+    mock_row.amount_ils = 100
+    mock_row.flagged = False
+
     mock_data = MagicMock()
-    mock_data.rows = [MagicMock()]
+    mock_data.rows = [mock_row]
     mock_data.month = 5
     mock_data.year = 2026
     mock_data.period_label = None
     mock_data.total_ils = 100
+    mock_data.show_dual_currency = False
 
     mock_cfg = MagicMock()
     mock_cfg.feedback_language = "en"
@@ -98,12 +109,67 @@ def test_invoice_generator_generate_pdf_returns_bytes():
     mock_cfg.force_dual_currency = False
 
     with patch("app.export.generators.invoice.fetch_report_data", return_value=mock_data), \
-         patch("app.export.generators.invoice.generate_pdf", return_value=b"pdf-bytes"), \
+         patch("app.export.generators.invoice.render_pdf", return_value=b"pdf-bytes") as mock_render, \
          patch("app.export.generators.invoice._get_invoice_config", return_value=mock_cfg):
         gen = InvoiceGenerator("123@g.us")
         result = gen.build_pdf(month=5, year=2026)
 
     assert result == (b"pdf-bytes", "invoices_May_2026.pdf")
+
+    # Verify the ReportSpec shape passed to render_pdf, not just the return value
+    spec = mock_render.call_args.args[0]
+    assert spec.title  # report_title_default label, non-empty
+    section = spec.sections[0]
+    assert [c.header for c in section.columns] == ["Date", "Invoice #", "Vendor", "Description", "Amount"]
+    # currency_original="ILS" -> format_amount uses the symbol style, matching
+    # the old _fmt_amount behavior (only non-ILS currencies get a code suffix)
+    assert section.rows[0].cells == ["—", "INV-1", "Acme", "Widgets", "₪100.00"]
+    assert section.totals_row.cells[-1] == "₪100.00"
+
+
+def test_invoice_generator_build_pdf_flagged_row_gets_flagged_style():
+    from app.export.generators.invoice import InvoiceGenerator
+
+    mock_row = MagicMock()
+    mock_row.invoice_date = None
+    mock_row.invoice_number = "INV-1"
+    mock_row.vendor = "Acme"
+    mock_row.description = "Widgets"
+    mock_row.amount_original = 100
+    mock_row.currency_original = "ILS"
+    mock_row.amount_ils = 100
+    mock_row.flagged = True
+
+    mock_data = MagicMock()
+    mock_data.rows = [mock_row]
+    mock_data.month = 5
+    mock_data.year = 2026
+    mock_data.period_label = None
+    mock_data.total_ils = 100
+    mock_data.show_dual_currency = False
+
+    mock_cfg = MagicMock()
+    mock_cfg.feedback_language = "en"
+    mock_cfg.report_header = None
+    mock_cfg.report_author = None
+    mock_cfg.force_dual_currency = False
+
+    with patch("app.export.generators.invoice.fetch_report_data", return_value=mock_data), \
+         patch("app.export.generators.invoice.render_pdf", return_value=b"pdf-bytes") as mock_render, \
+         patch("app.export.generators.invoice._get_invoice_config", return_value=mock_cfg):
+        gen = InvoiceGenerator("123@g.us")
+        gen.build_pdf(month=5, year=2026)
+
+    spec = mock_render.call_args.args[0]
+    assert spec.sections[0].rows[0].style == "flagged"
+    # A flagged row's date cell gets the " *" suffix appended (caller's choice
+    # of cell content, per the design doc — not a renderer concern)
+    assert spec.sections[0].rows[0].cells[0] == "— *"
+    # The flagged-note footer becomes an extra_flowable passed alongside the spec
+    # (InvoiceGenerator.build_pdf always calls render_pdf(spec, extra_flowables=...) as a keyword arg)
+    extra_flowables = mock_render.call_args.kwargs["extra_flowables"]
+    assert extra_flowables is not None
+    assert len(extra_flowables) >= 1
 
 
 def test_invoice_generator_generate_xlsx_returns_bytes():
