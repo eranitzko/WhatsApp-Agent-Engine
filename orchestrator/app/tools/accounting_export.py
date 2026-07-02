@@ -303,6 +303,11 @@ def generate_ledger_pdf(
 
     # ── Net balances: one netted line per pair ────────────────────────────────
     net = _compute_net_balances(entries, names)
+    balance_columns = [
+        Column(header=L["from"], width_weight=0.35),
+        Column(header=L["to"], width_weight=0.35),
+        Column(header=L["amount"], type="number", width_weight=0.30),
+    ]
     if net:
         bal_rows = [
             Row(cells=[frm, to, _fmt_currency(float(amt), currency_display)])
@@ -310,17 +315,13 @@ def generate_ledger_pdf(
         ]
         sections.append(TableSection(
             heading=L["net_balances"],
-            columns=[
-                Column(header=L["from"]),
-                Column(header=L["to"]),
-                Column(header=L["amount"], type="number"),
-            ],
+            columns=balance_columns,
             rows=bal_rows,
         ))
     else:
         sections.append(TableSection(
             heading=L["net_balances"],
-            columns=[Column(header=L["from"]), Column(header=L["to"]), Column(header=L["amount"], type="number")],
+            columns=balance_columns,
             rows=[],
             empty_message=L["all_settled"],
         ))
@@ -399,11 +400,11 @@ def generate_ledger_pdf(
             sections.append(TableSection(
                 heading=f"{name_a} — {name_b}",
                 columns=[
-                    Column(header=L["date"]),
-                    Column(header=L["description"]),
-                    Column(header=name_a, type="number"),
-                    Column(header=name_b, type="number"),
-                    Column(header=L["comments"]),
+                    Column(header=L["date"], width_weight=0.11),
+                    Column(header=L["description"], width_weight=0.29),
+                    Column(header=name_a, type="number", width_weight=0.16),
+                    Column(header=name_b, type="number", width_weight=0.16),
+                    Column(header=L["comments"], width_weight=0.28),
                 ],
                 rows=pair_rows,
                 totals_row=totals_row,
