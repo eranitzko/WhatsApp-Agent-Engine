@@ -12,12 +12,8 @@ from sqlalchemy import or_
 
 from app.db.session import SessionLocal
 from app.db.models import LedgerEntry
-
-_DATE_FORMATS = {
-    "DD/MM/YYYY": lambda d: d.strftime("%d/%m/%Y") if d else "",
-    "YYYY-MM-DD": lambda d: d.isoformat() if d else "",
-    "DD MMM YYYY": lambda d: d.strftime("%d %b %Y") if d else "",
-}
+from app.reports.formatting import format_currency as _fmt_currency
+from app.reports.formatting import format_date as _fmt_date
 
 
 def _phone_to_name_from_db(db, group_jid: str, phones: set[str] | None = None) -> dict[str, str]:
@@ -54,19 +50,6 @@ def _phone_to_name_from_db(db, group_jid: str, phones: set[str] | None = None) -
     for phone in all_phones:
         result.setdefault(phone, phone)
     return result
-
-
-def _fmt_date(d: date_type | None, date_format: str) -> str:
-    formatter = _DATE_FORMATS.get(date_format, _DATE_FORMATS["YYYY-MM-DD"])
-    return formatter(d)
-
-
-def _fmt_currency(amount: float, currency_display: str) -> str:
-    sign = "-" if amount < 0 else ""
-    amount = abs(amount)
-    if currency_display == "₪":
-        return f"{sign}₪{amount:.2f}"
-    return f"{sign}{amount:.2f} ILS"
 
 
 def generate_ledger_xlsx(
@@ -238,29 +221,22 @@ def generate_ledger_pdf(
     filter_phone: str | None = None,
     fmt_config: dict | None = None,
 ) -> bytes:
-    """Generate a PDF ledger report. Supports Hebrew/RTL via pdf_report helpers.
+    """Generate a PDF ledger report via the generic render_pdf renderer.
 
     Layout:
-      - Net balances summary (unchanged).
+      - Net balances summary: one netted line per pair (who owes whom, net amount).
       - One ledger table per counterparty pair: date | description | {name A} |
         {name B} | comments. Each row's amount is placed under whichever side
-        is the from_phone (the one who owed or paid), with a totals row summing
-        each column so the two sums reproduce the net-balance figure above.
+        is the from_phone (the one who owed or paid; payments are signed
+        negative), with a totals row summing each column so the two sums
+        reproduce the net-balance figure above.
 
-    fmt_config keys (from ReportFormat, same as generate_ledger_xlsx):
-      date_format, currency_display, include_settled, sort_by.
+    fmt_config keys (from ReportFormat): date_format, currency_display,
+    include_settled, sort_by, language.
     """
-    import io as _io
     from datetime import datetime, timezone
-
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import cm
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-
-    # Import RTL/Hebrew utilities from pdf_report
-    from app.reports.pdf_report import _bidi, _font, _register_font, _xml
+    from app.reports.render_pdf import render_pdf
+    from app.reports.spec import Column, ReportSpec, Row, TableSection
 
     cfg = fmt_config or {}
     date_format: str = cfg.get("date_format", "YYYY-MM-DD")
@@ -282,83 +258,27 @@ def generate_ledger_pdf(
         except Exception:
             pass
 
-    rtl = (lang == "he")
-    _register_font()
-
     LABELS = {
         "en": {
-            "title": "Family Ledger",
-            "generated": "Generated",
-            "net_balances": "Net Balances",
-            "transactions": "Transactions",
-            "from": "From",
-            "to": "To",
-            "amount": "Amount (₪)",
-            "date": "Date",
-            "description": "Description",
-            "comments": "Comments",
-            "settled": "Settled",
-            "payment": "Payment",
-            "remaining": "remaining",
-            "total": "Total",
-            "all_settled": "All debts settled.",
+            "title": "Family Ledger", "generated": "Generated",
+            "net_balances": "Net Balances", "transactions": "Transactions",
+            "from": "From", "to": "To", "amount": "Amount (₪)", "date": "Date",
+            "description": "Description", "comments": "Comments",
+            "settled": "Settled", "payment": "Payment", "remaining": "remaining",
+            "total": "Total", "all_settled": "All debts settled.",
             "no_transactions": "No transactions found.",
         },
         "he": {
-            "title": "ספר חשבונות משפחתי",
-            "generated": "הופק",
-            "net_balances": "יתרות נטו",
-            "transactions": "עסקאות",
-            "from": "מ",
-            "to": "ל",
-            "amount": "סכום (₪)",
-            "date": "תאריך",
-            "description": "תיאור",
-            "comments": "הערות",
-            "settled": "שולם",
-            "payment": "תשלום",
-            "remaining": "נותר",
-            "total": "סה״כ",
-            "all_settled": "כל החובות סולקו.",
+            "title": "ספר חשבונות משפחתי", "generated": "הופק",
+            "net_balances": "יתרות נטו", "transactions": "עסקאות",
+            "from": "מ", "to": "ל", "amount": "סכום (₪)", "date": "תאריך",
+            "description": "תיאור", "comments": "הערות",
+            "settled": "שולם", "payment": "תשלום", "remaining": "נותר",
+            "total": "סה״כ", "all_settled": "כל החובות סולקו.",
             "no_transactions": "לא נמצאו עסקאות.",
         },
     }
     L = LABELS.get(lang, LABELS["en"])
-
-    def _t(text: str) -> str:
-        # Bidi is applied unconditionally, not gated on the report's overall
-        # language: a Hebrew description/name can appear inside an English
-        # report (or vice versa) since users write free text in either script.
-        # get_display() is a no-op for pure-LTR text, so this is always safe.
-        # Bidi reorder the raw text first, THEN XML-escape — reversing this
-        # order corrupts any text containing a literal ", &, <, or > because
-        # bidi would reorder the escaped entity's characters individually.
-        return _xml(_bidi(text))
-
-    font_n = _font(lang, bold=False)
-    font_b = _font(lang, bold=True)
-
-    from reportlab.lib.enums import TA_RIGHT, TA_LEFT
-    align_enum = TA_RIGHT if rtl else TA_LEFT
-
-    styles = getSampleStyleSheet()
-    normal_style = ParagraphStyle("LN", fontName=font_n, fontSize=9, leading=11, alignment=align_enum)
-    bold_style   = ParagraphStyle("LB", fontName=font_b, fontSize=9, leading=11, alignment=align_enum)
-    title_style  = ParagraphStyle("LT", fontName=font_b, fontSize=14, leading=18,
-                                  alignment=2 if rtl else 0, textColor=colors.HexColor("#1a3c5e"))
-    meta_style   = ParagraphStyle("LM", fontName=font_n, fontSize=8, leading=10,
-                                  alignment=2 if rtl else 0, textColor=colors.HexColor("#555555"))
-    h2_style     = ParagraphStyle("LH2", fontName=font_b, fontSize=11, leading=14,
-                                  alignment=2 if rtl else 0, spaceBefore=8, spaceAfter=4)
-    h3_style     = ParagraphStyle("LH3", fontName=font_b, fontSize=9.5, leading=12,
-                                  alignment=2 if rtl else 0, spaceBefore=6, spaceAfter=2,
-                                  textColor=colors.HexColor("#1a3c5e"))
-
-    def _p(text: str, style=None) -> Paragraph:
-        return Paragraph(_t(text), style or normal_style)
-
-    def _pb(text: str) -> Paragraph:
-        return Paragraph(_t(text), bold_style)
 
     with SessionLocal() as db:
         from app.db.models import LedgerEntry as _LE, HouseholdMember as _HM2
@@ -370,7 +290,6 @@ def generate_ledger_pdf(
         else:
             query = query.filter(_LE.group_jid == group_jid)
         if filter_phone:
-            from sqlalchemy import or_
             query = query.filter(or_(
                 _LE.from_phone == filter_phone,
                 _LE.to_phone == filter_phone,
@@ -380,71 +299,33 @@ def generate_ledger_pdf(
         phones = {e.from_phone for e in entries} | {e.to_phone for e in entries}
         names = _phone_to_name_from_db(db, group_jid, phones)
 
-    buf = _io.BytesIO()
-    MARGIN = 2.0 * cm
-    doc = SimpleDocTemplate(buf, pagesize=A4,
-                            leftMargin=MARGIN, rightMargin=MARGIN,
-                            topMargin=MARGIN, bottomMargin=MARGIN)
-    story = []
+    sections = []
 
-    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    story.append(Paragraph(_t(L["title"]), title_style))
-    story.append(Paragraph(_t(f"{L['generated']}: {generated}"), meta_style))
-    story.append(Spacer(1, 0.5 * cm))
-
-    # ── Net balances: one netted line per pair (who owes whom, net amount) ────
-    story.append(Paragraph(_t(L["net_balances"]), h2_style))
-
-    # Reuses the same netting logic as the XLSX balances sheet: opposing
-    # debts between the same two people are offset against each other so
-    # each pair produces exactly one directional line, not two raw gross ones.
+    # ── Net balances: one netted line per pair ────────────────────────────────
     net = _compute_net_balances(entries, names)
-
-    HDR_BG   = colors.HexColor("#1a3c5e")
-    ALT_BG   = colors.HexColor("#f0f4f8")
-    TOTAL_BG = colors.HexColor("#e8f0fe")
-
     if net:
-        if rtl:
-            hdrs = [_pb(L["amount"]), _pb(L["to"]), _pb(L["from"])]
-        else:
-            hdrs = [_pb(L["from"]), _pb(L["to"]), _pb(L["amount"])]
-        bal_rows = [hdrs]
-        for (frm, to), amt in sorted(net.items()):
-            frm_name = _p(frm)
-            to_name  = _p(to)
-            amt_p    = Paragraph(
-                _fmt_currency(float(amt), currency_display),
-                ParagraphStyle("R", fontName=font_n, fontSize=9, alignment=2),
-            )
-            if rtl:
-                bal_rows.append([amt_p, to_name, frm_name])
-            else:
-                bal_rows.append([frm_name, to_name, amt_p])
-        avail = A4[0] - 2 * MARGIN
-        col_w = [avail * 0.35, avail * 0.35, avail * 0.30]
-        if rtl:
-            col_w = list(reversed(col_w))
-        bal_table = Table(bal_rows, colWidths=col_w)
-        bal_table.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, 0),  HDR_BG),
-            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
-            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, ALT_BG]),
-            ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#c0ccd8")),
-            ("TOPPADDING",    (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 5),
-            ("RIGHTPADDING",  (0, 0), (-1, -1), 5),
-        ]))
-        story.append(bal_table)
+        bal_rows = [
+            Row(cells=[frm, to, _fmt_currency(float(amt), currency_display)])
+            for (frm, to), amt in sorted(net.items())
+        ]
+        sections.append(TableSection(
+            heading=L["net_balances"],
+            columns=[
+                Column(header=L["from"]),
+                Column(header=L["to"]),
+                Column(header=L["amount"], type="number"),
+            ],
+            rows=bal_rows,
+        ))
     else:
-        story.append(Paragraph(_t(L["all_settled"]), normal_style))
+        sections.append(TableSection(
+            heading=L["net_balances"],
+            columns=[Column(header=L["from"]), Column(header=L["to"]), Column(header=L["amount"], type="number")],
+            rows=[],
+            empty_message=L["all_settled"],
+        ))
 
-    story.append(Spacer(1, 0.5 * cm))
-
-    # ── Ledger: one date/description/side-A/side-B/comments table per pair ────
-    story.append(Paragraph(_t(L["transactions"]), h2_style))
-
+    # ── Ledger: one table per counterparty pair ───────────────────────────────
     ledger_entries = entries
     if not include_settled:
         ledger_entries = [
@@ -459,35 +340,26 @@ def generate_ledger_pdf(
         pairs.setdefault(key, []).append(e)
 
     if not pairs:
-        story.append(Paragraph(_t(L["no_transactions"]), normal_style))
+        sections.append(TableSection(
+            heading=L["transactions"],
+            columns=[Column(header=L["date"]), Column(header=L["description"]), Column(header=L["comments"])],
+            rows=[],
+            empty_message=L["no_transactions"],
+        ))
     else:
-        avail = A4[0] - 2 * MARGIN
-        col_w = [avail * 0.11, avail * 0.29, avail * 0.16, avail * 0.16, avail * 0.28]
-        if rtl:
-            col_w = list(reversed(col_w))
-
-        right_style      = ParagraphStyle("PR",  fontName=font_n, fontSize=7, alignment=2)
-        right_bold_style = ParagraphStyle("PRB", fontName=font_b, fontSize=7, alignment=2)
-        cell_style       = ParagraphStyle("PC",  fontName=font_n, fontSize=7, alignment=2 if rtl else 0)
-
-        for (phone_a, phone_b), rows in sorted(
+        for i, ((phone_a, phone_b), rows) in enumerate(sorted(
             pairs.items(),
             key=lambda kv: (names.get(kv[0][0], kv[0][0]), names.get(kv[0][1], kv[0][1])),
-        ):
+        )):
             name_a = names.get(phone_a, phone_a)
             name_b = names.get(phone_b, phone_b)
-
-            story.append(Paragraph(_t(f"{name_a} — {name_b}"), h3_style))
 
             if sort_by == "amount":
                 rows_sorted = sorted(rows, key=lambda e: e.amount_ils, reverse=True)
             else:
                 rows_sorted = sorted(rows, key=lambda e: (e.transaction_date, e.created_at or e.transaction_date))
 
-            headers = [L["date"], L["description"], name_a, name_b, L["comments"]]
-            hdr_row = [_pb(h) for h in (reversed(headers) if rtl else headers)]
-            table_rows = [hdr_row]
-
+            pair_rows = []
             sum_a = Decimal("0")
             sum_b = Decimal("0")
             for e in rows_sorted:
@@ -495,10 +367,6 @@ def generate_ledger_pdf(
                 desc_s = (e.description or "")[:60]
                 remaining = e.amount_ils - (e.amount_settled_ils or Decimal("0"))
 
-                # Payments reduce what the payer owes, so they're signed negative;
-                # debts increase it, so they stay positive. The column totals
-                # below are the signed sum, which is what reproduces the net
-                # balance figure shown in the summary above.
                 signed_amount = -e.amount_ils if e.entry_type == "payment" else e.amount_ils
                 amt_s = _fmt_currency(float(signed_amount), currency_display)
 
@@ -516,43 +384,36 @@ def generate_ledger_pdf(
                     col_a, col_b = "", amt_s
                     sum_b += signed_amount
 
-                cells = [
-                    Paragraph(date_s, cell_style),
-                    Paragraph(_t(desc_s), cell_style),
-                    Paragraph(col_a, right_style),
-                    Paragraph(col_b, right_style),
-                    Paragraph(_t(comment_s), cell_style),
-                ]
-                if rtl:
-                    cells = list(reversed(cells))
-                table_rows.append(cells)
+                pair_rows.append(Row(cells=[date_s, desc_s, col_a, col_b, comment_s]))
 
-            total_cells = [
-                Paragraph("", cell_style),
-                _pb(L["total"]),
-                Paragraph(_fmt_currency(float(sum_a), currency_display), right_bold_style),
-                Paragraph(_fmt_currency(float(sum_b), currency_display), right_bold_style),
-                Paragraph("", cell_style),
-            ]
-            if rtl:
-                total_cells = list(reversed(total_cells))
-            table_rows.append(total_cells)
+            totals_row = Row(
+                cells=[
+                    "", L["total"],
+                    _fmt_currency(float(sum_a), currency_display),
+                    _fmt_currency(float(sum_b), currency_display),
+                    "",
+                ],
+                style="total",
+            )
 
-            t = Table(table_rows, colWidths=col_w, repeatRows=1)
-            t.setStyle(TableStyle([
-                ("BACKGROUND",     (0, 0), (-1, 0),  HDR_BG),
-                ("TEXTCOLOR",      (0, 0), (-1, 0),  colors.white),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, ALT_BG]),
-                ("BACKGROUND",     (0, -1), (-1, -1), TOTAL_BG),
-                ("GRID",           (0, 0), (-1, -1), 0.4, colors.HexColor("#c0ccd8")),
-                ("TOPPADDING",     (0, 0), (-1, -1), 3),
-                ("BOTTOMPADDING",  (0, 0), (-1, -1), 3),
-                ("LEFTPADDING",    (0, 0), (-1, -1), 4),
-                ("RIGHTPADDING",   (0, 0), (-1, -1), 4),
-                ("VALIGN",         (0, 0), (-1, -1), "TOP"),
-            ]))
-            story.append(t)
-            story.append(Spacer(1, 0.4 * cm))
+            sections.append(TableSection(
+                heading=f"{name_a} — {name_b}",
+                columns=[
+                    Column(header=L["date"]),
+                    Column(header=L["description"]),
+                    Column(header=name_a, type="number"),
+                    Column(header=name_b, type="number"),
+                    Column(header=L["comments"]),
+                ],
+                rows=pair_rows,
+                totals_row=totals_row,
+            ))
 
-    doc.build(story)
-    return buf.getvalue()
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    spec = ReportSpec(
+        title=L["title"],
+        lang=lang,
+        generated_label=f"{L['generated']}: {generated}",
+        sections=sections,
+    )
+    return render_pdf(spec)

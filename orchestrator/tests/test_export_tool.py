@@ -199,6 +199,45 @@ def test_generate_ledger_pdf_empty_group_returns_bytes(db):
     assert result[:4] == b"%PDF"
 
 
+def test_generate_ledger_pdf_builds_correct_report_spec(db):
+    from app.db.models import GroupParticipant, Blueprint, GroupRegistry, LedgerEntry
+    from decimal import Decimal
+    from datetime import date
+
+    db.add(Blueprint(id="fa", display_name="FA", system_prompt="p", tools_enabled="[]"))
+    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="fa"))
+    db.add(GroupParticipant(group_jid="123@g.us", phone="111", push_name="Alice"))
+    db.add(GroupParticipant(group_jid="123@g.us", phone="222", push_name="Bob"))
+    db.add(LedgerEntry(
+        transaction_id="tx1", group_jid="123@g.us", entry_type="debt",
+        from_phone="111", to_phone="222",
+        amount_ils=Decimal("100"), amount_settled_ils=Decimal("0"),
+        description="dinner", transaction_date=date(2026, 5, 1),
+    ))
+    db.commit()
+
+    from app.tools import accounting_export
+
+    captured_spec = {}
+
+    def _capture_render_pdf(spec):
+        captured_spec["spec"] = spec
+        return b"%PDF-fake"
+
+    with patch("app.tools.accounting_export.SessionLocal", return_value=_CM(db)), \
+         patch("app.reports.render_pdf.render_pdf", side_effect=_capture_render_pdf):
+        accounting_export.generate_ledger_pdf("123@g.us")
+
+    spec = captured_spec["spec"]
+    assert spec.sections[0].heading == "Net Balances"
+    # Second section is the Alice/Bob pair table
+    pair_section = spec.sections[1]
+    assert "Alice" in pair_section.heading
+    assert "Bob" in pair_section.heading
+    assert pair_section.rows[0].cells[1] == "dinner"
+    assert pair_section.totals_row.style == "total"
+
+
 # ── accounting generator tests ────────────────────────────────────────────────
 
 def test_accounting_generator_build_xlsx_returns_bytes():
