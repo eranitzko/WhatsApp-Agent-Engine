@@ -18,6 +18,7 @@ from app.db.models import (
 _PAYMENT_ENTRY_TYPE = "payment"
 _DEBT_ENTRY_TYPE = "debt"
 from app.tools.accounting_fifo import DebtLeg, apply_payment
+from app.tools.accounting_tools import _net_owed
 from app.utils.phone import normalize_phone
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,28 @@ class AccountService:
         """Return the household_id for a normalized phone, or None."""
         member = db.query(HouseholdMember).filter_by(phone=phone).first()
         return member.household_id if member else None
+
+    def balance_update_message(
+        self, db: Session, group_jid: str, phone: str, other_phone: str, household_id: str | None,
+    ) -> str:
+        """Live "Updated. Your balance with X is now: ..." notice, phone's perspective.
+
+        Recomputed fresh from the ledger (same _net_owed helper get_balance
+        uses) rather than derived from the just-applied transaction, so it
+        reflects the true current state — including any bilateral-netting or
+        overpayment-credit side effects of the transaction that triggered it.
+        """
+        other_name = self.get_display_name(db, other_phone)
+        owes = _net_owed(db, group_jid, phone, other_phone, household_id)
+        owed = _net_owed(db, group_jid, other_phone, phone, household_id)
+        net = owes - owed
+        if net > Decimal("0"):
+            state = f"you owe {other_name} ₪{net:.2f}"
+        elif net < Decimal("0"):
+            state = f"{other_name} owes you ₪{(-net):.2f}"
+        else:
+            state = "settled up"
+        return f"Updated. Your balance with {other_name} is now: {state}."
 
     def get_member_private_group(self, db: Session, phone: str) -> str | None:
         """Return the private group JID for a normalized phone via HouseholdMember.
@@ -459,7 +482,8 @@ class AccountService:
 
             notify_msg = (
                 f"{debtor_name} acknowledged a ₪{float(amount_ils):.2f} debt to you "
-                f"({description}). Your balance has been updated."
+                f"({description}). "
+                + self.balance_update_message(db, reporter_group_jid, payer_phone, debtor_phone, household_id)
             )
             await self.notify_user(db, payer_phone, notify_msg)
             return f"Recorded. {payer_name} has been notified."
@@ -495,6 +519,34 @@ class AccountService:
 
     # ── Payment FIFO settlement ───────────────────────────────────────────────
 
+    def _open_debt_legs(
+        self,
+        db: Session,
+        group_jid: str,
+        from_phone: str,
+        to_phone: str,
+        household_id: str | None,
+    ) -> list[DebtLeg]:
+        q = db.query(LedgerEntry).filter(
+            LedgerEntry.from_phone == from_phone,
+            LedgerEntry.to_phone == to_phone,
+            LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
+        )
+        if household_id:
+            q = q.filter(LedgerEntry.household_id == household_id)
+        else:
+            q = q.filter(LedgerEntry.group_jid == group_jid)
+        rows = q.order_by(LedgerEntry.transaction_date).all()
+        return [
+            DebtLeg(
+                id=r.id,
+                amount_ils=r.amount_ils,
+                amount_settled_ils=r.amount_settled_ils or Decimal("0"),
+                transaction_date=r.transaction_date,
+            )
+            for r in rows
+        ]
+
     async def _apply_payment_fifo(
         self,
         db: Session,
@@ -505,36 +557,40 @@ class AccountService:
         payment_date: _date,
         household_id: str | None = None,
     ) -> str:
-        """Apply FIFO settlement. Scopes debt query by household_id when available."""
+        """Apply FIFO settlement, scoped by household_id when available.
+
+        A payment can exceed what the payer owes the payee in that direction.
+        Rather than silently dropping the excess (the original bug — real ILS
+        amounts vanishing with no ledger trace), this bilaterally nets: any
+        leftover is applied FIFO against the reverse-direction debt (payee
+        owes payer) too. If leftover still remains after that — the payer has
+        paid beyond every known obligation either way — it's recorded as a
+        fresh open reverse-direction debt ("credit from overpayment") so it
+        automatically offsets the payee's next debt to the payer instead of
+        disappearing.
+        """
         now = datetime.now(timezone.utc)
+        all_settlements: list[tuple[str, Decimal]] = []
 
-        # Build debt query — prefer household scope, fall back to group_jid
-        q = db.query(LedgerEntry).filter(
-            LedgerEntry.from_phone == payer_phone,
-            LedgerEntry.to_phone == payee_phone,
-            LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
-        )
-        if household_id:
-            q = q.filter(LedgerEntry.household_id == household_id)
-        else:
-            q = q.filter(LedgerEntry.group_jid == group_jid)
-
-        open_rows = q.order_by(LedgerEntry.transaction_date).all()
-
-        debt_legs = [
-            DebtLeg(
-                id=r.id,
-                amount_ils=r.amount_ils,
-                amount_settled_ils=r.amount_settled_ils or Decimal("0"),
-                transaction_date=r.transaction_date,
-            )
-            for r in open_rows
-        ]
-        result = apply_payment(amount_ils, debt_legs)
+        same_dir_legs = self._open_debt_legs(db, group_jid, payer_phone, payee_phone, household_id)
+        result = apply_payment(amount_ils, same_dir_legs)
         for leg_id, new_settled in result.updated_legs:
             row = db.get(LedgerEntry, leg_id)
             if row:
                 row.amount_settled_ils = new_settled
+        all_settlements.extend(result.settlements)
+        remaining = result.leftover
+
+        if remaining > Decimal("0"):
+            reverse_legs = self._open_debt_legs(db, group_jid, payee_phone, payer_phone, household_id)
+            result2 = apply_payment(remaining, reverse_legs)
+            for leg_id, new_settled in result2.updated_legs:
+                row = db.get(LedgerEntry, leg_id)
+                if row:
+                    row.amount_settled_ils = new_settled
+            all_settlements.extend(result2.settlements)
+            remaining = result2.leftover
+
         payment_leg = LedgerEntry(
             transaction_id=str(_uuid_mod.uuid4()),
             entry_type=_PAYMENT_ENTRY_TYPE,
@@ -550,16 +606,33 @@ class AccountService:
         )
         db.add(payment_leg)
         db.flush()
-        for debt_leg_id, applied_amount in result.settlements:
+        for debt_leg_id, applied_amount in all_settlements:
             db.add(LedgerSettlement(
                 payment_leg_id=payment_leg.id,
                 debt_leg_id=debt_leg_id,
                 amount_ils=applied_amount,
                 created_at=now,
             ))
+
+        if remaining > Decimal("0"):
+            db.add(LedgerEntry(
+                transaction_id=str(_uuid_mod.uuid4()),
+                entry_type=_DEBT_ENTRY_TYPE,
+                household_id=household_id,
+                group_jid=group_jid,
+                from_phone=payee_phone,
+                to_phone=payer_phone,
+                amount_ils=remaining,
+                amount_settled_ils=Decimal("0"),
+                description=f"Credit from overpayment on {payment_date.isoformat()}",
+                transaction_date=payment_date,
+            ))
+
         db.commit()
-        parts = [f"{amt:.2f} ILS off {did[:8]}" for did, amt in result.settlements]
+        parts = [f"{amt:.2f} ILS off {did[:8]}" for did, amt in all_settlements]
         summary = "; ".join(parts) if parts else "no open debts found"
+        if remaining > Decimal("0"):
+            summary += f"; {remaining:.2f} ILS recorded as credit (overpayment)"
         return f"Payment of {amount_ils:.2f} ILS recorded. {summary}."
 
     async def process_payment(
@@ -599,7 +672,7 @@ class AccountService:
             )
             notify_msg = (
                 f"{payee_name} confirmed your ₪{float(amount_ils):.2f} payment. "
-                f"Your balance has been updated."
+                + self.balance_update_message(db, reporter_group_jid, payer_phone, payee_phone, household_id)
             )
             await self.notify_user(db, payer_phone, notify_msg)
             return f"Recorded. {payer_name} has been notified."
@@ -661,7 +734,9 @@ class AccountService:
             await self.notify_user(
                 db, payload["payer_phone"],
                 f"{payee_name} confirmed your ₪{float(amount_ils):.2f} payment. "
-                f"Your balance has been updated."
+                + self.balance_update_message(
+                    db, payload["group_jid"], payload["payer_phone"], payload["payee_phone"], household_id
+                )
             )
             # Acknowledge to the payee (target who just confirmed)
             try:
@@ -694,7 +769,10 @@ class AccountService:
         await self.notify_user(
             db, payload["payer_phone"],
             f"{debtor_name} confirmed the ₪{float(entry.amount_ils):.2f} debt "
-            f"({payload['description']}). Your balance has been updated."
+            f"({payload['description']}). "
+            + self.balance_update_message(
+                db, payload["group_jid"], payload["payer_phone"], payload["debtor_phone"], household_id
+            )
         )
         # Acknowledge to the debtor (target who just confirmed)
         try:

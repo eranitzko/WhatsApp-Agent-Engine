@@ -348,3 +348,126 @@ def test_resolve_inbound_household_id_returned(db):
     svc = AccountService()
     phone, household_id = svc.resolve_inbound(db, "carol_priv@g.us", "whatever:3@lid")
     assert household_id == h.id
+
+
+# ── Regression: bilateral netting of payment leftover (previously silently lost) ─
+
+def _seed_debt(db, household_id, group_jid, from_phone, to_phone, amount, settled="0", desc="x"):
+    entry = LedgerEntry(
+        transaction_id=f"debt-{from_phone}-{to_phone}-{amount}-{desc}",
+        entry_type="debt",
+        household_id=household_id,
+        group_jid=group_jid,
+        from_phone=from_phone,
+        to_phone=to_phone,
+        amount_ils=Decimal(amount),
+        amount_settled_ils=Decimal(settled),
+        description=desc,
+        transaction_date=date.today(),
+    )
+    db.add(entry)
+    db.commit()
+    return entry
+
+
+@pytest.mark.asyncio
+async def test_apply_payment_fifo_leftover_nets_against_reverse_direction_debt(db):
+    """Regression for the bug found via production verification: a payment
+    exceeding same-direction open debts used to silently drop the excess.
+    It must now apply the excess FIFO against the reverse-direction debt."""
+    h, _ = _seed_household(db, "9725301", "eran_grp@g.us")
+    db.add(HouseholdMember(household_id=h.id, phone="9725302", private_group_jid="sivan_grp@g.us"))
+    db.commit()
+
+    debt_eran_owes_sivan = _seed_debt(db, h.id, "eran_grp@g.us", "9725301", "9725302", "100", desc="a")
+    debt_sivan_owes_eran = _seed_debt(db, h.id, "eran_grp@g.us", "9725302", "9725301", "200", desc="b")
+
+    svc = AccountService()
+    await svc._apply_payment_fifo(
+        db, "eran_grp@g.us", payer_phone="9725302", payee_phone="9725301",
+        amount_ils=Decimal("250"), payment_date=date.today(), household_id=h.id,
+    )
+
+    db.refresh(debt_sivan_owes_eran)
+    db.refresh(debt_eran_owes_sivan)
+    assert debt_sivan_owes_eran.amount_settled_ils == Decimal("200")  # fully settled, same-direction
+    assert debt_eran_owes_sivan.amount_settled_ils == Decimal("50")   # 50 leftover nets the reverse debt
+
+    # No residual credit needed — the 50 leftover was fully absorbed by the reverse debt.
+    all_entries = db.query(LedgerEntry).all()
+    assert len(all_entries) == 3  # 2 debts + 1 payment leg, no extra credit entry
+
+
+@pytest.mark.asyncio
+async def test_apply_payment_fifo_residual_leftover_becomes_credit_entry(db):
+    """When leftover remains even after bilateral netting (payment exceeds
+    every known obligation either way), it must be recorded as an open
+    reverse-direction debt rather than vanishing, so it automatically offsets
+    the payee's next debt to the payer."""
+    h, _ = _seed_household(db, "9725401", "eran_grp2@g.us")
+    db.add(HouseholdMember(household_id=h.id, phone="9725402", private_group_jid="sivan_grp2@g.us"))
+    db.commit()
+
+    _seed_debt(db, h.id, "eran_grp2@g.us", "9725401", "9725402", "30", desc="small")   # Eran owes Sivan 30
+    _seed_debt(db, h.id, "eran_grp2@g.us", "9725402", "9725401", "200", desc="big")    # Sivan owes Eran 200
+
+    svc = AccountService()
+    await svc._apply_payment_fifo(
+        db, "eran_grp2@g.us", payer_phone="9725402", payee_phone="9725401",
+        amount_ils=Decimal("250"), payment_date=date.today(), household_id=h.id,
+    )
+
+    # 250 - 200 (same-direction) = 50 leftover; 50 - 30 (reverse debt) = 20 residual
+    credit = (
+        db.query(LedgerEntry)
+        .filter_by(from_phone="9725401", to_phone="9725402", entry_type="debt")
+        .filter(LedgerEntry.description.like("Credit from overpayment%"))
+        .first()
+    )
+    assert credit is not None
+    assert credit.amount_ils == Decimal("20")
+    assert credit.amount_settled_ils == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_apply_payment_fifo_no_leftover_unaffected(db):
+    """Payment that doesn't exceed same-direction open debts behaves exactly
+    as before — no reverse-direction or credit side effects."""
+    h, _ = _seed_household(db, "9725501", "eran_grp3@g.us")
+    db.add(HouseholdMember(household_id=h.id, phone="9725502", private_group_jid="sivan_grp3@g.us"))
+    db.commit()
+
+    debt_eran_owes_sivan = _seed_debt(db, h.id, "eran_grp3@g.us", "9725501", "9725502", "100", desc="c")
+    debt_sivan_owes_eran = _seed_debt(db, h.id, "eran_grp3@g.us", "9725502", "9725501", "200", desc="d")
+
+    svc = AccountService()
+    await svc._apply_payment_fifo(
+        db, "eran_grp3@g.us", payer_phone="9725502", payee_phone="9725501",
+        amount_ils=Decimal("120"), payment_date=date.today(), household_id=h.id,
+    )
+
+    db.refresh(debt_sivan_owes_eran)
+    db.refresh(debt_eran_owes_sivan)
+    assert debt_sivan_owes_eran.amount_settled_ils == Decimal("120")
+    assert debt_eran_owes_sivan.amount_settled_ils == Decimal("0")  # untouched
+
+
+def test_balance_update_message_formats_debt_owed_and_settled(db):
+    """New confirmation copy: 'Updated. Your balance with X is now: ...'"""
+    h, _ = _seed_household(db, "9725601", "eran_grp4@g.us")
+    db.add(HouseholdMember(household_id=h.id, phone="9725602", private_group_jid="sivan_grp4@g.us"))
+    db.add(UserProfile(phone="9725602", display_name="Sivan"))
+    db.commit()
+
+    _seed_debt(db, h.id, "eran_grp4@g.us", "9725601", "9725602", "40", desc="e")
+
+    svc = AccountService()
+    msg = svc.balance_update_message(db, "eran_grp4@g.us", "9725601", "9725602", h.id)
+    assert msg == "Updated. Your balance with Sivan is now: you owe Sivan ₪40.00."
+
+    # Fully settle it — balance should now read "settled up"
+    entry = db.query(LedgerEntry).filter_by(from_phone="9725601", to_phone="9725602").first()
+    entry.amount_settled_ils = Decimal("40")
+    db.commit()
+    msg2 = svc.balance_update_message(db, "eran_grp4@g.us", "9725601", "9725602", h.id)
+    assert msg2 == "Updated. Your balance with Sivan is now: settled up."
