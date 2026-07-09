@@ -338,6 +338,11 @@ class UserProfile(Base):
     # has registered a group, regardless of household enrollment status.
     private_group_jid            = Column(String, ForeignKey("group_registry.group_jid"), nullable=True, index=True)
     primary_accounting_group_jid = Column(String, ForeignKey("group_registry.group_jid"), nullable=True)
+    # A WhatsApp LID known to belong to this person — resolves identity/ACL
+    # checks in SHARED groups, where WhatsApp sends LIDs instead of phone
+    # numbers and private_group_jid-based resolution doesn't apply (that only
+    # covers personal 1:1 groups). See migration 019.
+    known_lid                    = Column(String, nullable=True, unique=True, index=True)
     created_at                   = Column(DateTime(timezone=True), nullable=False,
                                           default=lambda: datetime.now(timezone.utc))
 

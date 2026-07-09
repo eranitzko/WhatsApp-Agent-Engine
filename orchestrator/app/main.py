@@ -425,7 +425,12 @@ async def _process(payload: WebhookPayload) -> None:
 
         # Compute is_admin server-side — never trust the bridge-supplied flag.
         # The bridge payload field (isAdmin) is untrusted attacker-controlled input.
-        _acl_phone = payload.sender.split("@")[0].split(":")[0]
+        # Use the already-resolved _inbound_phone (LID-safe via resolve_inbound,
+        # including the known_lid strategy for shared groups) rather than
+        # re-deriving a raw, unresolved phone from payload.sender — that
+        # duplicate extraction was the root cause of admins being misidentified
+        # as non-admins whenever WhatsApp sent a LID instead of a phone number.
+        _acl_phone = _inbound_phone or payload.sender.split("@")[0].split(":")[0]
         if not _is_valid_sender_phone(_acl_phone):
             logger.warning("Rejecting message with invalid sender phone format: %r", _acl_phone)
             return

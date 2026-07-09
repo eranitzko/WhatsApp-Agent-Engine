@@ -143,15 +143,22 @@ class AccountService:
     ) -> tuple[str | None, str | None]:
         """Resolve an inbound webhook (group_jid, raw_sender) to (phone, household_id).
 
-        Strategy (LID-safe — group_jid is primary identity):
+        Strategy:
           1. Look up HouseholdMember by private_group_jid.  The group JID of a
              private 1:1 group is stable regardless of whether WhatsApp sends the
-             member's E.164 or LID in the sender field.  This is the only strategy
-             that survives LID migration without a contacts-store mapping.
-          2. Fall back to normalize_phone on the sender JID prefix.  Works for
-             phone-format senders; may return a LID numeric for LID-format senders
-             (acceptable fallback: handle_confirmation_reply has a group-only
-             fallback of its own).
+             member's E.164 or LID in the sender field.  LID-safe, but only
+             covers personal 1:1 groups (private_group_jid is per-person).
+          2. UserProfile by private_group_jid — same idea, covers users not yet
+             household-enrolled.  Also personal-group-only.
+          3. UserProfile.known_lid — a LID previously learned to belong to a
+             specific person (see migration 019).  Unlike 1/2 this works in
+             SHARED groups too, since it matches on the sender's own LID
+             rather than on which group they're in.  Only covers LIDs that
+             have actually been recorded, though.
+          4. Fall back to normalize_phone on the sender JID prefix.  Works for
+             phone-format senders; may return an unrecognized LID numeric for
+             LID-format senders in a shared group (acceptable fallback:
+             handle_confirmation_reply has a group-only fallback of its own).
 
         Returns (phone, household_id) where either may be None on failure.
         """
@@ -180,19 +187,34 @@ class AccountService:
             )
             return profile.phone, household_id
 
-        # 3. Sender-JID extraction — NOT LID-safe; last resort only.
-        #    Logs a warning so every fallback to this path is visible in production.
+        # 3. Extract the raw sender numeric once — used for both the known_lid
+        #    lookup and (if that misses) the final unsafe fallback below.
         try:
-            phone = normalize_phone(raw_sender.split("@")[0].split(":")[0])
+            raw_numeric = normalize_phone(raw_sender.split("@")[0].split(":")[0])
         except ValueError:
             logger.warning("resolve_inbound: could not normalize sender %r", raw_sender)
             return None, None
+
+        # 3a. known_lid lookup — LID-safe even in SHARED groups (unlike 1/2,
+        #     which only work for personal 1:1 groups), for any LID that has
+        #     actually been recorded against a person.
+        lid_profile = db.query(UserProfile).filter_by(known_lid=raw_numeric).first()
+        if lid_profile:
+            household_id = self.get_household_id(db, lid_profile.phone)
+            logger.info(
+                "resolve_inbound: strategy=known_lid phone=%r group=%r sender=%r",
+                lid_profile.phone, group_jid, raw_sender,
+            )
+            return lid_profile.phone, household_id
+
+        # 4. Sender-JID extraction — NOT LID-safe; last resort only.
+        #    Logs a warning so every fallback to this path is visible in production.
         logger.warning(
             "resolve_inbound: strategy=sender_jid (NOT LID-safe) phone=%r group=%r sender=%r",
-            phone, group_jid, raw_sender,
+            raw_numeric, group_jid, raw_sender,
         )
-        household_id = self.get_household_id(db, phone)
-        return phone, household_id
+        household_id = self.get_household_id(db, raw_numeric)
+        return raw_numeric, household_id
 
     def get_personal_group_jid(self, db: Session, phone: str) -> str | None:
         """Return the delivery group JID for a phone.

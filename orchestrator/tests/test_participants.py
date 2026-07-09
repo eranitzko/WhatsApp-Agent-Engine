@@ -214,6 +214,47 @@ def test_build_participant_block_empty_group(db):
     assert block is None
 
 
+def test_build_participant_block_marks_acl_admin_by_canonical_phone(db):
+    """A participant whose GroupParticipant.phone is their real, canonical
+    phone (already matching AdminNumbers directly) is marked '(admin)'."""
+    db.add(Blueprint(id="fa2", display_name="FA", system_prompt="p", tools_enabled="[]"))
+    db.add(GroupRegistry(group_jid="admin1@g.us", blueprint_id="fa2"))
+    db.add(AdminNumbers(phone_number="972501111111", label="Eran"))
+    db.add(GroupParticipant(group_jid="admin1@g.us", phone="972501111111",
+                             push_name="Eran", status="active"))
+    db.add(GroupParticipant(group_jid="admin1@g.us", phone="972509999999",
+                             push_name="Roni", status="active"))
+    db.commit()
+
+    block = build_participant_block(db, "admin1@g.us")
+    assert "Eran (admin): 972501111111" in block
+    assert "Roni: 972509999999" in block  # not an admin — no suffix
+
+
+def test_build_participant_block_marks_acl_admin_via_known_lid(db):
+    """Regression: a shared group where WhatsApp sends a LID (not the real
+    phone) in GroupParticipant.phone — the participant must still be marked
+    '(admin)' once their LID is recorded on UserProfile.known_lid, even
+    though GroupParticipant.phone itself never matches AdminNumbers directly.
+    This is exactly the bug that made the invoice_curator bot tell an actual
+    admin (Sivan) that she wasn't one."""
+    from app.db.models import UserProfile
+
+    db.add(Blueprint(id="fa3", display_name="FA", system_prompt="p", tools_enabled="[]"))
+    db.add(GroupRegistry(group_jid="admin2@g.us", blueprint_id="fa3"))
+    db.add(AdminNumbers(phone_number="972528695501", label="Sivan"))
+    db.add(UserProfile(phone="972528695501", known_lid="8650248708313"))
+    db.add(GroupParticipant(group_jid="admin2@g.us", phone="8650248708313",
+                             push_name="Sivan Itzkovitch", status="active"))
+    db.add(GroupParticipant(group_jid="admin2@g.us", phone="6541369471061",
+                             push_name="Roni", status="active"))
+    db.commit()
+
+    block = build_participant_block(db, "admin2@g.us")
+    assert "Sivan Itzkovitch (admin): 8650248708313" in block
+    assert "Roni: 6541369471061" in block  # not an admin — no suffix
+
+
 # ── Task 6: rename_participant + set_household tools ──────────────────────────
 
 from app.tools.accounting_tools import get_accounting_tools

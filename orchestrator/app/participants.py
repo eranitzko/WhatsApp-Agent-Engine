@@ -7,10 +7,33 @@ from sqlalchemy.orm import Session
 from app.db.models import GroupParticipant
 
 
+def _acl_admin_phones(db: Session) -> set[str]:
+    """All phones (canonical or known LID) that resolve to a bot-ACL admin.
+
+    Cross-references AdminNumbers with UserProfile.known_lid so a participant
+    row whose `phone` is actually a WhatsApp LID (common in shared groups —
+    see migration 019) is still recognized as an admin when their LID is
+    known, not just when GroupParticipant.phone happens to be their canonical
+    number.
+    """
+    from app.db.models import AdminNumbers, UserProfile
+
+    admin_numbers = {a.phone_number for a in db.query(AdminNumbers).all()}
+    admin_phones = set(admin_numbers)
+    for p in db.query(UserProfile).filter(UserProfile.known_lid.isnot(None)).all():
+        if p.phone in admin_numbers:
+            admin_phones.add(p.known_lid)
+    return admin_phones
+
+
 def build_participant_block(db: Session, group_jid: str) -> str | None:
     """Return a formatted participant list for injection into the system prompt.
 
     Includes removed members so the agent can still reference them by name.
+    Marks which members are actual bot-ACL admins (per AdminNumbers) so the
+    agent never has to guess who to direct a user to for admin-only actions —
+    previously it would name arbitrary group members with no admin rights at
+    all, since this block gave no admin/non-admin signal.
     Also appends "Known counterparties" — users registered in the system from
     other groups — so the agent can resolve names even for cross-group accounting.
     Returns None if no participants are recorded for the group.
@@ -22,12 +45,15 @@ def build_participant_block(db: Session, group_jid: str) -> str | None:
         .all()
     )
 
+    admin_phones = _acl_admin_phones(db)
+
     lines = []
     if rows:
         for r in rows:
             display = r.admin_name or r.push_name or r.phone
             prefix = "(removed) " if r.status == "removed" else ""
-            lines.append(f"- {prefix}{display}: {r.phone}")
+            suffix = " (admin)" if r.phone in admin_phones else ""
+            lines.append(f"- {prefix}{display}{suffix}: {r.phone}")
         block = "Family members in this group:\n" + "\n".join(lines)
     else:
         block = "Family members in this group: (none recorded)"
@@ -73,7 +99,8 @@ def build_participant_block(db: Session, group_jid: str) -> str | None:
             gp = db.get(GroupParticipant, (ua.group_jid, ua.phone))
             if gp:
                 name = gp.admin_name or gp.push_name
-        known_lines.append(f"- {name or ua.phone}: {ua.phone}")
+        admin_suffix = " (admin)" if ua.phone in admin_phones else ""
+        known_lines.append(f"- {name or ua.phone}{admin_suffix}: {ua.phone}")
 
     # Collect first names already visible in the group (to avoid duplicating people
     # whose GroupParticipant.phone is a WhatsApp LID rather than a human phone).
@@ -93,7 +120,7 @@ def build_participant_block(db: Session, group_jid: str) -> str | None:
             seen.add(an.phone_number)  # mark as seen so UserAccount loop also skips
             continue
         seen.add(an.phone_number)
-        known_lines.append(f"- {label or an.phone_number}: {an.phone_number}")
+        known_lines.append(f"- {label or an.phone_number} (admin): {an.phone_number}")
 
     if known_lines:
         block += "\n\nKnown counterparties (other registered users):\n" + "\n".join(known_lines)

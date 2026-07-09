@@ -350,6 +350,32 @@ def test_resolve_inbound_household_id_returned(db):
     assert household_id == h.id
 
 
+def test_resolve_inbound_known_lid_resolves_in_shared_group(db):
+    """Regression: a SHARED group (not anyone's private_group_jid) where the
+    sender arrives as a LID must still resolve to the real phone once that
+    LID is recorded via UserProfile.known_lid — this is what main.py's
+    is_admin check now relies on for shared groups, where the existing
+    private_group_jid-based strategies don't apply at all."""
+    h, _ = _seed_household(db, "972528695501", "sivan_priv@g.us")
+    db.add(UserProfile(phone="972528695501", known_lid="8650248708313"))
+    db.commit()
+
+    svc = AccountService()
+    # "shared_grp@g.us" is a group nobody's private_group_jid points to.
+    phone, household_id = svc.resolve_inbound(db, "shared_grp@g.us", "8650248708313@lid")
+    assert phone == "972528695501"
+    assert household_id == h.id
+
+
+def test_resolve_inbound_unknown_lid_in_shared_group_falls_back(db):
+    """An unrecognized LID in a shared group still falls back to the raw
+    numeric (degraded but non-fatal), exactly as before this fix."""
+    svc = AccountService()
+    phone, household_id = svc.resolve_inbound(db, "shared_grp2@g.us", "6541369471061@lid")
+    assert phone == "6541369471061"
+    assert household_id is None
+
+
 # ── Regression: bilateral netting of payment leftover (previously silently lost) ─
 
 def _seed_debt(db, household_id, group_jid, from_phone, to_phone, amount, settled="0", desc="x"):
