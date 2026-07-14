@@ -513,3 +513,37 @@ async def test_export_report_custom_subject_body_resolved_via_workflow_context(d
     call_kwargs = mock_deliver.call_args.kwargs
     assert call_kwargs["subject"] == "Report for May 2026"
     assert call_kwargs["body"] == "Hi, here is your May 2026 report."
+
+
+@pytest.mark.asyncio
+async def test_export_report_uses_resolved_phone_not_raw_lid(db):
+    """Regression: sender_phone for the UserProfile email lookup must come
+    from resolved_phone, not a raw LID split — a mismatch silently falls
+    back to the default report email instead of the user's own."""
+    from app.db.models import UserProfile
+    from app.export.tool import _exec_export_report
+
+    _seed_bp_group(db, "family_accounting", group_jid="456@g.us")
+    db.add(UserProfile(phone="972523206175", email="eran@example.com"))
+    db.commit()
+
+    mock_gen = MagicMock()
+    mock_gen.build_pdf.return_value = (b"pdf", "ledger.pdf")
+    mock_deliver = AsyncMock()
+
+    with patch("app.export.tool.SessionLocal", return_value=_CM2(db)), \
+         patch("app.export.tool.AccountingGenerator", return_value=mock_gen), \
+         patch("app.export.tool.deliver_files", mock_deliver):
+        result = await _exec_export_report(
+            {"format": "pdf", "delivery": "email"},
+            is_admin=True, group_jid="456@g.us",
+            sender="175715853041683@lid", resolved_phone="972523206175",
+        )
+
+    # Before the fix: sender_phone computed from the raw LID never matches
+    # UserProfile.phone, so _resolve_email falls through to the default (None
+    # in this test's settings) and delivery is rejected with "No email
+    # address available" — the observable proxy that the wrong phone was used.
+    assert "No email address available" not in result
+    mock_deliver.assert_called_once()
+    assert mock_deliver.call_args.kwargs["email"] == "eran@example.com"

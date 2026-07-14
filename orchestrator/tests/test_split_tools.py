@@ -190,3 +190,43 @@ async def test_record_split_equal_split(db):
     # Equal split: 200 / 3 ≈ 66.67
     assert all(abs(float(s["amount_ils"]) - 66.67) < 0.1 for s in shares)
     set_svc(None)
+
+
+@pytest.mark.asyncio
+async def test_execute_record_split_uses_resolved_phone_over_raw_sender(db):
+    """Regression: sender_phone must come from ctx["resolved_phone"], not a raw
+    LID split — using the raw LID misattributes reporter_phone in shared groups."""
+    _setup(db)
+    from app.tools.split_tools import get_split_tools, set_account_service as set_svc
+    from unittest.mock import MagicMock
+    mock_svc = MagicMock()
+    mock_split = SplitTransaction(
+        reporter_group_jid="eran_g@g.us", reporter_phone="972523206175",
+        payer_phone="972530", total_amount=Decimal("100"), description="test",
+        status="pending",
+    )
+    mock_split.id = "split-2"
+    mock_svc.process_split = AsyncMock(return_value=mock_split)
+    set_svc(mock_svc)
+
+    with patch("app.tools.split_tools.SessionLocal", return_value=_CM(db)), \
+         patch("app.tools.split_tools.to_ils", new=AsyncMock(return_value=Decimal("100"))):
+        tools = get_split_tools()
+        await tools["record_split"]["executor"](
+            {
+                "payer_phone": "972530",
+                "all_phones": ["972530", "972531"],
+                "amount": 100,
+                "currency": "ILS",
+                "description": "test",
+            },
+            group_jid="eran_g@g.us",
+            sender="175715853041683@lid",
+            resolved_phone="972523206175",
+            is_admin=False,
+        )
+
+    mock_svc.process_split.assert_awaited_once()
+    call_kwargs = mock_svc.process_split.call_args[1]
+    assert call_kwargs["reporter_phone"] == "972523206175"
+    set_svc(None)

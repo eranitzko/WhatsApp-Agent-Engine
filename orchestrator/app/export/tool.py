@@ -52,8 +52,9 @@ async def _exec_export_report(params: dict, **ctx) -> str:
     if not ctx.get("is_admin", False):
         return "Export is admin only."
 
+    from app.utils.phone import resolve_sender_phone
     group_jid: str = ctx.get("group_jid", "")
-    sender_phone: str = (ctx.get("sender", "")).split("@")[0].split(":")[0]
+    sender_phone: str = resolve_sender_phone(ctx)
 
     fmt = params.get("format", "pdf")
     delivery = params.get("delivery", "group")

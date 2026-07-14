@@ -299,11 +299,19 @@ async def _process(payload: WebhookPayload) -> None:
 
         text = payload.text or payload.caption or ""
 
+        # Resolve inbound identity before EVERYTHING below, including the
+        # command-handler dispatch — command_handler's admin check must see
+        # the resolved canonical phone, not a raw LID, or a real admin in a
+        # shared group gets silently rejected from /bind, /pause, etc.
+        _inbound_phone, _inbound_household_id = account_service.resolve_inbound(
+            db, payload.jid, payload.sender
+        )
+
         # Commands are checked before blueprint lookup (/bind works on unregistered groups).
         # Invalidate the route cache after any command so the next message sees fresh state.
         if command_handler.is_command(text):
-            sender_phone = payload.sender.split("@")[0].split(":")[0]
-            reply = await command_handler.handle(db, payload.jid, sender_phone, text)
+            _command_sender_phone = _inbound_phone or payload.sender.split("@")[0].split(":")[0]
+            reply = await command_handler.handle(db, payload.jid, _command_sender_phone, text)
             if reply:
                 await _send(payload.jid, reply)
             router.invalidate(payload.jid)
@@ -313,12 +321,6 @@ async def _process(payload: WebhookPayload) -> None:
         _bot_phone = settings.bot_phone_number or ""
         if _bot_phone and payload.sender.split("@")[0].split(":")[0] == _bot_phone:
             return
-
-        # Resolve inbound identity before blueprint gate — needed for confirmation intercept
-        # on groups that may not be registered (counterpart's private group with LID sender).
-        _inbound_phone, _inbound_household_id = account_service.resolve_inbound(
-            db, payload.jid, payload.sender
-        )
 
         # Cross-group confirmation intercept — BEFORE router.resolve so an unregistered
         # counterpart group cannot silently drop a "yes" reply.

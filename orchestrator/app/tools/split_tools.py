@@ -62,8 +62,8 @@ _SCHEMA = {
 
 
 async def _execute_record_split(params: dict, **kwargs) -> str:
-    sender = kwargs.get("sender", "")
-    sender_phone = sender.split("@")[0].split(":")[0]
+    from app.utils.phone import resolve_sender_phone
+    sender_phone = resolve_sender_phone(kwargs)
     group_jid = kwargs.get("group_jid", "")
 
     payer_phone: str = params["payer_phone"]

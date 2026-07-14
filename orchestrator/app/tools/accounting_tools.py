@@ -17,6 +17,7 @@ from app.db.session import SessionLocal
 from app.tools.accounting_fifo import DebtLeg, apply_payment
 from app.tools.accounting_fx import to_ils
 from app.agent.correction_queue import correction_queue
+from app.utils.phone import resolve_sender_phone
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +56,6 @@ def _phone_to_name_from_db(db, group_jid: str) -> dict[str, str]:
 def _count_admins(db) -> int:
     from app.db.models import AdminNumbers
     return db.query(AdminNumbers).count()
-
-
-def _sender_phone(ctx: dict) -> str:
-    if resolved := ctx.get("resolved_phone"):
-        return resolved
-    sender = ctx.get("sender", "")
-    return sender.split("@")[0].split(":")[0]
 
 
 def _net_owed(
@@ -428,8 +422,7 @@ _SCHEMAS: dict[str, dict] = {
 async def _exec_record_transaction(params: dict, **ctx) -> str:
     from datetime import date as _date
     group_jid = ctx.get("group_jid", "")
-    sender = ctx.get("sender", "")
-    sender_phone = ctx.get("resolved_phone") or sender.split("@")[0].split(":")[0]
+    sender_phone = resolve_sender_phone(ctx)
 
     payer_phone: str = params["payer_phone"]
     participant_phones: list[str] = params["participant_phones"]
@@ -473,8 +466,7 @@ async def _exec_record_transaction(params: dict, **ctx) -> str:
 
 async def _legacy_record_transaction(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
-    sender = ctx.get("sender", "")
-    sender_phone = ctx.get("resolved_phone") or sender.split("@")[0].split(":")[0]
+    sender_phone = resolve_sender_phone(ctx)
     payer = params["payer_phone"]
     participants = params["participant_phones"]
     amount = Decimal(str(params["amount"]))
@@ -561,8 +553,7 @@ async def _legacy_record_transaction(params: dict, **ctx) -> str:
 
 async def _exec_record_payment(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
-    sender = ctx.get("sender", "")
-    sender_phone = ctx.get("resolved_phone") or sender.split("@")[0].split(":")[0]
+    sender_phone = resolve_sender_phone(ctx)
     payer = params["payer_phone"]
     payee = params["payee_phone"]
     amount_ils = Decimal(str(params["amount_ils"]))
@@ -620,12 +611,12 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
 
     # Non-admins may only query their own phone
     if not is_admin:
-        phone_a = _sender_phone(ctx)
+        phone_a = resolve_sender_phone(ctx)
         phone_b = None
 
     with SessionLocal() as db:
         household_id = (
-            _account_service.get_household_id(db, _sender_phone(ctx))
+            _account_service.get_household_id(db, resolve_sender_phone(ctx))
             if _account_service else None
         )
 
@@ -693,7 +684,7 @@ async def _exec_get_debt_summary(params: dict, **ctx) -> str:
     from collections import defaultdict
     group_jid = ctx.get("group_jid", "")
     is_admin = ctx.get("is_admin", False)
-    sender_phone = _sender_phone(ctx)
+    sender_phone = resolve_sender_phone(ctx)
 
     with SessionLocal() as db:
         household_id = (
@@ -751,10 +742,10 @@ async def _exec_get_history(params: dict, **ctx) -> str:
     if is_admin:
         phone = params.get("phone")
     else:
-        phone = _sender_phone(ctx)
+        phone = resolve_sender_phone(ctx)
 
     with SessionLocal() as db:
-        _scope_phone = _sender_phone(ctx)
+        _scope_phone = resolve_sender_phone(ctx)
         household_id = (
             _account_service.get_household_id(db, _scope_phone)
             if _account_service and _scope_phone else None
@@ -798,7 +789,7 @@ async def _exec_get_transaction(params: dict, **ctx) -> str:
     if len(tx_prefix) < 8:
         return "Transaction ID prefix must be at least 8 characters. Use the ID shown in get_history."
     with SessionLocal() as db:
-        _admin_phone = _sender_phone(ctx)
+        _admin_phone = resolve_sender_phone(ctx)
         _household_id = (
             _account_service.get_household_id(db, _admin_phone)
             if _account_service and _admin_phone else None
@@ -829,7 +820,7 @@ async def _exec_get_transaction(params: dict, **ctx) -> str:
 
 async def _exec_set_reminder(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
-    to_phone = _sender_phone(ctx)
+    to_phone = resolve_sender_phone(ctx)
     if not to_phone:
         return "Error: could not determine sender phone. Please try again."
     message = params["message"]
@@ -862,7 +853,7 @@ async def _exec_set_reminder(params: dict, **ctx) -> str:
 
 async def _exec_list_reminders(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
-    to_phone = _sender_phone(ctx)
+    to_phone = resolve_sender_phone(ctx)
     if not to_phone:
         return "Error: could not determine sender phone."
     now = datetime.now(timezone.utc)
@@ -890,7 +881,7 @@ async def _exec_list_reminders(params: dict, **ctx) -> str:
 
 async def _exec_cancel_reminder(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
-    to_phone = _sender_phone(ctx)
+    to_phone = resolve_sender_phone(ctx)
     if not to_phone:
         return "Error: could not determine sender phone."
     reminder_id_prefix = params.get("reminder_id", "").strip()
@@ -917,7 +908,7 @@ async def _exec_cancel_reminder(params: dict, **ctx) -> str:
 
 
 async def _exec_save_email(params: dict, **ctx) -> str:
-    phone = _sender_phone(ctx)
+    phone = resolve_sender_phone(ctx)
     if not phone:
         return "Error: could not determine your phone number."
     email = params["email"].strip()
@@ -1015,7 +1006,7 @@ async def _exec_correct_transaction(params: dict, **ctx) -> str:
     if not ctx.get("is_admin"):
         return "Only admins can correct transactions."
     group_jid = ctx.get("group_jid", "")
-    admin_phone = _sender_phone(ctx)
+    admin_phone = resolve_sender_phone(ctx)
     tx_prefix = params.get("transaction_id", "").strip()
     if len(tx_prefix) < 8:
         return "Transaction ID prefix must be at least 8 characters. Use the ID shown in get_history."
@@ -1100,7 +1091,7 @@ async def _exec_correct_transaction(params: dict, **ctx) -> str:
     confirmation_store = ctx.get("confirmation_store")
     if confirmation_store:
         # admin_phone (above) is already the resolved canonical phone via
-        # _sender_phone(ctx) — re-deriving a raw sender split here caused the
+        # resolve_sender_phone(ctx) — re-deriving a raw sender split here caused the
         # confirmation intercept (which compares against the resolved
         # sender_phone) to permanently reject the original requester's own
         # "yes" whenever WhatsApp sent a LID.
@@ -1120,7 +1111,7 @@ async def _exec_apply_correction(params: dict, **ctx) -> str:
     """Internal tool called by the confirmation flow when admin says 'yes'."""
     group_jid = ctx.get("group_jid", "")
     token = params.get("token", "")
-    admin_phone = params.get("admin_phone", "") or _sender_phone(ctx)
+    admin_phone = params.get("admin_phone", "") or resolve_sender_phone(ctx)
 
     correction = correction_queue.get_by_token(group_jid, token)
     if correction is None:
@@ -1133,7 +1124,7 @@ async def _exec_apply_correction(params: dict, **ctx) -> str:
     payer = changes["payer"]
 
     with SessionLocal() as db:
-        _apply_admin_phone = _sender_phone(ctx)
+        _apply_admin_phone = resolve_sender_phone(ctx)
         _apply_household_id = (
             _account_service.get_household_id(db, _apply_admin_phone)
             if _account_service and _apply_admin_phone else None
@@ -1287,7 +1278,7 @@ async def _exec_resend_confirmation(params: dict, **ctx) -> str:
     from app import bridge_client
 
     group_jid: str = ctx.get("group_jid", "")
-    sender_phone: str = ctx.get("resolved_phone") or ctx.get("sender", "").split("@")[0].split(":")[0]
+    sender_phone: str = resolve_sender_phone(ctx)
     target_hint: str | None = params.get("target_name", "").strip() or None
 
     now = datetime.now(timezone.utc)
