@@ -28,3 +28,19 @@ def normalize_phone(raw: str | None) -> str | None:
     if not _PHONE_RE.match(phone):
         raise ValueError(f"Invalid phone number: {raw!r} (normalized: {phone!r})")
     return phone
+
+
+def resolve_sender_phone(ctx: dict) -> str:
+    """Return the resolved canonical phone for the current tool-call context.
+
+    Prefers ctx["resolved_phone"] (the LID-safe phone agent_runner already
+    computed via resolve_inbound) over re-deriving one from the raw
+    sender JID — that raw fallback is only correct for phone-format senders;
+    in shared groups WhatsApp sends an opaque LID instead, and using it
+    directly misattributes ledger entries / lookups to the wrong identity.
+    Falls back to the raw sender split only when resolved_phone is absent.
+    """
+    if resolved := ctx.get("resolved_phone"):
+        return resolved
+    sender = ctx.get("sender", "")
+    return sender.split("@")[0].split(":")[0] if sender else ""
