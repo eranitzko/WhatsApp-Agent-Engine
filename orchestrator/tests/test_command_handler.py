@@ -131,6 +131,8 @@ def test_is_command_recognizes_slash_commands():
     assert handler.is_command("/resume") is True
     assert handler.is_command("/blueprints") is True
     assert handler.is_command("hello world") is False
+    assert handler.is_command("") is False
+    assert handler.is_command("/binding a shelf") is False
 
 
 def test_command_handler_admin_check_uses_canonical_phone(db):
@@ -150,5 +152,3 @@ def test_command_handler_admin_check_uses_canonical_phone(db):
     # Raw LID (pre-resolution) is NOT recognized — proving why main.py must
     # resolve before calling handle(), not pass the raw sender split.
     assert handler._is_admin(db, "175715853041683") is False
-    assert handler.is_command("") is False
-    assert handler.is_command("/binding a shelf") is False
