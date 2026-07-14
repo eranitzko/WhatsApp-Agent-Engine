@@ -31,6 +31,7 @@ from app.tools.split_tools import get_split_tools
 from app.tools.split_tools import set_account_service as set_split_account_service
 from app.tools.automation_tools import get_automation_tools
 from app.export.tool import get_export_tools
+from app.utils.phone import resolve_sender_phone
 from app.tools.send_email_tool import get_send_email_tools
 from app.automation.executor import AutomationExecutor
 from app.scheduler import start_scheduler, stop_scheduler, set_automation_executor
@@ -310,7 +311,9 @@ async def _process(payload: WebhookPayload) -> None:
         # Commands are checked before blueprint lookup (/bind works on unregistered groups).
         # Invalidate the route cache after any command so the next message sees fresh state.
         if command_handler.is_command(text):
-            _command_sender_phone = _inbound_phone or payload.sender.split("@")[0].split(":")[0]
+            _command_sender_phone = resolve_sender_phone(
+                {"resolved_phone": _inbound_phone, "sender": payload.sender}
+            )
             reply = await command_handler.handle(db, payload.jid, _command_sender_phone, text)
             if reply:
                 await _send(payload.jid, reply)
@@ -325,7 +328,9 @@ async def _process(payload: WebhookPayload) -> None:
         # Cross-group confirmation intercept — BEFORE router.resolve so an unregistered
         # counterpart group cannot silently drop a "yes" reply.
         if text.strip().lower() in ("yes", "no", "כן", "לא", "y", "n", "אישור", "ביטול"):
-            _phone_for_lookup = _inbound_phone or payload.sender.split("@")[0].split(":")[0]
+            _phone_for_lookup = resolve_sender_phone(
+                {"resolved_phone": _inbound_phone, "sender": payload.sender}
+            )
             conf = account_service.handle_confirmation_reply(
                 db, payload.jid, _phone_for_lookup, text,
                 household_id=_inbound_household_id,
@@ -432,7 +437,7 @@ async def _process(payload: WebhookPayload) -> None:
         # re-deriving a raw, unresolved phone from payload.sender — that
         # duplicate extraction was the root cause of admins being misidentified
         # as non-admins whenever WhatsApp sent a LID instead of a phone number.
-        _acl_phone = _inbound_phone or payload.sender.split("@")[0].split(":")[0]
+        _acl_phone = resolve_sender_phone({"resolved_phone": _inbound_phone, "sender": payload.sender})
         if not _is_valid_sender_phone(_acl_phone):
             logger.warning("Rejecting message with invalid sender phone format: %r", _acl_phone)
             return

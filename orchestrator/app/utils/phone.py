@@ -1,12 +1,19 @@
-"""Phone-number normalization.
+"""Phone-number normalization and sender-identity resolution.
 
-All phone numbers stored in the DB must go through normalize_phone() at every
-write site and every comparison/lookup site.  The function is intentionally
-narrow: it strips non-digit characters and validates the result as a 7–18 digit
-numeric string.  It does NOT attempt to map WhatsApp LID-format opaque numbers
-(e.g. '8650248708313') to human E.164 numbers — LIDs are stored as-is and used
-as opaque keys.  The guarantee is consistency: the same raw value always produces
-the same stored value.
+normalize_phone() — all phone numbers stored in the DB must go through it at
+every write site and every comparison/lookup site.  The function is
+intentionally narrow: it strips non-digit characters and validates the result
+as a 7–18 digit numeric string.  It does NOT attempt to map WhatsApp
+LID-format opaque numbers (e.g. '8650248708313') to human E.164 numbers —
+LIDs are stored as-is and used as opaque keys.  The guarantee is consistency:
+the same raw value always produces the same stored value.
+
+resolve_sender_phone() — the canonical way to get the resolved sender phone
+for a tool-call/webhook context (ctx["resolved_phone"] with a raw-JID-split
+fallback).  Use it at every call site that needs "who sent this message,
+resolved" instead of re-deriving a raw split inline — that duplication is
+exactly what caused several live LID-attribution bugs before this function
+existed.
 """
 
 from __future__ import annotations
