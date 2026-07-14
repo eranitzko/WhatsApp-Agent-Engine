@@ -50,6 +50,76 @@ async def test_stage_action_calls_store():
     mock_store.set.assert_called_once_with("123@g.us", "remove_invoice", {"invoice_id": "abc"}, "Remove invoice abc", staged_by="")
     assert "yes" in result.lower() or "confirm" in result.lower()
 
+@pytest.mark.asyncio
+async def test_stage_action_uses_resolved_phone_over_raw_sender():
+    """Regression: staged_by must be the resolved canonical phone, not the
+    raw sender JID/LID — using the raw value caused agent_runner's
+    confirmation intercept (which compares against the resolved sender_phone)
+    to permanently reject the original requester's own 'yes' whenever
+    WhatsApp sent a LID instead of a phone number."""
+    mock_store = MagicMock()
+    tools = get_invoice_tools()
+    await tools["stage_action"]["executor"](
+        {"action": "remove_invoice", "params": {"invoice_id": "abc"}, "description": "Remove invoice abc"},
+        group_jid="123@g.us",
+        sender="175715853041683@lid",
+        resolved_phone="972523206175",
+        confirmation_store=mock_store,
+    )
+    mock_store.set.assert_called_once_with(
+        "123@g.us", "remove_invoice", {"invoice_id": "abc"}, "Remove invoice abc",
+        staged_by="972523206175",
+    )
+
+
+@pytest.mark.asyncio
+async def test_stage_action_falls_back_to_raw_sender_without_resolved_phone():
+    mock_store = MagicMock()
+    tools = get_invoice_tools()
+    await tools["stage_action"]["executor"](
+        {"action": "remove_invoice", "params": {"invoice_id": "abc"}, "description": "Remove invoice abc"},
+        group_jid="123@g.us",
+        sender="972523206175@s.whatsapp.net",
+        confirmation_store=mock_store,
+    )
+    mock_store.set.assert_called_once_with(
+        "123@g.us", "remove_invoice", {"invoice_id": "abc"}, "Remove invoice abc",
+        staged_by="972523206175",
+    )
+
+
+@pytest.mark.asyncio
+async def test_stage_action_rejects_zero_amount_before_staging():
+    """set_invoice_amount must be validated at staging time, not just at
+    execution — otherwise a doomed action gets staged, the user confirms it,
+    and only then does exec_set_invoice_amount reject it."""
+    mock_store = MagicMock()
+    tools = get_invoice_tools()
+    result = await tools["stage_action"]["executor"](
+        {"action": "set_invoice_amount", "params": {"invoice_id": "abc", "new_amount": 0},
+         "description": "Set amount to 0"},
+        group_jid="123@g.us",
+        confirmation_store=mock_store,
+    )
+    assert "zero" in result.lower()
+    mock_store.set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_stage_action_allows_negative_amount_for_set_invoice_amount():
+    """Negative amounts ARE valid (refunds/returns) — only zero is rejected."""
+    mock_store = MagicMock()
+    tools = get_invoice_tools()
+    result = await tools["stage_action"]["executor"](
+        {"action": "set_invoice_amount", "params": {"invoice_id": "abc", "new_amount": -22.5},
+         "description": "Set amount to -22.5"},
+        group_jid="123@g.us",
+        confirmation_store=mock_store,
+    )
+    mock_store.set.assert_called_once()
+    assert "confirm" in result.lower()
+
+
 def test_system_prompt_is_substantial():
     from app.prompts.invoice_curator import INVOICE_CURATOR_SYSTEM_PROMPT
     assert len(INVOICE_CURATOR_SYSTEM_PROMPT) > 500
@@ -114,3 +184,76 @@ def test_stage_action_tool_exists():
     tools = get_invoice_tools()
     assert "stage_action" in tools
     assert "request_confirmation" not in tools
+
+
+# ── set_invoice_amount / save_invoice: negative amounts (refunds) allowed ─────
+
+@pytest.mark.asyncio
+async def test_exec_set_invoice_amount_allows_negative_for_refund(db):
+    """Regression: invoices must support negative amounts for refunds/returns
+    — the amount<=0 check previously rejected them outright."""
+    from datetime import date
+    from decimal import Decimal
+    from unittest.mock import patch
+
+    from app.agent.tools import exec_set_invoice_amount
+    from app.db.models import Invoice
+
+    db.add(Invoice(
+        id="inv-neg", group_id="123@g.us", message_id="msg-neg", image_hash="hash-neg",
+        invoice_date=date(2026, 7, 14), vendor="Acme",
+        amount_original=Decimal("22.5"), currency_original="ILS", amount_ils=Decimal("22.5"),
+    ))
+    db.commit()
+
+    class _CM:
+        def __init__(self, s): self._s = s
+        def __enter__(self): return self._s
+        def __exit__(self, *a): pass
+
+    with patch("app.agent.tools.SessionLocal", return_value=_CM(db)):
+        result = await exec_set_invoice_amount(
+            group_id="123@g.us", is_admin=True, invoice_id="inv-neg", new_amount=-22.5,
+        )
+
+    assert "error" not in result
+    db.expire_all()
+    invoice = db.get(Invoice, "inv-neg")
+    assert invoice.amount_original == Decimal("-22.5")
+
+
+@pytest.mark.asyncio
+async def test_exec_set_invoice_amount_rejects_zero():
+    from app.agent.tools import exec_set_invoice_amount
+    result = await exec_set_invoice_amount(
+        group_id="123@g.us", is_admin=True, invoice_id="whatever", new_amount=0,
+    )
+    assert "zero" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_exec_save_invoice_allows_negative_for_refund(db):
+    from unittest.mock import patch
+
+    from app.agent.tools import exec_save_invoice
+
+    class _CM:
+        def __init__(self, s): self._s = s
+        def __enter__(self): return self._s
+        def __exit__(self, *a): pass
+
+    with patch("app.agent.tools.SessionLocal", return_value=_CM(db)):
+        result = await exec_save_invoice(
+            group_id="123@g.us", is_admin=True,
+            vendor="Acme", amount=-50.0, currency="ILS",
+        )
+    assert "error" not in result
+
+
+@pytest.mark.asyncio
+async def test_exec_save_invoice_rejects_zero():
+    from app.agent.tools import exec_save_invoice
+    result = await exec_save_invoice(
+        group_id="123@g.us", is_admin=True, vendor="Acme", amount=0, currency="ILS",
+    )
+    assert "zero" in result["error"].lower()

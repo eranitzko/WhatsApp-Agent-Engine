@@ -251,8 +251,13 @@ def test_build_participant_block_marks_acl_admin_via_known_lid(db):
     db.commit()
 
     block = build_participant_block(db, "admin2@g.us")
-    assert "Sivan Itzkovitch (admin): 8650248708313" in block
-    assert "Roni: 6541369471061" in block  # not an admin — no suffix
+    # Displayed phone is the resolved CANONICAL phone, not the raw LID — this
+    # is what lets the model match agent_runner's injected "Sender phone: X"
+    # (always canonical) against this list. Showing the raw LID here was the
+    # second root cause of an identity mix-up bug (the model could match an
+    # @-mentioned LID against this list but never the real sender's phone).
+    assert "Sivan Itzkovitch (admin): 972528695501" in block
+    assert "Roni: 6541369471061" in block  # not an admin — no suffix, no known_lid so stays raw
 
 
 # ── Task 6: rename_participant + set_household tools ──────────────────────────

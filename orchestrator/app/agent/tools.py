@@ -155,7 +155,10 @@ TOOL_SCHEMAS: list[dict] = [
                 "invoice_id": {"type": "string", "description": "Invoice ID to update."},
                 "new_amount":  {
                     "type": "number",
-                    "description": "Correct amount in the invoice's original currency. Must be positive.",
+                    "description": (
+                        "Correct amount in the invoice's original currency. Cannot be zero. "
+                        "May be negative for a refund/return/credit."
+                    ),
                 },
             },
             "required": ["invoice_id", "new_amount"],
@@ -198,7 +201,13 @@ TOOL_SCHEMAS: list[dict] = [
             "type": "object",
             "properties": {
                 "vendor":          {"type": "string", "description": "Vendor or supplier name."},
-                "amount":          {"type": "number", "description": "Invoice amount in the original currency. Must be positive."},
+                "amount":          {
+                    "type": "number",
+                    "description": (
+                        "Invoice amount in the original currency. Cannot be zero. "
+                        "May be negative for a refund/return/credit."
+                    ),
+                },
                 "currency":        {"type": "string", "description": "ISO 4217 currency code (e.g. ILS, USD, EUR)."},
                 "date":            {"type": "string", "description": "Invoice date in YYYY-MM-DD format. Defaults to today if omitted."},
                 "invoice_number":  {"type": "string", "description": "Invoice or receipt number. Optional."},
@@ -512,8 +521,8 @@ async def exec_set_invoice_amount(
         amount = Decimal(str(new_amount))
     except Exception:
         return {"error": f"Invalid amount '{new_amount}'."}
-    if amount <= 0:
-        return {"error": "Amount must be positive."}
+    if amount == 0:
+        return {"error": "Amount cannot be zero."}
 
     with SessionLocal() as db:
         invoice = db.get(Invoice, invoice_id)
@@ -598,8 +607,8 @@ async def exec_save_invoice(
         amount_decimal = Decimal(str(amount))
     except (InvalidOperation, TypeError):
         return {"error": f"Invalid amount: {amount!r}"}
-    if amount_decimal <= 0:
-        return {"error": "Amount must be positive."}
+    if amount_decimal == 0:
+        return {"error": "Amount cannot be zero."}
 
     currency = currency.strip().upper()
     if len(currency) != 3:
@@ -667,6 +676,7 @@ async def exec_request_confirmation(
     group_id: str, is_admin: bool,
     action: str, params: dict, description: str,
     sender: str = "",
+    resolved_phone: str = "",
     **_,
 ) -> dict:
     if not is_admin:
@@ -707,8 +717,11 @@ async def exec_request_confirmation(
         # Append recipient to description so the user sees it in the confirmation prompt
         description = f"{description} — will be sent to {to_email}"
 
-    sender_raw = sender
-    staged_by = sender_raw.split("@")[0].split(":")[0] if sender_raw else ""
+    # Prefer the resolved canonical phone over the raw sender JID/LID — using
+    # the raw value here caused the confirmation intercept below (which
+    # compares against the resolved sender_phone) to permanently reject the
+    # original requester's own "yes" whenever WhatsApp sent a LID.
+    staged_by = resolved_phone or (sender.split("@")[0].split(":")[0] if sender else "")
     from app.agent.confirmation import confirmation_store
     if not confirmation_store.set(group_id, action, params, description, staged_by=staged_by):
         return {

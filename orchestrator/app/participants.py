@@ -26,6 +26,27 @@ def _acl_admin_phones(db: Session) -> set[str]:
     return admin_phones
 
 
+def _lid_to_canonical_map(db: Session) -> dict[str, str]:
+    """Map every known WhatsApp LID to its owner's canonical phone.
+
+    Used so the participant block displays the SAME phone format
+    agent_runner injects as "Sender phone: X" (always the resolved canonical
+    phone). Without this, a participant whose GroupParticipant.phone is a LID
+    (shared groups) can never be matched by the model against the actual
+    sender of the current message — it has no way to know that LID
+    "175715853041683" and canonical phone "972523206175" are the same person,
+    so it falls back to matching whatever phone-like token IS in both
+    places, e.g. an @-mentioned LID — misattributing messages to the wrong
+    person. This was a root cause of an observed identity mix-up.
+    """
+    from app.db.models import UserProfile
+
+    return {
+        p.known_lid: p.phone
+        for p in db.query(UserProfile).filter(UserProfile.known_lid.isnot(None)).all()
+    }
+
+
 def build_participant_block(db: Session, group_jid: str) -> str | None:
     """Return a formatted participant list for injection into the system prompt.
 
@@ -46,6 +67,7 @@ def build_participant_block(db: Session, group_jid: str) -> str | None:
     )
 
     admin_phones = _acl_admin_phones(db)
+    lid_to_canonical = _lid_to_canonical_map(db)
 
     lines = []
     if rows:
@@ -53,7 +75,8 @@ def build_participant_block(db: Session, group_jid: str) -> str | None:
             display = r.admin_name or r.push_name or r.phone
             prefix = "(removed) " if r.status == "removed" else ""
             suffix = " (admin)" if r.phone in admin_phones else ""
-            lines.append(f"- {prefix}{display}{suffix}: {r.phone}")
+            shown_phone = lid_to_canonical.get(r.phone, r.phone)
+            lines.append(f"- {prefix}{display}{suffix}: {shown_phone}")
         block = "Family members in this group:\n" + "\n".join(lines)
     else:
         block = "Family members in this group: (none recorded)"
@@ -76,7 +99,13 @@ def build_participant_block(db: Session, group_jid: str) -> str | None:
     # person's personal group is separate from the current group.
     from app.db.models import AdminNumbers, UserAccount, UserProfile
 
-    group_phones: set[str] = {r.phone for r in rows}
+    # Include both the raw phone/LID and its canonical equivalent (if known)
+    # so a person already shown in the main list (now under their canonical
+    # phone — see lid_to_canonical above) isn't duplicated below under that
+    # same canonical phone.
+    group_phones: set[str] = {r.phone for r in rows} | {
+        lid_to_canonical[r.phone] for r in rows if r.phone in lid_to_canonical
+    }
     seen: set[str] = set(group_phones)
     known_lines: list[str] = []
 

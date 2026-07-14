@@ -57,3 +57,14 @@ def test_format_amount_none_amount_returns_dash():
 
 def test_format_amount_none_currency_omits_suffix():
     assert format_amount(50.0, None) == "50.00 "
+
+
+def test_format_amount_negative_ils_places_sign_before_symbol():
+    """Regression: invoices can now have negative amounts (refunds/returns).
+    The sign must be extracted and placed before the ₪ symbol, not embedded
+    inside the numeric format spec (which would render '₪-22.50')."""
+    assert format_amount(-22.5, "ILS") == "-₪22.50"
+
+
+def test_format_amount_negative_foreign_currency_places_sign_first():
+    assert format_amount(-99.9, "USD") == "-99.90 USD"

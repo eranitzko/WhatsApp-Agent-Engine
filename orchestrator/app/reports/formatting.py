@@ -41,9 +41,14 @@ def format_currency(amount: float, currency_display: str) -> str:
 def format_amount(amount: float | None, currency: str | None) -> str:
     """Multi-currency formatter: ILS gets the ₪ symbol, any other currency
     gets its code as a suffix. Used by invoice_curator, where an invoice's
-    original amount can be in any currency and is never negative."""
+    original amount can be negative (a refund/return/credit) — sign is
+    extracted and placed before the symbol/suffix rather than left for the
+    numeric format spec to embed inside it (which would render "₪-22.50"
+    instead of "-₪22.50")."""
     if amount is None:
         return "—"
+    sign = "-" if amount < 0 else ""
+    amount = abs(amount)
     if currency == "ILS":
-        return f"₪{amount:,.2f}"
-    return f"{amount:,.2f} {currency or ''}"
+        return f"{sign}₪{amount:,.2f}"
+    return f"{sign}{amount:,.2f} {currency or ''}"

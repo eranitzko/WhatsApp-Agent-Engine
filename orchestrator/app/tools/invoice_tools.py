@@ -117,8 +117,24 @@ async def _exec_request_confirmation(params: dict, **ctx) -> str:
     action_params = params.get("params", {})
     description = params.get("description", action)
 
+    # Validate set_invoice_amount's new_amount NOW, before staging — otherwise
+    # a doomed action gets staged (e.g. zero), the user confirms it, and only
+    # then does exec_set_invoice_amount reject it, having already told the
+    # user their fix was accepted. Negative amounts ARE valid (refunds).
+    if action == "set_invoice_amount":
+        from decimal import Decimal, InvalidOperation
+        try:
+            if Decimal(str(action_params.get("new_amount"))) == 0:
+                return "Amount cannot be zero."
+        except (InvalidOperation, TypeError):
+            return f"Invalid amount: {action_params.get('new_amount')!r}"
+
+    # Prefer the resolved canonical phone over the raw sender JID/LID — using
+    # the raw value here caused agent_runner's confirmation intercept (which
+    # compares against the resolved sender_phone) to permanently reject the
+    # original requester's own "yes" whenever WhatsApp sent a LID.
     sender_raw = ctx.get("sender", "")
-    staged_by = sender_raw.split("@")[0].split(":")[0] if sender_raw else ""
+    staged_by = ctx.get("resolved_phone") or (sender_raw.split("@")[0].split(":")[0] if sender_raw else "")
 
     try:
         if not confirmation_store.set(group_jid, action, action_params, description, staged_by=staged_by):
