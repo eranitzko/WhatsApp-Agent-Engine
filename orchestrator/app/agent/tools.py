@@ -17,7 +17,7 @@ import hashlib
 import logging
 import uuid
 from datetime import date, datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
@@ -516,13 +516,11 @@ async def exec_set_invoice_amount(
     if not is_admin:
         return {"error": "Admin only."}
 
-    from decimal import Decimal
-    try:
-        amount = Decimal(str(new_amount))
-    except Exception:
-        return {"error": f"Invalid amount '{new_amount}'."}
-    if amount == 0:
-        return {"error": "Amount cannot be zero."}
+    from app.utils.invoice_amount import validate_invoice_amount
+    validated = validate_invoice_amount(new_amount)
+    if validated.error:
+        return {"error": validated.error}
+    amount = validated.amount
 
     with SessionLocal() as db:
         invoice = db.get(Invoice, invoice_id)
@@ -602,13 +600,12 @@ async def exec_save_invoice(
         return {"error": "Admin only."}
 
     from app.pipeline.converter import convert_to_ils
+    from app.utils.invoice_amount import validate_invoice_amount
 
-    try:
-        amount_decimal = Decimal(str(amount))
-    except (InvalidOperation, TypeError):
-        return {"error": f"Invalid amount: {amount!r}"}
-    if amount_decimal == 0:
-        return {"error": "Amount cannot be zero."}
+    validated = validate_invoice_amount(amount)
+    if validated.error:
+        return {"error": validated.error}
+    amount_decimal = validated.amount
 
     currency = currency.strip().upper()
     if len(currency) != 3:

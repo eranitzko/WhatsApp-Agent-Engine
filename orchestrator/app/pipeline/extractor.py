@@ -122,16 +122,11 @@ def _validate_and_normalise(raw: dict) -> dict:
     out["vendor"]         = raw.get("vendor") or None
     out["description"]    = raw.get("description") or None
 
-    # amount_original: any nonzero number — negative is valid (a refund/
-    # return/credit receipt). Previously required strictly positive, which
-    # silently discarded a correctly-extracted negative amount straight back
-    # to None, indistinguishable from a genuine extraction failure.
-    amt = raw.get("amount_original")
-    try:
-        amt_f = float(amt) if amt is not None else None
-        out["amount_original"] = amt_f if (amt_f is not None and amt_f != 0) else None
-    except (TypeError, ValueError):
-        out["amount_original"] = None
+    # amount_original: see app/utils/invoice_amount.py for what counts as
+    # valid (nonzero; negative is fine — a refund/return/credit receipt).
+    from app.utils.invoice_amount import validate_invoice_amount
+    validated = validate_invoice_amount(raw.get("amount_original"))
+    out["amount_original"] = float(validated.amount) if validated.amount is not None else None
 
     # currency_original: 3-letter uppercase ISO 4217
     cur = raw.get("currency_original")

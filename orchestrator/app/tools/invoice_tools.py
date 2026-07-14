@@ -122,12 +122,10 @@ async def _exec_request_confirmation(params: dict, **ctx) -> str:
     # then does exec_set_invoice_amount reject it, having already told the
     # user their fix was accepted. Negative amounts ARE valid (refunds).
     if action == "set_invoice_amount":
-        from decimal import Decimal, InvalidOperation
-        try:
-            if Decimal(str(action_params.get("new_amount"))) == 0:
-                return "Amount cannot be zero."
-        except (InvalidOperation, TypeError):
-            return f"Invalid amount: {action_params.get('new_amount')!r}"
+        from app.utils.invoice_amount import validate_invoice_amount
+        validated = validate_invoice_amount(action_params.get("new_amount"))
+        if validated.error:
+            return validated.error
 
     # Prefer the resolved canonical phone over the raw sender JID/LID — using
     # the raw value here caused agent_runner's confirmation intercept (which
