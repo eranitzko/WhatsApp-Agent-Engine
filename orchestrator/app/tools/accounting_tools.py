@@ -710,25 +710,43 @@ async def _exec_get_debt_summary(params: dict, **ctx) -> str:
     if not rows:
         return "No open debts." if is_admin else "You have no open debts."
 
-    # Aggregate net per (debtor, creditor) pair
-    net: dict = defaultdict(Decimal)
+    # Aggregate gross remaining per directed (debtor, creditor) pair
+    gross: dict = defaultdict(Decimal)
     oldest: dict = {}
     for r in rows:
         key = (r.from_phone, r.to_phone)
-        net[key] += r.amount_ils - (r.amount_settled_ils or Decimal("0"))
+        gross[key] += r.amount_ils - (r.amount_settled_ils or Decimal("0"))
         if key not in oldest or r.transaction_date < oldest[key]:
             oldest[key] = r.transaction_date
 
-    lines = []
-    for (debtor, creditor), amount in sorted(net.items(), key=lambda x: -x[1]):
-        if amount <= Decimal("0"):
+    # Bilaterally net each pair (A,B) against (B,A) into one signed line —
+    # matching get_balance's netting. Without this, the same pair can show
+    # up as two separate, contradictory "A owes B" / "B owes A" lines.
+    seen_pairs: set = set()
+    net_lines: list = []
+    for (a, b) in gross:
+        pair = frozenset((a, b))
+        if pair in seen_pairs:
             continue
-        lines.append(
-            f"{debtor} owes {creditor}: ₪{float(amount):,.2f} "
-            f"(since {oldest[(debtor, creditor)]})"
-        )
-    if not lines:
+        seen_pairs.add(pair)
+        forward = gross.get((a, b), Decimal("0"))
+        reverse = gross.get((b, a), Decimal("0"))
+        diff = forward - reverse
+        if diff == Decimal("0"):
+            continue
+        debtor, creditor = (a, b) if diff > 0 else (b, a)
+        amount = abs(diff)
+        since = min(d for d in (oldest.get((a, b)), oldest.get((b, a))) if d is not None)
+        net_lines.append((amount, debtor, creditor, since))
+
+    if not net_lines:
         return "No open debts." if is_admin else "You have no open debts."
+
+    net_lines.sort(key=lambda x: -x[0])
+    lines = [
+        f"{debtor} owes {creditor}: ₪{float(amount):,.2f} (since {since})"
+        for amount, debtor, creditor, since in net_lines
+    ]
     return "\n".join(lines)
 
 

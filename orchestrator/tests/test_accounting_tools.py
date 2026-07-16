@@ -434,3 +434,35 @@ async def test_get_debt_summary_no_debts(db):
             {}, group_jid="g@g.us", sender="972501111111@s.whatsapp.net", is_admin=False
         )
     assert "no open debts" in result.lower() or "no debts" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_get_debt_summary_nets_bilateral_debts(db):
+    """Regression: A owes B 100 and B owes A 30 on separate entries must net
+    to a single 'A owes B: 70' line, matching get_balance's netting - not
+    two separate, contradictory lines."""
+    from app.db.models import LedgerEntry
+    from app.tools.accounting_tools import get_accounting_tools
+
+    db.add(LedgerEntry(
+        transaction_id="tx1", group_jid="123@g.us", entry_type="debt",
+        from_phone="972501", to_phone="972502",
+        amount_ils=Decimal("100"), amount_settled_ils=Decimal("0"),
+        transaction_date=date(2026, 7, 1),
+    ))
+    db.add(LedgerEntry(
+        transaction_id="tx2", group_jid="123@g.us", entry_type="debt",
+        from_phone="972502", to_phone="972501",
+        amount_ils=Decimal("30"), amount_settled_ils=Decimal("0"),
+        transaction_date=date(2026, 7, 2),
+    ))
+    db.commit()
+
+    tools = get_accounting_tools()
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+        result = await tools["get_debt_summary"]["executor"](
+            {}, group_jid="123@g.us", is_admin=True, sender="972501@s.whatsapp.net",
+        )
+
+    assert "972501 owes 972502: ₪70.00" in result
+    assert "972502 owes 972501" not in result
