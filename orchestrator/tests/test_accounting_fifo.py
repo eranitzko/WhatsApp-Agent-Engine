@@ -81,3 +81,12 @@ def test_payment_runs_out_mid_list_partial_settles_last_leg():
     # second debt only partially settled
     second_updated = next(amt for leg_id, amt in result.updated_legs if leg_id == "second")
     assert second_updated == Decimal("50")
+
+
+def test_debtleg_remaining_ils_guards_none_settled():
+    """Regression: DebtLeg.remaining_ils must default a None settled amount
+    to zero, matching LedgerEntry.remaining_ils's guard — otherwise this
+    diverges into a TypeError the moment amount_settled_ils is ever None,
+    while every other copy of this same calculation silently treats it as 0."""
+    leg = DebtLeg(id="x", amount_ils=Decimal("100"), amount_settled_ils=None, transaction_date=date.today())
+    assert leg.remaining_ils == Decimal("100")

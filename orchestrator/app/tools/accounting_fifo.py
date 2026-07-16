@@ -16,7 +16,12 @@ class DebtLeg:
 
     @property
     def remaining_ils(self) -> Decimal:
-        return self.amount_ils - self.amount_settled_ils
+        # Matches LedgerEntry.remaining_ils's null-guard (app/db/models.py) —
+        # this module is deliberately DB-independent (see module docstring),
+        # so it can't import that property directly, but the two must stay
+        # behaviorally identical or FIFO settlement can raise where every
+        # other consumer of the same value silently defaults to zero.
+        return self.amount_ils - (self.amount_settled_ils or Decimal("0"))
 
 
 @dataclass
@@ -55,3 +60,32 @@ def apply_payment(payment_amount: Decimal, open_debts: list[DebtLeg]) -> Settlem
         updated_legs=updated_legs,
         leftover=remaining,
     )
+
+
+def fetch_open_debt_legs(db, group_jid: str, from_phone: str, to_phone: str, household_id: str | None = None) -> list[DebtLeg]:
+    """Query open (partially/fully unsettled) LedgerEntry rows for a directed
+    (from_phone, to_phone) pair, ordered oldest-first, as DebtLeg objects
+    ready for apply_payment(). Requires DB access, unlike the rest of this
+    module — kept here anyway since it's the natural counterpart to
+    apply_payment, and this exact query+construction pattern was previously
+    duplicated between account_service.py and agent_runner.py."""
+    from app.db.models import LedgerEntry
+    q = db.query(LedgerEntry).filter(
+        LedgerEntry.from_phone == from_phone,
+        LedgerEntry.to_phone == to_phone,
+        LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
+    )
+    if household_id:
+        q = q.filter(LedgerEntry.household_id == household_id)
+    else:
+        q = q.filter(LedgerEntry.group_jid == group_jid)
+    rows = q.order_by(LedgerEntry.transaction_date).all()
+    return [
+        DebtLeg(
+            id=r.id,
+            amount_ils=r.amount_ils,
+            amount_settled_ils=r.amount_settled_ils or Decimal("0"),
+            transaction_date=r.transaction_date,
+        )
+        for r in rows
+    ]

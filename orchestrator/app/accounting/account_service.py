@@ -549,25 +549,8 @@ class AccountService:
         to_phone: str,
         household_id: str | None,
     ) -> list[DebtLeg]:
-        q = db.query(LedgerEntry).filter(
-            LedgerEntry.from_phone == from_phone,
-            LedgerEntry.to_phone == to_phone,
-            LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
-        )
-        if household_id:
-            q = q.filter(LedgerEntry.household_id == household_id)
-        else:
-            q = q.filter(LedgerEntry.group_jid == group_jid)
-        rows = q.order_by(LedgerEntry.transaction_date).all()
-        return [
-            DebtLeg(
-                id=r.id,
-                amount_ils=r.amount_ils,
-                amount_settled_ils=r.amount_settled_ils or Decimal("0"),
-                transaction_date=r.transaction_date,
-            )
-            for r in rows
-        ]
+        from app.tools.accounting_fifo import fetch_open_debt_legs
+        return fetch_open_debt_legs(db, group_jid, from_phone, to_phone, household_id)
 
     async def _apply_payment_fifo(
         self,
