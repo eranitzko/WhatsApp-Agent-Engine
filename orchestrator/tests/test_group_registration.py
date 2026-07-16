@@ -110,3 +110,21 @@ async def test_approve_returns_false_when_no_pending(db):
             reply="yes",
         )
     assert handled is False
+
+
+def test_is_pending_reply_recognizes_confirmation_word_used_elsewhere(db):
+    """Regression: this check must recognize every word the cross-group
+    confirmation intercept (app/main.py) recognizes — previously it used
+    a narrower word list missing 'אישור'/'ביטול', so a sys_admin approving a
+    registration with 'אישור' silently fell through instead of approving."""
+    _seed(db)
+    handler = GroupRegistrationHandler()
+    handler._pending["eden_g@g.us"] = {
+        "human_phones": ["972501"],
+        "group_type": "personal",
+        "sys_admin_jids": ["admin_g@g.us"],
+        "created_at": datetime.now(timezone.utc),
+    }
+
+    assert handler.is_pending_reply(db, "admin_g@g.us", "אישור") is True
+    assert handler.is_pending_reply(db, "admin_g@g.us", "ביטול") is True

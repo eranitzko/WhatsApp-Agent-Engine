@@ -32,6 +32,7 @@ from app.tools.split_tools import set_account_service as set_split_account_servi
 from app.tools.automation_tools import get_automation_tools
 from app.export.tool import get_export_tools
 from app.utils.phone import resolve_sender_phone
+from app.agent.reply_words import is_affirmative, is_negative
 from app.tools.send_email_tool import get_send_email_tools
 from app.automation.executor import AutomationExecutor
 from app.scheduler import start_scheduler, stop_scheduler, set_automation_executor
@@ -327,7 +328,7 @@ async def _process(payload: WebhookPayload) -> None:
 
         # Cross-group confirmation intercept — BEFORE router.resolve so an unregistered
         # counterpart group cannot silently drop a "yes" reply.
-        if text.strip().lower() in ("yes", "no", "כן", "לא", "y", "n", "אישור", "ביטול"):
+        if is_affirmative(text) or is_negative(text):
             _phone_for_lookup = resolve_sender_phone(
                 {"resolved_phone": _inbound_phone, "sender": payload.sender}
             )
@@ -383,7 +384,7 @@ async def _process(payload: WebhookPayload) -> None:
             return
 
         # Yes/no intercepts — only relevant for registered sys_admin groups
-        if text.strip().lower() in ("yes", "no", "כן", "לא", "y", "n"):
+        if is_affirmative(text) or is_negative(text):
             group_type = account_service.get_group_type(db, payload.jid)
             if group_type == "sys_admin":
                 if group_registration_handler.is_pending_reply(db, payload.jid, text):

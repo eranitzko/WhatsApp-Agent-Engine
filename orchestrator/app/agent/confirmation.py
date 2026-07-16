@@ -13,10 +13,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-TTL_MINUTES = 5
+from app.agent.reply_words import is_affirmative, is_negative
 
-CONFIRM_WORDS = {"yes", "כן", "confirm", "אישור", "ok", "approve"}
-CANCEL_WORDS  = {"no", "לא", "cancel", "ביטול", "abort"}
+TTL_MINUTES = 5
 
 
 @dataclass
@@ -69,10 +68,10 @@ class ConfirmationStore:
         self._store.pop(group_id, None)
 
     def is_confirm(self, text: str) -> bool:
-        return text.strip().lower() in CONFIRM_WORDS
+        return is_affirmative(text)
 
     def is_cancel(self, text: str) -> bool:
-        return text.strip().lower() in CANCEL_WORDS
+        return is_negative(text)
 
 
 # Singleton

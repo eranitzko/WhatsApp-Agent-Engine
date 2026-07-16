@@ -19,12 +19,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
+from app.agent.reply_words import is_affirmative, is_negative
+
 logger = logging.getLogger(__name__)
 
 TTL_SECONDS = 300  # 5 minutes
-
-CONFIRM_WORDS = {"yes", "כן", "confirm", "אישור", "ok", "approve", "יאללה"}
-CANCEL_WORDS  = {"no", "לא", "cancel", "ביטול", "abort", "reject"}
 
 
 @dataclass
@@ -141,11 +140,11 @@ class MultiConfirmationStore:
 
     @staticmethod
     def is_confirm(text: str) -> bool:
-        return text.strip().lower() in CONFIRM_WORDS
+        return is_affirmative(text)
 
     @staticmethod
     def is_cancel(text: str) -> bool:
-        return text.strip().lower() in CANCEL_WORDS
+        return is_negative(text)
 
 
 # Singleton
