@@ -181,6 +181,35 @@ def test_handle_confirmation_reply_yes_flips_status(db):
     assert conf.status == "confirmed"
 
 
+def test_handle_confirmation_reply_recognizes_word_used_elsewhere(db):
+    """Regression: handle_confirmation_reply had its own independent yes/no
+    word list ({"yes","כן","y","אישור"} / {"no","לא","n","ביטול"}), missed by
+    Task 4's original audit of the other 7 call sites. It must recognize the
+    full union in app.agent.reply_words, e.g. "confirm" (accepted by
+    ConfirmationStore/MultiConfirmationStore but not, until this fix, here)."""
+    _seed_group(db, "tal_grp2b@g.us")
+    _seed_user(db, "972512", "tal_grp2b@g.us")
+    now = datetime.now(timezone.utc)
+    conf = CrossGroupConfirmation(
+        initiator_phone="972500",
+        initiator_group_jid="eden_grp@g.us",
+        target_phone="972512",
+        target_group_jid="tal_grp2b@g.us",
+        action_type="record_expense",
+        action_payload='{"amount_ils": "50.00"}',
+        status="pending",
+        expires_at=now + timedelta(hours=24),
+    )
+    db.add(conf)
+    db.commit()
+
+    svc = AccountService()
+    resolved = svc.handle_confirmation_reply(db, "tal_grp2b@g.us", "972512", "confirm")
+    assert resolved is not None
+    db.refresh(conf)
+    assert conf.status == "confirmed"
+
+
 def test_handle_confirmation_reply_no_flips_status(db):
     _seed_group(db, "tal_grp3@g.us")
     _seed_user(db, "972513", "tal_grp3@g.us")

@@ -17,6 +17,7 @@ from app.db.models import (
 )
 _PAYMENT_ENTRY_TYPE = "payment"
 _DEBT_ENTRY_TYPE = "debt"
+from app.agent.reply_words import is_affirmative, is_negative
 from app.tools.accounting_fifo import DebtLeg, apply_payment
 from app.tools.accounting_tools import _net_owed
 from app.utils.phone import normalize_phone
@@ -448,10 +449,9 @@ class AccountService:
         if conf is None:
             return None
 
-        reply_lower = reply.strip().lower()
-        if reply_lower in ("yes", "כן", "y", "אישור"):
+        if is_affirmative(reply):
             conf.status = "confirmed"
-        elif reply_lower in ("no", "לא", "n", "ביטול"):
+        elif is_negative(reply):
             conf.status = "rejected"
         else:
             return None
