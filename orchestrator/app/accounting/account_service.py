@@ -15,12 +15,13 @@ from app.db.models import (
     HouseholdMember, LedgerEntry, LedgerSettlement, SplitTransaction,
     UserAccount, UserProfile,
 )
-_PAYMENT_ENTRY_TYPE = "payment"
-_DEBT_ENTRY_TYPE = "debt"
 from app.agent.reply_words import is_affirmative, is_negative
 from app.tools.accounting_fifo import DebtLeg, apply_payment
 from app.tools.accounting_tools import _net_owed
 from app.utils.phone import normalize_phone
+
+_PAYMENT_ENTRY_TYPE = "payment"
+_DEBT_ENTRY_TYPE = "debt"
 
 logger = logging.getLogger(__name__)
 
