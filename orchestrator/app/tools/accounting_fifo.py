@@ -1,4 +1,8 @@
-"""Pure FIFO settlement logic — no DB access, fully testable in isolation."""
+"""FIFO settlement logic, fully testable in isolation — no DB access in the
+core logic (DebtLeg, apply_payment). The one deliberate exception is
+fetch_open_debt_legs below, which does query the DB; it lives here anyway
+since it's the natural counterpart to apply_payment (see its own docstring).
+"""
 
 from __future__ import annotations
 
@@ -17,10 +21,11 @@ class DebtLeg:
     @property
     def remaining_ils(self) -> Decimal:
         # Matches LedgerEntry.remaining_ils's null-guard (app/db/models.py) —
-        # this module is deliberately DB-independent (see module docstring),
-        # so it can't import that property directly, but the two must stay
-        # behaviorally identical or FIFO settlement can raise where every
-        # other consumer of the same value silently defaults to zero.
+        # this dataclass's core logic is deliberately DB-independent (see
+        # module docstring), so it can't import that property directly, but
+        # the two must stay behaviorally identical or FIFO settlement can
+        # raise where every other consumer of the same value silently
+        # defaults to zero.
         return self.amount_ils - (self.amount_settled_ils or Decimal("0"))
 
 
