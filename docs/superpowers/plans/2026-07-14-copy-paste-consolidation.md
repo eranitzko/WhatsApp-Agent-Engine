@@ -1880,6 +1880,57 @@ independently instead of in one place."
 
 ---
 
+## Task 13: Consolidate "net a directed pair into one signed line" (found during Task 2's review)
+
+**Problem:** Task 2's code-quality review found that the "given two directed amounts between A and B, produce one signed (debtor, creditor, amount) or nothing if settled" pattern — the exact thing Task 2 just added to `_exec_get_debt_summary` — was *already* duplicated 5 other times before this plan even started:
+- `app/tools/accounting_tools.py`'s `_exec_get_balance`, 3 separate inline copies (search for the `if net > Decimal("0"): ... elif net < Decimal("0"): ...` shape — there are three near-identical occurrences in that one function: the two-phone case, the household-vs-individual case, and the per-partner loop case).
+- `app/accounting/account_service.py` (its own sign/label resolution, ~lines 84-86 — read the file to find the exact current lines, since line numbers may have shifted).
+- `app/tools/accounting_export.py` (~lines 158-160 — same caveat).
+
+Task 2 added a *sixth* variant of this same "resolve sign, pick debtor/creditor, drop if zero" logic instead of extracting a shared helper — worth fixing now that it's freshly visible, rather than letting a 7th copy appear later.
+
+**Files:**
+- Modify: `orchestrator/app/tools/accounting_tools.py` (add the helper, migrate 4 call sites: the 3 in `_exec_get_balance` + the 1 just added to `_exec_get_debt_summary`)
+- Modify: `orchestrator/app/accounting/account_service.py`
+- Modify: `orchestrator/app/tools/accounting_export.py`
+- Test: `orchestrator/tests/test_accounting_tools.py`
+
+- [ ] **Step 1: Read every call site first, in full, before writing the helper**
+
+This task was added retroactively after Task 2 was already implemented and reviewed — unlike Tasks 1-12, the exact current code for each call site has NOT been re-verified against HEAD as part of writing this plan. Before writing anything, read `app/tools/accounting_tools.py`'s `_exec_get_balance` and `_exec_get_debt_summary` in full, `app/accounting/account_service.py` around its sign/label resolution, and `app/tools/accounting_export.py` around its sign/label resolution, to confirm each one actually matches the "resolve sign → pick debtor/creditor → format or drop if zero" shape described above. If any of these turns out NOT to match cleanly (e.g. the label/formatting conventions differ enough that forcing one shared helper would be awkward), it's fine to consolidate only the subset that genuinely fits and note in the commit message which call sites were left alone and why — don't force a bad abstraction just to hit "5 call sites."
+
+- [ ] **Step 2: Write the failing test for the shared helper**
+
+Design the helper's signature based on what you find in Step 1 — a reasonable starting point (adjust based on what the real call sites need):
+
+```python
+def net_pair(a: str, b: str, a_owes_b: Decimal, b_owes_a: Decimal) -> tuple[str, str, Decimal] | None:
+    """Net two directed amounts between two phones into one signed
+    (debtor, creditor, amount), or None if they fully offset (zero net).
+    debtor/creditor are chosen from (a, b) by which direction nets positive."""
+```
+
+Write a test in `orchestrator/tests/test_accounting_tools.py` covering: A nets positive, B nets positive (reversed), exact zero (returns None).
+
+- [ ] **Step 3: Run test to verify it fails, implement, verify it passes**
+
+Standard TDD — this step intentionally has no pre-written implementation, since Step 1 determines the final shape.
+
+- [ ] **Step 4: Migrate the identified call sites, run the full suite after each file**
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add orchestrator/app/tools/accounting_tools.py orchestrator/app/accounting/account_service.py orchestrator/app/tools/accounting_export.py orchestrator/tests/test_accounting_tools.py
+git commit -m "refactor: extract net_pair helper, consolidating 6 copies of sign/debtor/creditor resolution
+
+Found during Task 2's code-quality review: the same 'net two directed
+amounts into one signed line' logic Task 2 added to get_debt_summary
+already existed 5 other times (3 in get_balance alone)."
+```
+
+---
+
 ## Final Steps (after all 12 tasks)
 
 - [ ] Run the full test suite one final time: `cd orchestrator && python -m pytest -q` — expect all passing, total count ≥ 440 (the baseline) plus every new test added across tasks 1-12.
