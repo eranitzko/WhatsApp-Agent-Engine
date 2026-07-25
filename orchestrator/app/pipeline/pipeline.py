@@ -28,6 +28,7 @@ from app.pipeline.converter import convert_to_ils
 from app.pipeline.dedup import check_image_hash, check_invoice_key, compute_hash
 from app.pipeline.extractor import extract_invoice
 from app.pipeline.storage import upload_image, upload_metadata
+from app.utils.invoice_amount import to_float_or_none
 
 logger = logging.getLogger(__name__)
 
@@ -226,9 +227,9 @@ async def process_image_event(event: dict) -> dict:
                 "invoice_number":      invoice_number,
                 "vendor":              vendor,
                 "description":         description,
-                "amount_original":     float(amount_original) if amount_original else None,
+                "amount_original":     to_float_or_none(amount_original),
                 "currency_original":   currency_original,
-                "amount_ils":          float(amount_ils) if amount_ils else None,
+                "amount_ils":          to_float_or_none(amount_ils),
                 "exchange_rate":       float(exchange_rate) if exchange_rate else None,
                 "rate_source":         rate_source,
                 "extraction_confidence": confidence,
@@ -244,9 +245,9 @@ async def process_image_event(event: dict) -> dict:
         "invoice_number":   invoice_number,
         "invoice_date":     invoice_date_str,
         "description":      description,
-        "amount_original":  float(amount_original) if amount_original else None,
+        "amount_original":  to_float_or_none(amount_original),
         "currency_original": currency_original,
-        "amount_ils":       float(amount_ils) if amount_ils else None,
+        "amount_ils":       to_float_or_none(amount_ils),
         "exchange_rate":    float(exchange_rate) if exchange_rate else None,
         "rate_source":      rate_source,
         "confidence":       confidence,
