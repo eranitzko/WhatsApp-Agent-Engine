@@ -50,6 +50,11 @@ Rules:
 - invoice_date must be output in YYYY-MM-DD format.
 - IMPORTANT: These invoices are from Israel. Israeli dates are written DD/MM/YYYY (day first, then month).
   For example, "12/03/2024" means March 12 2024, not December 3. Convert accordingly to YYYY-MM-DD.
+- Some Israeli receipts print the year as only 2 digits, i.e. DD/MM/YY (e.g. "23/07/26"). The date is
+  STILL day first: the FIRST group is the day, the MIDDLE group is the month, and the LAST group is the
+  2-digit year (expand YY to 20YY). Do not mistake the day for the year just because both are 2-digit
+  numbers. For example, "23/07/26" means July 23 2026 (day=23, month=07, year=2026) — the day is NOT the
+  year, and the 2-digit year is NOT the day.
 - currency_original must be a 3-letter ISO 4217 code (e.g. ILS, USD, EUR, GBP).
 - amount_original is the total amount due (the grand total including VAT if shown).
 - description should be concise (under 10 words). State what was purchased or the service — do NOT start with "purchase of", "payment for", "רכישת", or similar preambles. Just name the item or service directly. Write in the same language as the invoice — do NOT translate to English.
