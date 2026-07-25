@@ -90,3 +90,24 @@ def test_debtleg_remaining_ils_guards_none_settled():
     while every other copy of this same calculation silently treats it as 0."""
     leg = DebtLeg(id="x", amount_ils=Decimal("100"), amount_settled_ils=None, transaction_date=date.today())
     assert leg.remaining_ils == Decimal("100")
+
+
+def test_split_evenly_rounds_half_up():
+    """Regression: splitting an amount that lands exactly on a half-cent
+    must round up (matching split_tools.py's existing explicit choice) —
+    previously two of the three call sites defaulted to ROUND_HALF_EVEN
+    instead, silently landing on a different per-person cent value for the
+    identical split depending which tool computed it."""
+    from app.tools.accounting_fifo import split_evenly
+
+    # 100.005 / 1 landing exactly on a half-cent boundary after quantization:
+    # use an amount/count combination that produces exactly x.xx5.
+    result = split_evenly(Decimal("100.005"), 1)
+    assert result == [Decimal("100.01")]  # ROUND_HALF_UP, not ROUND_HALF_EVEN (100.00)
+
+
+def test_split_evenly_returns_one_share_per_person():
+    from app.tools.accounting_fifo import split_evenly
+
+    result = split_evenly(Decimal("100"), 4)
+    assert result == [Decimal("25.00")] * 4

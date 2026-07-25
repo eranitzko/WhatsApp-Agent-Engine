@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date as _date
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from app.db.session import SessionLocal
@@ -121,17 +121,14 @@ def _compute_shares(
 
     unspecified = [p for p in non_payer_phones if p not in specified]
 
+    from app.tools.accounting_fifo import split_evenly
     if unspecified:
         if total_participants and total_participants > len(non_payer_phones):
             # Equal split across all participants; payer absorbs own share
-            per_person = (total / total_participants).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
+            per_person = split_evenly(total, total_participants)[0]
         else:
             remaining = total - specified_total
-            per_person = (remaining / len(unspecified)).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
+            per_person = split_evenly(remaining, len(unspecified))[0]
     else:
         per_person = Decimal("0")
 

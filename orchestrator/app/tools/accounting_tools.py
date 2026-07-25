@@ -483,7 +483,8 @@ async def _legacy_record_transaction(params: dict, **ctx) -> str:
     if not participants:
         return "Error: participant_phones must not be empty."
 
-    per_person = (amount_ils / Decimal(len(participants))).quantize(Decimal("0.01"))
+    from app.tools.accounting_fifo import split_evenly
+    per_person = split_evenly(amount_ils, len(participants))[0]
     desc_with_fx = (
         f"{description} (original: {amount} {currency.upper()})"
         if currency.upper() != "ILS"
@@ -1175,7 +1176,8 @@ async def _exec_apply_correction(params: dict, **ctx) -> str:
         else:
             total_ils = sum(leg.amount_ils for leg in legs)
 
-        per_person = (total_ils / Decimal(len(new_participants))).quantize(Decimal("0.01"))
+        from app.tools.accounting_fifo import split_evenly
+        per_person = split_evenly(total_ils, len(new_participants))[0]
         new_date_val = date.fromisoformat(changes["new_date"]) if changes.get("new_date") else None
 
         # Remove legs for removed participants

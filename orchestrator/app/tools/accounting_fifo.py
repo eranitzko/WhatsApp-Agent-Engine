@@ -8,7 +8,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
+
+
+def split_evenly(total: Decimal, n: int, rounding=ROUND_HALF_UP) -> list[Decimal]:
+    """Split total into n equal shares, each rounded to 2 decimal places.
+
+    Does NOT redistribute leftover cents from rounding — each share is
+    computed independently as (total / n).quantize(...). This matches the
+    pre-existing behavior of every caller being consolidated here; whether
+    remainder cents should instead be distributed to make shares sum
+    exactly to total is a separate product decision, out of scope for this
+    consolidation.
+    """
+    per_person = (total / Decimal(n)).quantize(Decimal("0.01"), rounding=rounding)
+    return [per_person] * n
 
 
 @dataclass
