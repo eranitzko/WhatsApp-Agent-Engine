@@ -14,7 +14,7 @@ from app.db.models import (
     LedgerEntry, LedgerSettlement, ScheduledMessage, UserProfile, ReportFormat,
 )
 from app.db.session import SessionLocal
-from app.tools.accounting_fifo import DebtLeg, apply_payment
+from app.tools.accounting_fifo import DebtLeg, apply_payment, split_evenly
 from app.tools.accounting_fx import to_ils
 from app.agent.correction_queue import correction_queue
 from app.utils.phone import resolve_sender_phone
@@ -483,7 +483,6 @@ async def _legacy_record_transaction(params: dict, **ctx) -> str:
     if not participants:
         return "Error: participant_phones must not be empty."
 
-    from app.tools.accounting_fifo import split_evenly
     per_person = split_evenly(amount_ils, len(participants))[0]
     desc_with_fx = (
         f"{description} (original: {amount} {currency.upper()})"
@@ -1176,7 +1175,6 @@ async def _exec_apply_correction(params: dict, **ctx) -> str:
         else:
             total_ils = sum(leg.amount_ils for leg in legs)
 
-        from app.tools.accounting_fifo import split_evenly
         per_person = split_evenly(total_ils, len(new_participants))[0]
         new_date_val = date.fromisoformat(changes["new_date"]) if changes.get("new_date") else None
 

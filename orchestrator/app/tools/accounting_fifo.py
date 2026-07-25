@@ -11,7 +11,7 @@ from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 
 
-def split_evenly(total: Decimal, n: int, rounding=ROUND_HALF_UP) -> list[Decimal]:
+def split_evenly(total: Decimal, n: int, rounding: str = ROUND_HALF_UP) -> list[Decimal]:
     """Split total into n equal shares, each rounded to 2 decimal places.
 
     Does NOT redistribute leftover cents from rounding — each share is
