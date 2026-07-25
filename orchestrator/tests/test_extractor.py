@@ -35,3 +35,13 @@ def test_validate_and_normalise_non_numeric_amount_stays_none():
     raw = {"invoice_date": "2026-07-14", "vendor": "X", "amount_original": "not a number", "currency_original": "ILS"}
     out = _validate_and_normalise(raw)
     assert out["amount_original"] is None
+
+
+def test_validate_and_normalise_two_digit_year_parsed_via_shared_engine():
+    """Regression: a 2-digit-year date must parse without requiring an
+    admin-configured extra format — the shared date_formats.py engine
+    already supports 2-digit years; extractor.py's own hardcoded regexes
+    didn't, silently failing extraction instead."""
+    raw = {"invoice_date": "14/07/26", "vendor": "X", "amount_original": 50, "currency_original": "ILS"}
+    out = _validate_and_normalise(raw)
+    assert out["invoice_date"] == "2026-07-14"
