@@ -216,26 +216,8 @@ async def process_image_event(event: dict) -> dict:
     # is the source of truth and the DB can be rebuilt from R2 if needed.
     if r2_key:
         try:
-            await upload_metadata(r2_key, {
-                "invoice_id":          invoice_id,
-                "group_id":            jid,
-                "message_id":          message_id,
-                "image_hash":          image_hash,
-                "submitted_by":        sender,
-                "received_at":         datetime.now(timezone.utc).isoformat(),
-                "invoice_date":        invoice_date_str,
-                "invoice_number":      invoice_number,
-                "vendor":              vendor,
-                "description":         description,
-                "amount_original":     to_float_or_none(amount_original),
-                "currency_original":   currency_original,
-                "amount_ils":          to_float_or_none(amount_ils),
-                "exchange_rate":       float(exchange_rate) if exchange_rate else None,
-                "rate_source":         rate_source,
-                "extraction_confidence": confidence,
-                "flagged":             flagged,
-                "flag_reason":         flag_reason,
-            })
+            from app.pipeline.storage import invoice_to_sidecar_dict
+            await upload_metadata(r2_key, invoice_to_sidecar_dict(invoice))
         except RuntimeError:
             logger.warning("Metadata sidecar upload failed for invoice %s — data still in DB", invoice_id)
 
