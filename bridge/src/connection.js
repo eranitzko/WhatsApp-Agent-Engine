@@ -56,7 +56,6 @@ export async function connect() {
     if (qr) {
       console.log('\n📱 Scan this QR code with WhatsApp:\n')
       qrcode.generate(qr, { small: true })
-      console.log('RAW_QR_DATA:' + qr)
       // Fire-and-forget: notify backend to email QR to admin
       axios.post(`${process.env.BACKEND_URL}/internal/qr-notify`, { qr }).catch((err) => {
         console.warn('Could not send QR notification:', err.message)
