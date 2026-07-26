@@ -9,6 +9,7 @@ from app.db.models import (
     SplitTransaction, CrossGroupConfirmation,
 )
 from app.accounting.account_service import AccountService
+from tests.conftest import SessionCM
 
 
 def _setup(db):
@@ -126,19 +127,6 @@ async def test_decline_suspends_split(db):
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-class _CM:
-    def __init__(self, session):
-        self._s = session
-    def __enter__(self):
-        return self._s
-    def __exit__(self, *a):
-        pass
-
-
-# ---------------------------------------------------------------------------
 # Tool registration & executor tests
 # ---------------------------------------------------------------------------
 
@@ -166,7 +154,7 @@ async def test_record_split_equal_split(db):
     mock_svc.process_split = AsyncMock(return_value=mock_split)
     set_svc(mock_svc)
 
-    with patch("app.tools.split_tools.SessionLocal", return_value=_CM(db)), \
+    with patch("app.tools.split_tools.SessionLocal", return_value=SessionCM(db)), \
          patch("app.tools.split_tools.to_ils", new=AsyncMock(return_value=Decimal("200"))):
         tools = get_split_tools()
         result = await tools["record_split"]["executor"](
@@ -209,7 +197,7 @@ async def test_execute_record_split_uses_resolved_phone_over_raw_sender(db):
     mock_svc.process_split = AsyncMock(return_value=mock_split)
     set_svc(mock_svc)
 
-    with patch("app.tools.split_tools.SessionLocal", return_value=_CM(db)), \
+    with patch("app.tools.split_tools.SessionLocal", return_value=SessionCM(db)), \
          patch("app.tools.split_tools.to_ils", new=AsyncMock(return_value=Decimal("100"))):
         tools = get_split_tools()
         await tools["record_split"]["executor"](
