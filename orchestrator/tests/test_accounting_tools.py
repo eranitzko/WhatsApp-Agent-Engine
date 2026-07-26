@@ -7,6 +7,7 @@ import pytest
 
 from app.db.models import LedgerEntry, ScheduledMessage
 from app.tools.accounting_tools import get_accounting_tools
+from tests.conftest import SessionCM
 
 EXPECTED_TOOLS = [
     "record_expense", "record_payment", "get_balance", "get_debt_summary",
@@ -16,18 +17,6 @@ EXPECTED_TOOLS = [
     "create_report_format", "list_report_formats", "delete_report_format",
     "resend_confirmation",
 ]
-
-
-class _CM:
-    """Wrap a plain SQLAlchemy Session as a context manager for patching SessionLocal."""
-    def __init__(self, session):
-        self._s = session
-
-    def __enter__(self):
-        return self._s
-
-    def __exit__(self, *a):
-        pass
 
 
 def test_get_accounting_tools_returns_expected_set():
@@ -62,7 +51,7 @@ async def test_record_transaction_creates_legs_for_each_participant(db):
     mcs = MultiConfirmationStore()
     mcs.set_sender(AsyncMock())
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)), \
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)), \
          patch("app.tools.accounting_tools.to_ils", new=AsyncMock(return_value=Decimal("300"))):
         tools = get_accounting_tools()
         result = await tools["record_expense"]["executor"](
@@ -97,7 +86,7 @@ async def test_get_balance_settled_up(db):
     ))
     db.commit()
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         tools = get_accounting_tools()
         result = await tools["get_balance"]["executor"](
             {"phone_a": "A", "phone_b": "B"},
@@ -120,7 +109,7 @@ async def test_get_balance_shows_debt(db):
     ))
     db.commit()
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         tools = get_accounting_tools()
         result = await tools["get_balance"]["executor"](
             {"phone_a": "A", "phone_b": "B"},
@@ -136,7 +125,7 @@ async def test_get_balance_shows_debt(db):
 @pytest.mark.asyncio
 async def test_set_reminder_creates_scheduled_message(db):
     future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         tools = get_accounting_tools()
         result = await tools["set_reminder"]["executor"](
             {"message": "pay Dana", "send_at": future},
@@ -155,7 +144,7 @@ async def test_set_reminder_creates_scheduled_message(db):
 @pytest.mark.asyncio
 async def test_set_reminder_rejects_past_datetime(db):
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         tools = get_accounting_tools()
         result = await tools["set_reminder"]["executor"](
             {"message": "too late", "send_at": past},
@@ -177,7 +166,7 @@ async def test_record_transaction_uses_account_service_when_injected(db):
     mock_svc.process_transaction = AsyncMock(return_value="Confirmation sent to Tal.")
     at_module.set_account_service(mock_svc)
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)), \
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)), \
          patch("app.tools.accounting_tools.to_ils", new=AsyncMock(return_value=Decimal("100"))):
         tools = get_accounting_tools()
         result = await tools["record_expense"]["executor"](
@@ -243,7 +232,7 @@ async def test_list_reminders_returns_pending(db):
     ))
     db.commit()
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         tools = get_accounting_tools()
         result = await tools["list_reminders"]["executor"](
             {},
@@ -256,7 +245,7 @@ async def test_list_reminders_returns_pending(db):
 
 @pytest.mark.asyncio
 async def test_list_reminders_returns_no_pending_when_empty(db):
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         tools = get_accounting_tools()
         result = await tools["list_reminders"]["executor"](
             {},
@@ -283,7 +272,7 @@ async def test_cancel_reminder_marks_cancelled(db):
     ))
     db.commit()
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         tools = get_accounting_tools()
         result = await tools["cancel_reminder"]["executor"](
             {"reminder_id": msg_id[:6]},
@@ -299,7 +288,7 @@ async def test_cancel_reminder_marks_cancelled(db):
 
 @pytest.mark.asyncio
 async def test_cancel_reminder_not_found(db):
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         tools = get_accounting_tools()
         result = await tools["cancel_reminder"]["executor"](
             {"reminder_id": "zzzz"},
@@ -312,7 +301,7 @@ async def test_cancel_reminder_not_found(db):
 
 @pytest.mark.asyncio
 async def test_cancel_reminder_short_prefix_rejected(db):
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         tools = get_accounting_tools()
         result = await tools["cancel_reminder"]["executor"](
             {"reminder_id": "ab"},
@@ -341,7 +330,7 @@ async def test_list_participants_returns_group_members(db):
     ))
     db.commit()
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         tools = get_accounting_tools()
         result = await tools["list_participants"]["executor"](
             {}, group_jid="g@g.us", sender="972501111111@s.whatsapp.net", is_admin=False
@@ -370,7 +359,7 @@ async def test_get_transaction_returns_detail(db):
     ))
     db.commit()
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         tools = get_accounting_tools()
         result = await tools["get_transaction"]["executor"](
             {"transaction_id": tx_id[:8]},
@@ -385,7 +374,7 @@ async def test_get_transaction_returns_detail(db):
 
 @pytest.mark.asyncio
 async def test_get_transaction_admin_only(db):
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         tools = get_accounting_tools()
         result = await tools["get_transaction"]["executor"](
             {"transaction_id": "any-prefix"},
@@ -417,7 +406,7 @@ async def test_get_debt_summary_shows_open_debts(db):
     ))
     db.commit()
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         tools = get_accounting_tools()
         result = await tools["get_debt_summary"]["executor"](
             {}, group_jid="g@g.us", sender="972501111111@s.whatsapp.net", is_admin=False
@@ -428,7 +417,7 @@ async def test_get_debt_summary_shows_open_debts(db):
 
 @pytest.mark.asyncio
 async def test_get_debt_summary_no_debts(db):
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         tools = get_accounting_tools()
         result = await tools["get_debt_summary"]["executor"](
             {}, group_jid="g@g.us", sender="972501111111@s.whatsapp.net", is_admin=False
@@ -459,7 +448,7 @@ async def test_get_debt_summary_nets_bilateral_debts(db):
     db.commit()
 
     tools = get_accounting_tools()
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["get_debt_summary"]["executor"](
             {}, group_jid="123@g.us", is_admin=True, sender="972501@s.whatsapp.net",
         )
