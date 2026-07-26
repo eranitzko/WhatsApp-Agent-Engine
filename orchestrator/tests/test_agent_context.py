@@ -12,17 +12,7 @@ tool_use — which the Anthropic API rejects with "unexpected tool_use_id".
 from unittest.mock import patch
 
 from app.agent.context import GroupContext
-
-
-class _CM:
-    def __init__(self, session):
-        self._s = session
-
-    def __enter__(self):
-        return self._s
-
-    def __exit__(self, *a):
-        pass
+from tests.conftest import SessionCM
 
 
 def _has_orphaned_tool_result(messages: list[dict]) -> bool:
@@ -49,7 +39,7 @@ def test_add_never_orphans_a_tool_result(db):
     tool_result. Before the fix, the second add() call orphaned the
     tool_result. After the fix, add() shares add_turn's boundary-safe trim.
     """
-    with patch("app.agent.context.SessionLocal", return_value=_CM(db)):
+    with patch("app.agent.context.SessionLocal", return_value=SessionCM(db)):
         ctx = GroupContext("test-group")
         # Seed a complete tool-use turn directly (as if written earlier).
         ctx.messages = [
@@ -83,7 +73,7 @@ def test_get_history_never_returns_an_orphaned_tool_result(db):
     did: even if stored messages are internally consistent, a count-based
     read-time slice can still start mid-turn.
     """
-    with patch("app.agent.context.SessionLocal", return_value=_CM(db)):
+    with patch("app.agent.context.SessionLocal", return_value=SessionCM(db)):
         ctx = GroupContext("test-group-2")
         ctx.messages = [
             {"role": "user", "content": "first turn"},
