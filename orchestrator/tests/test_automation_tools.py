@@ -5,21 +5,15 @@ from unittest.mock import patch
 
 import pytest
 
-from app.db.models import AutomationRule, GroupRegistry, Blueprint
-from tests.conftest import SessionCM
+from app.db.models import AutomationRule
+from tests.conftest import SessionCM, seed_blueprint, seed_group
 
 
 # ── ORM tests ─────────────────────────────────────────────────────────────────
 
 def _seed_group_for_orm(db):
-    db.add(Blueprint(
-        id="invoice_curator",
-        display_name="Invoice Curator",
-        system_prompt="prompt",
-        tools_enabled="[]",
-    ))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="invoice_curator"))
-    db.commit()
+    seed_blueprint(db, id="invoice_curator", display_name="Invoice Curator")
+    seed_group(db, "123@g.us", blueprint_id="invoice_curator")
 
 
 def test_automation_rule_model_has_required_columns(db):
@@ -193,14 +187,8 @@ from app.tools.automation_tools import get_automation_tools
 
 def _seed_group(db):
     """Seed a GroupRegistry row so FK constraints are satisfied."""
-    db.add(Blueprint(
-        id="family_accounting",
-        display_name="Family Accounting",
-        system_prompt="prompt",
-        tools_enabled="[]",
-    ))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="family_accounting"))
-    db.commit()
+    seed_blueprint(db, id="family_accounting", display_name="Family Accounting")
+    seed_group(db, "123@g.us", blueprint_id="family_accounting")
 
 
 def test_get_automation_tools_returns_six_tools():
