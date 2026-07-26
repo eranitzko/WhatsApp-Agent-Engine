@@ -53,12 +53,16 @@ class AutomationExecutor:
         )
 
     @staticmethod
+    def _tool_unavailable_suffix(tool_name: str) -> str:
+        return f"tool '{tool_name}' is not available. Ask your administrator to enable it."
+
+    @staticmethod
     def _tool_unavailable_message(tool_name: str) -> str:
-        return f"⚙️ Automation could not run: tool '{tool_name}' is not available. Ask your administrator to enable it."
+        return f"⚙️ Automation could not run: {AutomationExecutor._tool_unavailable_suffix(tool_name)}"
 
     @staticmethod
     def _tool_unavailable_workflow_message(tool_name: str, step: int) -> str:
-        return f"⚙️ Automation workflow could not run step {step + 1}: tool '{tool_name}' is not available. Ask your administrator to enable it."
+        return f"⚙️ Automation workflow could not run step {step + 1}: {AutomationExecutor._tool_unavailable_suffix(tool_name)}"
 
     async def _run_tool(self, group_jid: str, config: dict) -> None:
         from app.agent.confirmation import confirmation_store as _store
