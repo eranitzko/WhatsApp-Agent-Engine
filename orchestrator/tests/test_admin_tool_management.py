@@ -10,6 +10,7 @@ from app.admin.auth import require_auth
 from app.db.models import Blueprint, SystemConfig
 from app.tool_registry import ToolRegistry
 from app import registry_ref
+from tests.conftest import SessionCM
 
 
 def _make_app(db):
@@ -116,13 +117,8 @@ async def test_agent_runner_filters_globally_disabled_tools(db):
     confirmation_store = MagicMock()
     confirmation_store.get.return_value = None
 
-    class _CM:
-        def __init__(self, s): self._s = s
-        def __enter__(self): return self._s
-        def __exit__(self, *a): pass
-
     with pytest.MonkeyPatch().context() as mp:
-        mp.setattr("app.agent_runner.SessionLocal", lambda: _CM(db))
+        mp.setattr("app.agent_runner.SessionLocal", lambda: SessionCM(db))
         # Prime the class-level cache from the test DB (mirrors what lifespan does at startup)
         AgentRunner.refresh_disabled_tools()
         await runner.run(
@@ -142,20 +138,6 @@ async def test_agent_runner_filters_globally_disabled_tools(db):
     assert "tool_b" not in tool_names  # globally disabled
 
 
-# ── Helpers shared by API tests ───────────────────────────────────────────────
-
-class _SessionCM:
-    def __init__(self, factory):
-        self._factory = factory
-        self._sess = None
-    def __enter__(self):
-        self._sess = self._factory()
-        return self._sess
-    def __exit__(self, *a):
-        if self._sess:
-            self._sess.close()
-
-
 # ── GET /admin/api/tools ──────────────────────────────────────────────────────
 
 def test_list_tools_returns_all_registered(db):
@@ -168,13 +150,8 @@ def test_list_tools_returns_all_registered(db):
     registry_ref.set_registry(reg)
     app = _make_app(db)
 
-    class _CM:
-        def __init__(self, s): self._s = s
-        def __enter__(self): return self._s
-        def __exit__(self, *a): pass
-
     with pytest.MonkeyPatch().context() as mp:
-        mp.setattr("app.admin.api.SessionLocal", lambda: _CM(db))
+        mp.setattr("app.admin.api.SessionLocal", lambda: SessionCM(db))
         client = TestClient(app)
         resp = client.get("/admin/api/tools")
 
@@ -198,13 +175,8 @@ def test_list_tools_reflects_disabled_status(db):
     registry_ref.set_registry(reg)
     app = _make_app(db)
 
-    class _CM:
-        def __init__(self, s): self._s = s
-        def __enter__(self): return self._s
-        def __exit__(self, *a): pass
-
     with pytest.MonkeyPatch().context() as mp:
-        mp.setattr("app.admin.api.SessionLocal", lambda: _CM(db))
+        mp.setattr("app.admin.api.SessionLocal", lambda: SessionCM(db))
         client = TestClient(app)
         resp = client.get("/admin/api/tools")
 
@@ -221,13 +193,8 @@ def test_update_blueprint_tools_saves_to_db(db):
     registry_ref.set_registry(reg)
     app = _make_app(db)
 
-    class _CM:
-        def __init__(self, s): self._s = s
-        def __enter__(self): return self._s
-        def __exit__(self, *a): pass
-
     with pytest.MonkeyPatch().context() as mp:
-        mp.setattr("app.admin.api.SessionLocal", lambda: _CM(db))
+        mp.setattr("app.admin.api.SessionLocal", lambda: SessionCM(db))
         client = TestClient(app)
         resp = client.patch(
             "/admin/api/blueprints/family_accounting/tools",
@@ -246,13 +213,8 @@ def test_update_blueprint_tools_rejects_unknown_tools(db):
     registry_ref.set_registry(reg)
     app = _make_app(db)
 
-    class _CM:
-        def __init__(self, s): self._s = s
-        def __enter__(self): return self._s
-        def __exit__(self, *a): pass
-
     with pytest.MonkeyPatch().context() as mp:
-        mp.setattr("app.admin.api.SessionLocal", lambda: _CM(db))
+        mp.setattr("app.admin.api.SessionLocal", lambda: SessionCM(db))
         client = TestClient(app)
         resp = client.patch(
             "/admin/api/blueprints/family_accounting/tools",
@@ -270,13 +232,8 @@ def test_disable_tool_writes_system_config(db):
     registry_ref.set_registry(reg)
     app = _make_app(db)
 
-    class _CM:
-        def __init__(self, s): self._s = s
-        def __enter__(self): return self._s
-        def __exit__(self, *a): pass
-
     with pytest.MonkeyPatch().context() as mp:
-        mp.setattr("app.admin.api.SessionLocal", lambda: _CM(db))
+        mp.setattr("app.admin.api.SessionLocal", lambda: SessionCM(db))
         client = TestClient(app)
         resp = client.patch("/admin/api/tools/tool_b/enabled", json={"enabled": False})
 
@@ -295,13 +252,8 @@ def test_reenable_tool_removes_from_system_config(db):
     registry_ref.set_registry(reg)
     app = _make_app(db)
 
-    class _CM:
-        def __init__(self, s): self._s = s
-        def __enter__(self): return self._s
-        def __exit__(self, *a): pass
-
     with pytest.MonkeyPatch().context() as mp:
-        mp.setattr("app.admin.api.SessionLocal", lambda: _CM(db))
+        mp.setattr("app.admin.api.SessionLocal", lambda: SessionCM(db))
         client = TestClient(app)
         resp = client.patch("/admin/api/tools/tool_b/enabled", json={"enabled": True})
 
@@ -318,13 +270,8 @@ def test_disable_unknown_tool_returns_404(db):
     registry_ref.set_registry(reg)
     app = _make_app(db)
 
-    class _CM:
-        def __init__(self, s): self._s = s
-        def __enter__(self): return self._s
-        def __exit__(self, *a): pass
-
     with pytest.MonkeyPatch().context() as mp:
-        mp.setattr("app.admin.api.SessionLocal", lambda: _CM(db))
+        mp.setattr("app.admin.api.SessionLocal", lambda: SessionCM(db))
         client = TestClient(app)
         resp = client.patch("/admin/api/tools/not_real/enabled", json={"enabled": False})
 
@@ -339,13 +286,8 @@ def test_remove_tool_from_all_blueprints(db):
     registry_ref.set_registry(reg)
     app = _make_app(db)
 
-    class _CM:
-        def __init__(self, s): self._s = s
-        def __enter__(self): return self._s
-        def __exit__(self, *a): pass
-
     with pytest.MonkeyPatch().context() as mp:
-        mp.setattr("app.admin.api.SessionLocal", lambda: _CM(db))
+        mp.setattr("app.admin.api.SessionLocal", lambda: SessionCM(db))
         client = TestClient(app)
         resp = client.delete("/admin/api/tools/tool_b/blueprints")
 
