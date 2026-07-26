@@ -27,12 +27,16 @@ GROUP_JID = "120363426326481102@g.us"
 
 async def main():
     from app.config import settings
-    from app.db.models import Invoice
+    from app.db.models import GroupRegistry, Invoice
     from app.db.session import SessionLocal
     from app.pipeline.converter import convert_to_ils
     from app.pipeline.dedup import compute_hash
     from app.pipeline.extractor import extract_invoice
     from app.pipeline.storage import upload_metadata
+
+    with SessionLocal() as db:
+        registry_entry = db.get(GroupRegistry, GROUP_JID)
+        custom_instructions = (registry_entry.custom_instructions or "") if registry_entry else ""
 
     s3 = boto3.client(
         "s3",
@@ -72,7 +76,7 @@ async def main():
                 continue
 
             # Re-run Gemini OCR
-            extraction = await extract_invoice(image_bytes, "image/jpeg")
+            extraction = await extract_invoice(image_bytes, "image/jpeg", custom_instructions)
             if extraction.get("error"):
                 logger.warning("  Extraction failed: %s", extraction["error"])
                 failed += 1

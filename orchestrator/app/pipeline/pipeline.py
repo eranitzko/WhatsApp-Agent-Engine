@@ -41,6 +41,9 @@ async def process_image_event(event: dict) -> dict:
       - messageId: WhatsApp message ID
       - imageBytes: raw image bytes (bytes)
       - mimeType: MIME type string, default "image/jpeg"
+      - customInstructions: optional group-specific hints (GroupRegistry.custom_instructions),
+        forwarded to Gemini's extraction prompt — the same text already used in this
+        group's conversational agent, kept in sync so an admin only has to say a thing once.
 
     Returns a result dict suitable for passing to agent.handle_image_event:
       - On success: {invoice_id, vendor, amount_original, currency_original,
@@ -48,10 +51,11 @@ async def process_image_event(event: dict) -> dict:
                      confidence, flagged, flag_reason, duplicate, ...}
       - On error:   {error: str}
     """
-    jid        = event.get("jid", "")
-    sender     = event.get("sender", "")
-    message_id = event.get("messageId", "")
-    mime_type  = event.get("mimeType", "image/jpeg")
+    jid                 = event.get("jid", "")
+    sender              = event.get("sender", "")
+    message_id          = event.get("messageId", "")
+    mime_type           = event.get("mimeType", "image/jpeg")
+    custom_instructions = event.get("customInstructions", "")
 
     # Bridge sends base64-encoded image bytes
     image_b64: str = event.get("imageBase64", "")
@@ -84,7 +88,7 @@ async def process_image_event(event: dict) -> dict:
         }
 
     # ── 3. Gemini OCR ──────────────────────────────────────────────────────────
-    extraction = await extract_invoice(image_bytes, mime_type)
+    extraction = await extract_invoice(image_bytes, mime_type, custom_instructions)
 
     if extraction.get("error"):
         # Still persist a placeholder so the image isn't lost

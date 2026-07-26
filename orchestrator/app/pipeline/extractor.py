@@ -67,6 +67,24 @@ Rules:
 _KEY_FIELDS = ("invoice_date", "invoice_number", "vendor", "amount_original", "currency_original")
 
 
+def _build_prompt(custom_instructions: str | None) -> str:
+    """Append admin-configured group hints (GroupRegistry.custom_instructions —
+    the same free text already fed to the conversational agent's system
+    prompt) to the base extraction prompt. Keeps Gemini's OCR in sync with
+    whatever an admin has told the group's chat agent about this group's
+    invoices (date formats, expected currency, vendor spelling quirks, etc.)
+    instead of only the agent knowing about it.
+    """
+    if not custom_instructions or not custom_instructions.strip():
+        return _EXTRACTION_PROMPT
+    return (
+        f"{_EXTRACTION_PROMPT}\n"
+        "Group-specific hints from the admin (apply these in addition to the "
+        "rules above; they do not override the required JSON schema or field types):\n"
+        f"{custom_instructions.strip()}\n"
+    )
+
+
 def _try_extra_date_formats(raw_date: str) -> date | None:
     """Try admin-configured extra date formats from SystemConfig against raw_date."""
     try:
@@ -155,7 +173,7 @@ def _validate_and_normalise(raw: dict) -> dict:
     return out
 
 
-def _call_gemini_sync(image_bytes: bytes, mime_type: str) -> str:
+def _call_gemini_sync(image_bytes: bytes, mime_type: str, custom_instructions: str | None = None) -> str:
     """Synchronous Gemini API call — must be run in a thread pool to avoid blocking the event loop."""
     from google.api_core import retry as google_retry
     # Disable the SDK's own retry logic — we handle retries ourselves,
@@ -165,27 +183,31 @@ def _call_gemini_sync(image_bytes: bytes, mime_type: str) -> str:
     model = genai.GenerativeModel(settings.gemini_model)
     image_part = {"mime_type": mime_type, "data": image_bytes}
     response = model.generate_content(
-        [_EXTRACTION_PROMPT, image_part],
+        [_build_prompt(custom_instructions), image_part],
         request_options={"retry": no_retry},
     )
     return response.text.strip()
 
 
-async def _call_gemini(image_bytes: bytes, mime_type: str) -> str:
+async def _call_gemini(image_bytes: bytes, mime_type: str, custom_instructions: str | None = None) -> str:
     """Run the blocking Gemini call in a thread pool so the event loop stays free."""
     import asyncio
-    return await asyncio.to_thread(_call_gemini_sync, image_bytes, mime_type)
+    return await asyncio.to_thread(_call_gemini_sync, image_bytes, mime_type, custom_instructions)
 
 
-async def extract_invoice(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
+async def extract_invoice(image_bytes: bytes, mime_type: str = "image/jpeg", custom_instructions: str | None = None) -> dict:
     """Send image bytes to Gemini and return structured extraction result.
+
+    custom_instructions: optional group-specific hints (GroupRegistry.custom_instructions)
+    appended to the base prompt — the same text already used in the group's
+    conversational agent, kept in sync so an admin only has to say a thing once.
 
     Returns a dict with keys: invoice_date, invoice_number, vendor, description,
     amount_original, currency_original, confidence.
     On failure, returns {"error": str, "confidence": 0.0}.
     """
     try:
-        raw_text = await retry(_call_gemini, image_bytes, mime_type, retries=3, base_delay=2.0)
+        raw_text = await retry(_call_gemini, image_bytes, mime_type, custom_instructions, retries=3, base_delay=2.0)
 
         # Strip markdown code fences if Gemini wrapped the JSON
         raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)

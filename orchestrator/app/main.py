@@ -412,6 +412,7 @@ async def _process(payload: WebhookPayload) -> None:
                 "imageBase64": payload.image_base64,
                 "mimeType": payload.mime_type or "image/jpeg",
                 "caption": payload.caption or "",
+                "customInstructions": entry.custom_instructions or "",
             })
             if "error" in pipeline_result:
                 await _send(payload.jid, f"Pipeline error: {pipeline_result['error']}")

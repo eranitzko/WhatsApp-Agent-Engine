@@ -1,4 +1,4 @@
-from app.pipeline.extractor import _validate_and_normalise
+from app.pipeline.extractor import _validate_and_normalise, _build_prompt, _EXTRACTION_PROMPT, extract_invoice
 
 
 def test_validate_and_normalise_negative_amount_kept_for_refund():
@@ -35,3 +35,40 @@ def test_validate_and_normalise_non_numeric_amount_stays_none():
     raw = {"invoice_date": "2026-07-14", "vendor": "X", "amount_original": "not a number", "currency_original": "ILS"}
     out = _validate_and_normalise(raw)
     assert out["amount_original"] is None
+
+
+def test_build_prompt_includes_custom_instructions_when_provided():
+    """Regression: admin-configured group hints (GroupRegistry.custom_instructions)
+    must reach Gemini's own extraction prompt, not just Claude's — otherwise an
+    admin's fix for a vendor-specific quirk (date format, currency, etc.) silently
+    does nothing to the OCR step that actually reads the image."""
+    prompt = _build_prompt("Our receipts print amounts in USD, not ILS.")
+    assert "Our receipts print amounts in USD, not ILS." in prompt
+    assert "invoice_date must be output in YYYY-MM-DD format" in prompt  # base rules preserved
+
+
+def test_build_prompt_unchanged_when_no_custom_instructions():
+    assert _build_prompt("") == _EXTRACTION_PROMPT
+    assert _build_prompt(None) == _EXTRACTION_PROMPT
+    assert _build_prompt("   ") == _EXTRACTION_PROMPT
+
+
+async def test_extract_invoice_forwards_custom_instructions_to_gemini(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        text = (
+            '{"invoice_date": "2026-07-14", "vendor": "X", "amount_original": 10, '
+            '"currency_original": "ILS", "confidence": 0.9}'
+        )
+
+    class FakeModel:
+        def generate_content(self, parts, **kwargs):
+            captured["prompt"] = parts[0]
+            return FakeResponse()
+
+    monkeypatch.setattr("app.pipeline.extractor.genai.GenerativeModel", lambda *a, **k: FakeModel())
+
+    result = await extract_invoice(b"fake-bytes", "image/jpeg", custom_instructions="Vendor X always uses USD.")
+    assert "Vendor X always uses USD." in captured["prompt"]
+    assert result["vendor"] == "X"
