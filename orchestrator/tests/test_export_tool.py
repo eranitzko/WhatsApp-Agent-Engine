@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.conftest import SessionCM
+
 
 # ── delivery tests ────────────────────────────────────────────────────────────
 
@@ -194,8 +196,8 @@ def test_invoice_generator_build_pdf_real_render_pdf_returns_bytes(db):
 
     from app.export.generators.invoice import InvoiceGenerator
 
-    with patch("app.export.generators.invoice.SessionLocal", return_value=_CM(db)), \
-         patch("app.reports.data.SessionLocal", return_value=_CM(db)):
+    with patch("app.export.generators.invoice.SessionLocal", return_value=SessionCM(db)), \
+         patch("app.reports.data.SessionLocal", return_value=SessionCM(db)):
         gen = InvoiceGenerator("123@g.us")
         result_bytes, filename = gen.build_pdf(month=5, year=2026)
 
@@ -253,18 +255,6 @@ def test_invoice_generator_no_data_raises():
 
 # ── ledger PDF tests ──────────────────────────────────────────────────────────
 
-class _CM:
-    """Wrap a plain SQLAlchemy Session as a context manager for patching SessionLocal."""
-    def __init__(self, session):
-        self._s = session
-
-    def __enter__(self):
-        return self._s
-
-    def __exit__(self, *a):
-        pass
-
-
 def test_generate_ledger_pdf_returns_bytes(db):
     from app.db.models import GroupParticipant, Blueprint, GroupRegistry, LedgerEntry
     from decimal import Decimal
@@ -283,7 +273,7 @@ def test_generate_ledger_pdf_returns_bytes(db):
     db.commit()
 
     from app.tools.accounting_export import generate_ledger_pdf
-    with patch("app.tools.accounting_export.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_export.SessionLocal", return_value=SessionCM(db)):
         result = generate_ledger_pdf("123@g.us")
     assert isinstance(result, bytes)
     assert len(result) > 100
@@ -292,7 +282,7 @@ def test_generate_ledger_pdf_returns_bytes(db):
 
 def test_generate_ledger_pdf_empty_group_returns_bytes(db):
     from app.tools.accounting_export import generate_ledger_pdf
-    with patch("app.tools.accounting_export.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_export.SessionLocal", return_value=SessionCM(db)):
         result = generate_ledger_pdf("empty@g.us")
     assert isinstance(result, bytes)
     assert result[:4] == b"%PDF"
@@ -323,7 +313,7 @@ def test_generate_ledger_pdf_builds_correct_report_spec(db):
         captured_spec["spec"] = spec
         return b"%PDF-fake"
 
-    with patch("app.tools.accounting_export.SessionLocal", return_value=_CM(db)), \
+    with patch("app.tools.accounting_export.SessionLocal", return_value=SessionCM(db)), \
          patch("app.reports.render_pdf.render_pdf", side_effect=_capture_render_pdf):
         accounting_export.generate_ledger_pdf("123@g.us")
 
@@ -373,12 +363,6 @@ def _seed_bp_group(db, blueprint_id: str, group_jid: str = "123@g.us"):
     db.commit()
 
 
-class _CM2:
-    def __init__(self, s): self._s = s
-    def __enter__(self): return self._s
-    def __exit__(self, *a): pass
-
-
 @pytest.mark.asyncio
 async def test_export_report_invoice_pdf_to_group(db):
     _seed_bp_group(db, "invoice_curator")
@@ -388,7 +372,7 @@ async def test_export_report_invoice_pdf_to_group(db):
     mock_gen.build_pdf.return_value = (b"pdf", "invoices_May_2026.pdf")
     mock_deliver = AsyncMock()
 
-    with patch("app.export.tool.SessionLocal", return_value=_CM2(db)), \
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)), \
          patch("app.export.tool.InvoiceGenerator", return_value=mock_gen), \
          patch("app.export.tool.deliver_files", mock_deliver):
         result = await _exec_export_report(
@@ -413,7 +397,7 @@ async def test_export_report_accounting_xlsx_by_email(db):
     mock_gen.build_xlsx.return_value = (b"xlsx", "ledger.xlsx")
     mock_deliver = AsyncMock()
 
-    with patch("app.export.tool.SessionLocal", return_value=_CM2(db)), \
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)), \
          patch("app.export.tool.AccountingGenerator", return_value=mock_gen), \
          patch("app.export.tool.deliver_files", mock_deliver), \
          patch.object(settings, "default_report_email", "admin@example.com"):
@@ -433,7 +417,7 @@ async def test_export_report_non_admin_rejected(db):
     _seed_bp_group(db, "family_accounting")
     from app.export.tool import _exec_export_report
 
-    with patch("app.export.tool.SessionLocal", return_value=_CM2(db)):
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)):
         result = await _exec_export_report(
             {"format": "pdf", "delivery": "group"},
             group_jid="123@g.us", is_admin=False,
@@ -447,7 +431,7 @@ async def test_export_report_unknown_blueprint_returns_error(db):
     _seed_bp_group(db, "notion_assistant")
     from app.export.tool import _exec_export_report
 
-    with patch("app.export.tool.SessionLocal", return_value=_CM2(db)):
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)):
         result = await _exec_export_report(
             {"format": "pdf", "delivery": "group"},
             group_jid="123@g.us", is_admin=True,
@@ -493,7 +477,7 @@ async def test_export_report_custom_subject_body_resolved_via_workflow_context(d
     mock_gen.build_pdf.return_value = (b"%PDF", "ledger.pdf")
     mock_deliver = AsyncMock()
 
-    with patch("app.export.tool.SessionLocal", return_value=_CM2(db)), \
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)), \
          patch("app.export.tool.AccountingGenerator", return_value=mock_gen), \
          patch("app.export.tool.deliver_files", mock_deliver), \
          patch.object(settings, "default_report_email", "admin@example.com"), \
@@ -531,7 +515,7 @@ async def test_export_report_uses_resolved_phone_not_raw_lid(db):
     mock_gen.build_pdf.return_value = (b"pdf", "ledger.pdf")
     mock_deliver = AsyncMock()
 
-    with patch("app.export.tool.SessionLocal", return_value=_CM2(db)), \
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)), \
          patch("app.export.tool.AccountingGenerator", return_value=mock_gen), \
          patch("app.export.tool.deliver_files", mock_deliver):
         result = await _exec_export_report(
