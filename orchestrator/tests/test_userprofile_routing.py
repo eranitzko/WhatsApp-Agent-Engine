@@ -19,6 +19,7 @@ from app.db.models import (
     CrossGroupConfirmation, Household, HouseholdMember,
 )
 from app.accounting.account_service import AccountService
+from tests.conftest import SessionCM
 
 
 # ---------------------------------------------------------------------------
@@ -186,20 +187,11 @@ def test_patch_person_sets_private_group_jid_on_userprofile(db):
 
     Session = sessionmaker(bind=db.get_bind())
 
-    class _CM:
-        def __init__(self, f):
-            self._f = f
-        def __enter__(self):
-            self._s = self._f()
-            return self._s
-        def __exit__(self, *a):
-            self._s.close()
-
     app = FastAPI()
     app.include_router(api_router, prefix="/admin/api")
     app.dependency_overrides[require_auth] = lambda: None
 
-    with mpatch("app.admin.api.SessionLocal", side_effect=lambda: _CM(Session)):
+    with mpatch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app)
         resp = client.patch("/admin/api/people/972506666666",
                             json={"private_group_jid": "dave_grp@g.us"})
