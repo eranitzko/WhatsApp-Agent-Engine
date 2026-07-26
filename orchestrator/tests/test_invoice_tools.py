@@ -125,6 +125,38 @@ def test_system_prompt_is_substantial():
     assert len(INVOICE_CURATOR_SYSTEM_PROMPT) > 500
 
 
+def test_system_prompt_requires_list_invoices_before_date_correction():
+    """Regression: the agent was creating duplicate invoices by calling
+    save_invoice to "fix" a wrong date instead of set_invoice_date, because
+    the prompt's "always call list_invoices first" rule only covered delete
+    and amount changes, not date corrections — so the agent had no nudge to
+    look up the existing invoice's UUID before falling back to save_invoice."""
+    from app.prompts.invoice_curator import INVOICE_CURATOR_SYSTEM_PROMPT
+    prompt = INVOICE_CURATOR_SYSTEM_PROMPT.lower()
+    assert "date correction" in prompt
+    assert "save_invoice" in prompt.split("## invoice references")[1].split("## automations")[0]
+
+
+def test_save_invoice_schema_forbids_correcting_existing_invoices():
+    """Regression: save_invoice's own tool description must warn against
+    using it to "fix" an existing invoice, since that creates a duplicate
+    row instead of updating the original in place."""
+    tools = get_invoice_tools()
+    description = tools["save_invoice"]["schema"]["description"].lower()
+    assert "duplicate" in description
+    assert "set_invoice_date" in description
+
+
+def test_set_invoice_date_schema_tells_agent_to_look_up_id_first():
+    """Regression companion to the above: set_invoice_date's description
+    must tell the agent to call list_invoices first rather than falling
+    back to save_invoice when it lacks the invoice_id."""
+    tools = get_invoice_tools()
+    description = tools["set_invoice_date"]["schema"]["description"].lower()
+    assert "list_invoices" in description
+    assert "save_invoice" in description
+
+
 def test_each_schema_has_required_keys():
     tools = get_invoice_tools()
     for name, entry in tools.items():

@@ -127,7 +127,9 @@ TOOL_SCHEMAS: list[dict] = [
         "name": "set_invoice_date",
         "description": (
             "Use when an admin reports that an invoice's date was extracted incorrectly (e.g. day/month swapped). Admin only. "
-            "Prefer this over deletion when only the date is wrong. Also recalculates the ILS amount if the currency is not ILS. "
+            "Call list_invoices first in this turn if you don't already have this invoice's UUID — never fall back to "
+            "save_invoice to fix an existing invoice, that creates a duplicate. Prefer this over deletion when only the date is wrong. "
+            "Also recalculates the ILS amount if the currency is not ILS. "
             "Returns: confirmation of the corrected date and recalculated amount."
         ),
         "input_schema": {
@@ -192,8 +194,10 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "name": "save_invoice",
         "description": (
-            "Manually save an invoice entered as text (no image). Admin only. "
+            "Manually save a NEW invoice entered as text (no image). Admin only. "
             "Use when a user provides invoice details in a message rather than by sending an image. "
+            "Never use this to correct or replace an existing invoice — that creates a duplicate row instead of "
+            "fixing the original; use set_invoice_date or set_invoice_amount instead. "
             "Converts non-ILS amounts to ILS automatically using the Bank of Israel rate for the invoice date. "
             "Returns: the saved invoice ID and ILS amount."
         ),
