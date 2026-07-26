@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.db.models import ScheduledMessage
+from tests.conftest import SessionCM
 
 
 @pytest.mark.asyncio
@@ -26,12 +27,7 @@ async def test_due_message_is_sent_and_marked(db):
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    class _CM:
-        def __init__(self, session): self._s = session
-        def __enter__(self): return self._s
-        def __exit__(self, *a): pass
-
-    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)), \
          patch("app.scheduler.httpx.AsyncClient", return_value=mock_client):
         from app.scheduler import _dispatch_due_messages
         await _dispatch_due_messages()
@@ -62,12 +58,7 @@ async def test_future_message_is_not_sent(db):
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    class _CM:
-        def __init__(self, session): self._s = session
-        def __enter__(self): return self._s
-        def __exit__(self, *a): pass
-
-    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)), \
          patch("app.scheduler.httpx.AsyncClient", return_value=mock_client):
         from app.scheduler import _dispatch_due_messages
         await _dispatch_due_messages()
@@ -97,12 +88,7 @@ async def test_already_sent_message_is_not_resent(db):
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    class _CM:
-        def __init__(self, session): self._s = session
-        def __enter__(self): return self._s
-        def __exit__(self, *a): pass
-
-    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)), \
          patch("app.scheduler.httpx.AsyncClient", return_value=mock_client):
         from app.scheduler import _dispatch_due_messages
         await _dispatch_due_messages()
