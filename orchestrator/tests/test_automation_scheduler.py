@@ -6,18 +6,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.db.models import AutomationRule, ConversationHistory, GroupRegistry, Blueprint
+from app.db.models import AutomationRule, ConversationHistory
 from app.automation.executor import AutomationExecutor
-from tests.conftest import SessionCM
+from tests.conftest import SessionCM, seed_blueprint, seed_group as _seed_group_shared
 
 
 def _seed_group(db, group_jid="123@g.us"):
-    db.add(Blueprint(
-        id="family_accounting", display_name="FA",
-        system_prompt="p", tools_enabled="[]",
-    ))
-    db.add(GroupRegistry(group_jid=group_jid, blueprint_id="family_accounting"))
-    db.commit()
+    seed_blueprint(db, id="family_accounting", display_name="FA")
+    _seed_group_shared(db, group_jid, blueprint_id="family_accounting")
 
 
 def _make_rule(db, rule_type, status="active", **kwargs):
