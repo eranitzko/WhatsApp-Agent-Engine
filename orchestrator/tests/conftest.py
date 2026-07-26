@@ -21,6 +21,62 @@ def db():
     session.close()
 
 
+def seed_blueprint(db, id="test_bp", **overrides):
+    """Create (or return existing) Blueprint row. Idempotent by id so callers
+    can freely call this before seed_group/seed_household without worrying
+    about duplicate-PK errors, and so a caller wanting custom fields (e.g.
+    display_name) can call this first with overrides, then rely on
+    seed_group's auto-seed becoming a no-op for that id."""
+    from app.db.models import Blueprint
+    existing = db.query(Blueprint).filter_by(id=id).first()
+    if existing:
+        return existing
+    defaults = dict(display_name="Test Blueprint", system_prompt="p", tools_enabled="[]")
+    defaults.update(overrides)
+    bp = Blueprint(id=id, **defaults)
+    db.add(bp)
+    db.commit()
+    return bp
+
+
+def seed_group(db, jid, blueprint_id=None, **overrides):
+    """Create (or return existing) GroupRegistry row, auto-seeding its
+    Blueprint if missing. This makes the FK-ordering bug class
+    (GroupRegistry referencing a never-created Blueprint, silently fine only
+    because SQLite doesn't enforce FKs by default) structurally impossible."""
+    from app.db.models import GroupRegistry
+    existing = db.query(GroupRegistry).filter_by(group_jid=jid).first()
+    if existing:
+        return existing
+    if blueprint_id is None:
+        blueprint_id = seed_blueprint(db).id
+    else:
+        seed_blueprint(db, id=blueprint_id)  # auto-seed if missing — no-op if
+        # already created (e.g. by a prior seed_blueprint(db, id=..., **custom)
+        # call from the caller wanting non-default blueprint fields).
+    defaults = dict(group_type="personal")
+    defaults.update(overrides)
+    g = GroupRegistry(group_jid=jid, blueprint_id=blueprint_id, **defaults)
+    db.add(g)
+    db.commit()
+    return g
+
+
+def seed_household(db, phone, group_jid, blueprint_id="family_accounting"):
+    """Create Household + HouseholdMember, auto-seeding the GroupRegistry
+    (and its Blueprint) referenced by private_group_jid so FK constraints
+    hold end-to-end."""
+    from app.db.models import Household, HouseholdMember
+    seed_group(db, group_jid, blueprint_id=blueprint_id)
+    h = Household(name="Test Family")
+    db.add(h)
+    db.flush()
+    m = HouseholdMember(household_id=h.id, phone=phone, private_group_jid=group_jid)
+    db.add(m)
+    db.commit()
+    return h, m
+
+
 class SessionCM:
     """Wrap a SQLAlchemy session (or a factory producing one) as a context
     manager, for patching SessionLocal in code under test. Only closes the
