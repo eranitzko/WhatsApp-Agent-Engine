@@ -27,7 +27,7 @@ from app.db.session import SessionLocal
 from app.pipeline.converter import convert_to_ils
 from app.pipeline.dedup import check_image_hash, check_invoice_key, compute_hash
 from app.pipeline.extractor import extract_invoice
-from app.pipeline.storage import upload_image, upload_metadata
+from app.pipeline.storage import invoice_to_sidecar_dict, upload_image, upload_metadata
 from app.utils.invoice_amount import to_float_or_none
 
 logger = logging.getLogger(__name__)
@@ -216,7 +216,6 @@ async def process_image_event(event: dict) -> dict:
     # is the source of truth and the DB can be rebuilt from R2 if needed.
     if r2_key:
         try:
-            from app.pipeline.storage import invoice_to_sidecar_dict
             await upload_metadata(r2_key, invoice_to_sidecar_dict(invoice))
         except RuntimeError:
             logger.warning("Metadata sidecar upload failed for invoice %s — data still in DB", invoice_id)

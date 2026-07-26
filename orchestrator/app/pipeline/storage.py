@@ -2,6 +2,10 @@
 
 Images are stored after in-memory resize (max 1920px, JPEG 85%).
 Full-resolution bytes are never persisted — only the resized copy is uploaded.
+
+Each image is accompanied by a JSON metadata sidecar (see invoice_to_sidecar_dict)
+built from the Invoice ORM object — R2 is meant to be a rebuild-the-DB-from-R2
+source of truth, so the sidecar's shape must stay in sync with the Invoice model.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from PIL import Image
 
 from app.config import settings
+from app.utils.invoice_amount import to_float_or_none
 
 logger = logging.getLogger(__name__)
 
@@ -140,12 +145,11 @@ def invoice_to_sidecar_dict(invoice) -> dict:
     truth for its shape, used both at initial ingestion (pipeline.py, which
     already has a fully-constructed Invoice object in scope by the time it
     uploads the sidecar) and whenever a field is corrected afterward
-    (sync_invoice_sidecar below). R2 is meant to be a rebuild-the-DB-from-R2
-    source of truth (see module docstring) — the two call sites previously
-    hand-built this dict independently in two files, with no guarantee a
-    new Invoice column would be added to both.
+    (sync_invoice_sidecar below). See the module docstring for why R2 must
+    stay field-for-field in sync with the Invoice model — the two call
+    sites previously hand-built this dict independently in two files, with
+    no guarantee a new Invoice column would be added to both.
     """
-    from app.utils.invoice_amount import to_float_or_none
     return {
         "invoice_id":            invoice.id,
         "group_id":              invoice.group_id,
