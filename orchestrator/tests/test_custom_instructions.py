@@ -1,18 +1,15 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.command_handler import CommandHandler
-from app.db.models import GroupRegistry, AdminNumbers, Blueprint
+from app.db.models import GroupRegistry, AdminNumbers
+from tests.conftest import seed_blueprint, seed_group
 
 
 def _seed(db):
     db.add(AdminNumbers(phone_number="972500000001"))
-    db.add(Blueprint(
-        id="invoice_curator",
-        display_name="Invoice Curator",
-        system_prompt="prompt",
-        tools_enabled="[]",
-    ))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="invoice_curator"))
+    seed_blueprint(db, id="invoice_curator", display_name="Invoice Curator",
+                   system_prompt="prompt")
+    seed_group(db, "123@g.us", blueprint_id="invoice_curator")
     db.commit()
 
 
@@ -61,12 +58,11 @@ async def test_sync_no_group_bound(db):
 
 
 def test_group_registry_has_custom_instructions_column(db):
-    entry = GroupRegistry(
-        group_jid="123@g.us",
-        blueprint_id="invoice_curator",
-        custom_instructions="Work invoices only. USD.",
-    )
-    db.add(entry)
+    # Previously constructed GroupRegistry directly with blueprint_id="invoice_curator"
+    # and never created that Blueprint — silently fine only because SQLite doesn't
+    # enforce FKs by default. seed_group auto-seeds the blueprint, closing that gap.
+    entry = seed_group(db, "123@g.us", blueprint_id="invoice_curator",
+                        custom_instructions="Work invoices only. USD.")
     db.commit()
     db.expire_all()
     fetched = db.get(GroupRegistry, "123@g.us")
@@ -74,8 +70,7 @@ def test_group_registry_has_custom_instructions_column(db):
 
 
 def test_custom_instructions_defaults_to_none(db):
-    entry = GroupRegistry(group_jid="456@g.us", blueprint_id="invoice_curator")
-    db.add(entry)
+    seed_group(db, "456@g.us", blueprint_id="invoice_curator")
     db.commit()
     db.expire_all()
     fetched = db.get(GroupRegistry, "456@g.us")
@@ -85,13 +80,9 @@ def test_custom_instructions_defaults_to_none(db):
 @pytest.mark.asyncio
 async def test_sync_no_bridge_url(db):
     db.add(AdminNumbers(phone_number="972500000001"))
-    db.add(Blueprint(
-        id="invoice_curator",
-        display_name="Invoice Curator",
-        system_prompt="prompt",
-        tools_enabled="[]",
-    ))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="invoice_curator"))
+    seed_blueprint(db, id="invoice_curator", display_name="Invoice Curator",
+                   system_prompt="prompt")
+    seed_group(db, "123@g.us", blueprint_id="invoice_curator")
     db.commit()
 
     handler = CommandHandler(bridge_url="")
@@ -102,13 +93,9 @@ async def test_sync_no_bridge_url(db):
 @pytest.mark.asyncio
 async def test_sync_bridge_http_error(db):
     db.add(AdminNumbers(phone_number="972500000001"))
-    db.add(Blueprint(
-        id="invoice_curator",
-        display_name="Invoice Curator",
-        system_prompt="prompt",
-        tools_enabled="[]",
-    ))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="invoice_curator"))
+    seed_blueprint(db, id="invoice_curator", display_name="Invoice Curator",
+                   system_prompt="prompt")
+    seed_group(db, "123@g.us", blueprint_id="invoice_curator")
     db.commit()
 
     handler = CommandHandler(bridge_url="http://bridge:3000")

@@ -1,23 +1,20 @@
 import json
 import pytest
-from app.db.models import Blueprint, GroupRegistry, AdminNumbers, ConversationHistory
+from app.db.models import GroupRegistry, AdminNumbers, ConversationHistory
 from app.command_handler import CommandHandler
-
-
-def _fresh_blueprint():
-    return Blueprint(
-        id="notion_assistant",
-        display_name="Notion Assistant",
-        system_prompt="You are a Notion assistant.",
-        model="claude-sonnet-4-6",
-        tools_enabled=json.dumps(["search_pages"]),
-    )
+from tests.conftest import seed_blueprint, seed_group
 
 
 @pytest.fixture
 def seeded_db(db):
     db.add(AdminNumbers(phone_number="972501234567", label="owner"))
-    db.add(_fresh_blueprint())
+    seed_blueprint(
+        db, id="notion_assistant",
+        display_name="Notion Assistant",
+        system_prompt="You are a Notion assistant.",
+        model="claude-sonnet-4-6",
+        tools_enabled=json.dumps(["search_pages"]),
+    )
     db.commit()
     return db
 
@@ -68,9 +65,8 @@ async def test_bind_invalid_trigger_returns_error(seeded_db):
 
 @pytest.mark.asyncio
 async def test_bind_rebinds_existing_group(seeded_db):
-    seeded_db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="notion_assistant",
-                                status="paused", trigger_type="mention"))
-    seeded_db.commit()
+    seed_group(seeded_db, "123@g.us", blueprint_id="notion_assistant",
+               status="paused", trigger_type="mention")
     handler = CommandHandler()
     await handler.handle(seeded_db, "123@g.us", "972501234567", "/bind notion_assistant")
     entry = seeded_db.query(GroupRegistry).filter_by(group_jid="123@g.us").first()
@@ -87,8 +83,8 @@ async def test_non_admin_returns_none(seeded_db):
 
 @pytest.mark.asyncio
 async def test_unbind_removes_entry(seeded_db):
-    seeded_db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="notion_assistant", status="active", trigger_type="always"))
-    seeded_db.commit()
+    seed_group(seeded_db, "123@g.us", blueprint_id="notion_assistant",
+               status="active", trigger_type="always")
     handler = CommandHandler()
     await handler.handle(seeded_db, "123@g.us", "972501234567", "/unbind")
     entry = seeded_db.query(GroupRegistry).filter_by(group_jid="123@g.us").first()
@@ -97,8 +93,8 @@ async def test_unbind_removes_entry(seeded_db):
 
 @pytest.mark.asyncio
 async def test_pause_sets_paused_status(seeded_db):
-    seeded_db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="notion_assistant", status="active", trigger_type="always"))
-    seeded_db.commit()
+    seed_group(seeded_db, "123@g.us", blueprint_id="notion_assistant",
+               status="active", trigger_type="always")
     handler = CommandHandler()
     await handler.handle(seeded_db, "123@g.us", "972501234567", "/pause")
     entry = seeded_db.query(GroupRegistry).filter_by(group_jid="123@g.us").first()
@@ -107,8 +103,8 @@ async def test_pause_sets_paused_status(seeded_db):
 
 @pytest.mark.asyncio
 async def test_resume_sets_active_status(seeded_db):
-    seeded_db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="notion_assistant", status="paused", trigger_type="always"))
-    seeded_db.commit()
+    seed_group(seeded_db, "123@g.us", blueprint_id="notion_assistant",
+               status="paused", trigger_type="always")
     handler = CommandHandler()
     await handler.handle(seeded_db, "123@g.us", "972501234567", "/resume")
     entry = seeded_db.query(GroupRegistry).filter_by(group_jid="123@g.us").first()
