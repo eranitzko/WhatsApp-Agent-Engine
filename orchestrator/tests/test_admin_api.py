@@ -6,16 +6,15 @@ from fastapi.testclient import TestClient
 from fastapi import FastAPI
 
 from app.admin.api import router as api_router
-from app.db.models import Blueprint, GroupRegistry, AdminNumbers
-from tests.conftest import SessionCM
+from app.db.models import GroupRegistry, AdminNumbers
+from tests.conftest import SessionCM, seed_blueprint, seed_group
 
 
 # -- helpers -----------------------------------------------------------------
 
 def _seed(db):
-    db.add(Blueprint(id="fa", display_name="Family Accounting",
-                     system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="111@g.us", blueprint_id="fa"))
+    seed_blueprint(db, id="fa", display_name="Family Accounting")
+    seed_group(db, "111@g.us", blueprint_id="fa")
     db.add(AdminNumbers(phone_number="972500000001"))
     db.commit()
 
@@ -241,13 +240,8 @@ from app.db.models import Household, HouseholdMember
 
 def _seed_household_prereqs(db):
     """Seed blueprint + group so household member FK on private_group_jid can resolve."""
-    from app.db.models import Blueprint, GroupRegistry
-    if db.query(Blueprint).filter_by(id="fa").first() is None:
-        db.add(Blueprint(id="fa", display_name="Family Accounting",
-                         system_prompt="p", tools_enabled="[]"))
-    if db.query(GroupRegistry).filter_by(group_jid="priv_g@g.us").first() is None:
-        db.add(GroupRegistry(group_jid="priv_g@g.us", blueprint_id="fa"))
-    db.commit()
+    seed_blueprint(db, id="fa", display_name="Family Accounting")
+    seed_group(db, "priv_g@g.us", blueprint_id="fa")
 
 
 def test_list_households_empty(db):
@@ -449,10 +443,10 @@ def test_remove_household_member_not_found_returns_404(db):
 
 def test_approve_registration_autolinks_household_member(db):
     """approve_registration sets private_group_jid on an existing HouseholdMember."""
-    from app.db.models import Blueprint, GroupRegistry, UserAccount, GroupParticipant
-    db.add(Blueprint(id="fa", display_name="FA", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="newgrp@g.us", blueprint_id="fa",
-                         group_type="unregistered", status="active"))
+    from app.db.models import UserAccount, GroupParticipant
+    seed_blueprint(db, id="fa", display_name="FA")
+    seed_group(db, "newgrp@g.us", blueprint_id="fa",
+               group_type="unregistered", status="active")
     # Seed the participant so approve_registration can discover the phone
     db.add(GroupParticipant(group_jid="newgrp@g.us", phone="972501112223", status="active"))
     h = Household(name="Family")
