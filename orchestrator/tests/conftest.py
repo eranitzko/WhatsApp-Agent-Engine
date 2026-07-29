@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -121,3 +123,25 @@ class SessionCM:
     def __exit__(self, *exc):
         if self._owns_session and self._session is not None:
             self._session.close()
+
+
+def make_invoice(db, **overrides):
+    from datetime import date
+    from decimal import Decimal
+    from app.db.models import Invoice
+    defaults = dict(
+        id=f"inv-{uuid.uuid4().hex[:8]}",
+        group_id="123@g.us",
+        message_id=f"msg-{uuid.uuid4().hex[:8]}",
+        image_hash=f"hash-{uuid.uuid4().hex[:8]}",
+        invoice_date=date.today(),
+        vendor="Test Vendor",
+        amount_original=Decimal("100"),
+        currency_original="ILS",
+        amount_ils=Decimal("100"),
+    )
+    defaults.update(overrides)
+    invoice = Invoice(**defaults)
+    db.add(invoice)
+    db.commit()
+    return invoice
