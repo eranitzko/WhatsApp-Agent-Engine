@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app.admin.api import router as api_router
 from app.admin.auth import require_auth
 from app.db.models import EmailAllowlist
+from tests.conftest import SessionCM
 
 
 # ── ORM ──────────────────────────────────────────────────────────────────────
@@ -65,14 +66,10 @@ def _person_app(db):
     from app.admin.auth import require_auth as _auth
     import app.admin.api as _api_mod
 
-    class _CM:
-        def __enter__(self): return db
-        def __exit__(self, *a): db.flush()
-
     app = FastAPI()
     app.include_router(_router, prefix="/admin/api")
     app.dependency_overrides[_auth] = lambda: None
-    ctx = _p.object(_api_mod, "SessionLocal", return_value=_CM())
+    ctx = _p.object(_api_mod, "SessionLocal", return_value=SessionCM(db))
     ctx.start()
     client = TestClient(app)
     return client, ctx

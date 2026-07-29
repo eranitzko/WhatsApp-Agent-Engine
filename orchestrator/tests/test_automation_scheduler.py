@@ -6,26 +6,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.db.models import AutomationRule, ConversationHistory, GroupRegistry, Blueprint
+from app.db.models import AutomationRule, ConversationHistory
 from app.automation.executor import AutomationExecutor
+from tests.conftest import SessionCM, seed_blueprint, seed_group as _seed_group_shared
 
 
-class _CM:
-    def __init__(self, session):
-        self._s = session
-    def __enter__(self):
-        return self._s
-    def __exit__(self, *a):
-        pass
-
-
+# Local wrapper (not inlined) because this file wants a custom blueprint
+# display_name ("FA") that the shared seed_blueprint's default doesn't
+# provide — seed_group's internal auto-seed then becomes a no-op for this id.
 def _seed_group(db, group_jid="123@g.us"):
-    db.add(Blueprint(
-        id="family_accounting", display_name="FA",
-        system_prompt="p", tools_enabled="[]",
-    ))
-    db.add(GroupRegistry(group_jid=group_jid, blueprint_id="family_accounting"))
-    db.commit()
+    seed_blueprint(db, id="family_accounting", display_name="FA")
+    _seed_group_shared(db, group_jid, blueprint_id="family_accounting")
 
 
 def _make_rule(db, rule_type, status="active", **kwargs):
@@ -58,7 +49,7 @@ async def test_recurring_rule_fires_when_cron_due(db):
     rule = _make_rule(db, "recurring", schedule_cron="* * * * *")
     executor = _mock_executor()
 
-    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)), \
          patch("app.scheduler._automation_executor", executor):
         from app.scheduler import _fire_recurring_rules
         await _fire_recurring_rules()
@@ -77,7 +68,7 @@ async def test_recurring_rule_does_not_fire_when_not_due(db):
     rule = _make_rule(db, "recurring", schedule_cron=f"0 {future_hour} * * *")
     executor = _mock_executor()
 
-    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)), \
          patch("app.scheduler._automation_executor", executor):
         from app.scheduler import _fire_recurring_rules
         await _fire_recurring_rules()
@@ -92,7 +83,7 @@ async def test_one_off_rule_fires_and_is_marked_done(db):
     rule = _make_rule(db, "one_off", schedule_cron=fire_at.isoformat())
     executor = _mock_executor()
 
-    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)), \
          patch("app.scheduler._automation_executor", executor):
         from app.scheduler import _fire_recurring_rules
         await _fire_recurring_rules()
@@ -109,7 +100,7 @@ async def test_one_off_rule_does_not_fire_when_future(db):
     rule = _make_rule(db, "one_off", schedule_cron=fire_at.isoformat())
     executor = _mock_executor()
 
-    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)), \
          patch("app.scheduler._automation_executor", executor):
         from app.scheduler import _fire_recurring_rules
         await _fire_recurring_rules()
@@ -125,7 +116,7 @@ async def test_paused_rule_is_not_fired(db):
     rule = _make_rule(db, "recurring", status="paused", schedule_cron="* * * * *")
     executor = _mock_executor()
 
-    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)), \
          patch("app.scheduler._automation_executor", executor):
         from app.scheduler import _fire_recurring_rules
         await _fire_recurring_rules()
@@ -149,7 +140,7 @@ async def test_inactivity_rule_fires_after_long_silence(db):
     db.commit()
     executor = _mock_executor()
 
-    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)), \
          patch("app.scheduler._automation_executor", executor):
         from app.scheduler import _check_inactivity
         await _check_inactivity()
@@ -172,7 +163,7 @@ async def test_inactivity_rule_does_not_fire_when_recently_active(db):
     db.commit()
     executor = _mock_executor()
 
-    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)), \
          patch("app.scheduler._automation_executor", executor):
         from app.scheduler import _check_inactivity
         await _check_inactivity()
@@ -194,7 +185,7 @@ async def test_threshold_rule_fires_when_condition_met(db):
     fake_evaluator = MagicMock()
     fake_evaluator.evaluate = MagicMock(return_value=500.0)
 
-    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)), \
          patch("app.scheduler._automation_executor", executor), \
          patch("app.scheduler.ThresholdEvaluator", return_value=fake_evaluator):
         from app.scheduler import _evaluate_thresholds
@@ -215,7 +206,7 @@ async def test_threshold_rule_does_not_fire_when_condition_not_met(db):
     fake_evaluator = MagicMock()
     fake_evaluator.evaluate = MagicMock(return_value=50.0)
 
-    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)), \
          patch("app.scheduler._automation_executor", executor), \
          patch("app.scheduler.ThresholdEvaluator", return_value=fake_evaluator):
         from app.scheduler import _evaluate_thresholds
@@ -237,7 +228,7 @@ async def test_threshold_rule_skips_if_fired_within_24h(db):
     fake_evaluator = MagicMock()
     fake_evaluator.evaluate = MagicMock(return_value=500.0)
 
-    with patch("app.scheduler.SessionLocal", return_value=_CM(db)), \
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)), \
          patch("app.scheduler._automation_executor", executor), \
          patch("app.scheduler.ThresholdEvaluator", return_value=fake_evaluator):
         from app.scheduler import _evaluate_thresholds

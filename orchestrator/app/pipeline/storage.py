@@ -2,6 +2,10 @@
 
 Images are stored after in-memory resize (max 1920px, JPEG 85%).
 Full-resolution bytes are never persisted — only the resized copy is uploaded.
+
+Each image is accompanied by a JSON metadata sidecar (see invoice_to_sidecar_dict)
+built from the Invoice ORM object — R2 is meant to be a rebuild-the-DB-from-R2
+source of truth, so the sidecar's shape must stay in sync with the Invoice model.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from PIL import Image
 
 from app.config import settings
+from app.utils.invoice_amount import to_float_or_none
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +140,38 @@ async def upload_metadata(r2_key: str, metadata: dict) -> str:
     return await asyncio.to_thread(_upload_metadata_sync, r2_key, metadata)
 
 
+def invoice_to_sidecar_dict(invoice) -> dict:
+    """Build the R2 JSON sidecar dict for an invoice — the single source of
+    truth for its shape, used both at initial ingestion (pipeline.py, which
+    already has a fully-constructed Invoice object in scope by the time it
+    uploads the sidecar) and whenever a field is corrected afterward
+    (sync_invoice_sidecar below). See the module docstring for why R2 must
+    stay field-for-field in sync with the Invoice model — the two call
+    sites previously hand-built this dict independently in two files, with
+    no guarantee a new Invoice column would be added to both.
+    """
+    return {
+        "invoice_id":            invoice.id,
+        "group_id":              invoice.group_id,
+        "message_id":            invoice.message_id,
+        "image_hash":            invoice.image_hash,
+        "submitted_by":          invoice.submitted_by,
+        "received_at":           invoice.received_at.isoformat() if invoice.received_at else None,
+        "invoice_date":          invoice.invoice_date.isoformat() if invoice.invoice_date else None,
+        "invoice_number":        invoice.invoice_number,
+        "vendor":                invoice.vendor,
+        "description":           invoice.description,
+        "amount_original":       to_float_or_none(invoice.amount_original),
+        "currency_original":     invoice.currency_original,
+        "amount_ils":            to_float_or_none(invoice.amount_ils),
+        "exchange_rate":         to_float_or_none(invoice.exchange_rate),
+        "rate_source":           invoice.rate_source,
+        "extraction_confidence": invoice.extraction_confidence,
+        "flagged":               invoice.flagged,
+        "flag_reason":           invoice.flag_reason,
+    }
+
+
 async def sync_invoice_sidecar(invoice) -> None:
     """Re-upload the R2 JSON sidecar for an invoice after any field correction.
 
@@ -144,26 +181,7 @@ async def sync_invoice_sidecar(invoice) -> None:
     if not invoice.r2_key:
         return
     try:
-        await upload_metadata(invoice.r2_key, {
-            "invoice_id":            invoice.id,
-            "group_id":              invoice.group_id,
-            "message_id":            invoice.message_id,
-            "image_hash":            invoice.image_hash,
-            "submitted_by":          invoice.submitted_by,
-            "received_at":           invoice.received_at.isoformat() if invoice.received_at else None,
-            "invoice_date":          invoice.invoice_date.isoformat() if invoice.invoice_date else None,
-            "invoice_number":        invoice.invoice_number,
-            "vendor":                invoice.vendor,
-            "description":           invoice.description,
-            "amount_original":       float(invoice.amount_original) if invoice.amount_original else None,
-            "currency_original":     invoice.currency_original,
-            "amount_ils":            float(invoice.amount_ils) if invoice.amount_ils else None,
-            "exchange_rate":         float(invoice.exchange_rate) if invoice.exchange_rate else None,
-            "rate_source":           invoice.rate_source,
-            "extraction_confidence": invoice.extraction_confidence,
-            "flagged":               invoice.flagged,
-            "flag_reason":           invoice.flag_reason,
-        })
+        await upload_metadata(invoice.r2_key, invoice_to_sidecar_dict(invoice))
     except RuntimeError:
         import logging
         logging.getLogger(__name__).warning(

@@ -5,20 +5,18 @@ from unittest.mock import patch
 
 import pytest
 
-from app.db.models import AutomationRule, GroupRegistry, Blueprint
+from app.db.models import AutomationRule
+from tests.conftest import SessionCM, seed_blueprint, seed_group
 
 
 # ── ORM tests ─────────────────────────────────────────────────────────────────
 
+# Local wrapper (not inlined) because this file wants a custom blueprint
+# display_name ("Invoice Curator") that the shared seed_blueprint's default
+# doesn't provide — seed_group's internal auto-seed becomes a no-op for this id.
 def _seed_group_for_orm(db):
-    db.add(Blueprint(
-        id="invoice_curator",
-        display_name="Invoice Curator",
-        system_prompt="prompt",
-        tools_enabled="[]",
-    ))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="invoice_curator"))
-    db.commit()
+    seed_blueprint(db, id="invoice_curator", display_name="Invoice Curator")
+    seed_group(db, "123@g.us", blueprint_id="invoice_curator")
 
 
 def test_automation_rule_model_has_required_columns(db):
@@ -190,26 +188,16 @@ async def test_executor_tool_error_does_not_raise(db):
 from app.tools.automation_tools import get_automation_tools
 
 
-class _CM:
-    """Wrap a SQLAlchemy Session as a context manager for patching SessionLocal."""
-    def __init__(self, session):
-        self._s = session
-    def __enter__(self):
-        return self._s
-    def __exit__(self, *a):
-        pass
-
-
 def _seed_group(db):
-    """Seed a GroupRegistry row so FK constraints are satisfied."""
-    db.add(Blueprint(
-        id="family_accounting",
-        display_name="Family Accounting",
-        system_prompt="prompt",
-        tools_enabled="[]",
-    ))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="family_accounting"))
-    db.commit()
+    """Seed a GroupRegistry row so FK constraints are satisfied.
+
+    Local wrapper (not inlined) because this file wants a custom blueprint
+    display_name ("Family Accounting") that the shared seed_blueprint's
+    default doesn't provide — seed_group's internal auto-seed becomes a
+    no-op for this id.
+    """
+    seed_blueprint(db, id="family_accounting", display_name="Family Accounting")
+    seed_group(db, "123@g.us", blueprint_id="family_accounting")
 
 
 def test_get_automation_tools_returns_six_tools():
@@ -233,7 +221,7 @@ def test_each_tool_has_schema_and_async_executor():
 async def test_create_automation_saves_pending_rule(db):
     _seed_group(db)
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["create_automation"]["executor"](
             {
                 "name": "Friday debt reminder",
@@ -268,7 +256,7 @@ async def test_confirm_automation_activates_rule(db):
     rule_id = rule.id
 
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["activate_automation"]["executor"](
             {"id": rule_id},
             group_jid="123@g.us",
@@ -294,7 +282,7 @@ async def test_confirm_automation_wrong_group_rejected(db):
     db.commit()
 
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["activate_automation"]["executor"](
             {"id": rule.id},
             group_jid="999@g.us",
@@ -315,7 +303,7 @@ async def test_list_automations_returns_active_and_paused(db):
     db.commit()
 
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["list_automations"]["executor"]({}, group_jid="123@g.us")
     assert "rule-a" in result
     assert "rule-b" in result
@@ -325,7 +313,7 @@ async def test_list_automations_returns_active_and_paused(db):
 @pytest.mark.asyncio
 async def test_list_automations_empty_group(db):
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["list_automations"]["executor"]({}, group_jid="empty@g.us")
     assert "no" in result.lower()
 
@@ -344,7 +332,7 @@ async def test_pause_automation(db):
     rule_id = rule.id
 
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["pause_automation"]["executor"]({"id": rule_id}, group_jid="123@g.us")
     assert "paused" in result.lower()
     db.expire_all()
@@ -365,7 +353,7 @@ async def test_cancel_automation_deletes_rule(db):
     rule_id = rule.id
 
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["cancel_automation"]["executor"]({"id": rule_id}, group_jid="123@g.us")
     assert "deleted" in result.lower()
     db.expire_all()
@@ -375,7 +363,7 @@ async def test_cancel_automation_deletes_rule(db):
 @pytest.mark.asyncio
 async def test_create_automation_invalid_rule_type(db):
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["create_automation"]["executor"](
             {
                 "name": "bad",
@@ -401,7 +389,7 @@ async def test_pause_automation_wrong_group_rejected(db):
     db.commit()
 
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["pause_automation"]["executor"](
             {"id": rule.id},
             group_jid="999@g.us",
@@ -425,7 +413,7 @@ async def test_cancel_automation_wrong_group_rejected(db):
     rule_id = rule.id
 
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["cancel_automation"]["executor"](
             {"id": rule_id},
             group_jid="999@g.us",
@@ -571,7 +559,7 @@ async def test_create_workflow_automation_saves_rule(db):
     mock_registry = MagicMock()
     mock_registry.has_tool.return_value = True
 
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)), \
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)), \
          patch.object(rr, "get_registry", return_value=mock_registry):
         result = await tools["create_automation"]["executor"](
             {
@@ -609,7 +597,7 @@ async def test_create_workflow_automation_saves_rule(db):
 async def test_create_automation_rejects_invalid_action_type(db):
     """action_type='nonsense' is rejected with an error message."""
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["create_automation"]["executor"](
             {
                 "name": "bad",
@@ -654,7 +642,7 @@ async def test_edit_automation_updates_name(db):
     rule_id = rule.id
 
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["edit_automation"]["executor"](
             {"id": rule_id, "name": "New name"},
             group_jid="123@g.us",
@@ -682,7 +670,7 @@ async def test_edit_automation_updates_schedule(db):
     rule_id = rule.id
 
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["edit_automation"]["executor"](
             {"id": rule_id, "schedule_cron": "0 10 * * 2"},
             group_jid="123@g.us",
@@ -710,7 +698,7 @@ async def test_edit_automation_updates_inactivity_hours(db):
     rule_id = rule.id
 
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["edit_automation"]["executor"](
             {"id": rule_id, "inactivity_hours": 48},
             group_jid="123@g.us",
@@ -738,7 +726,7 @@ async def test_edit_automation_updates_action_config(db):
     rule_id = rule.id
 
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["edit_automation"]["executor"](
             {"id": rule_id, "action_config": {"message": "new message"}},
             group_jid="123@g.us",
@@ -753,7 +741,7 @@ async def test_edit_automation_updates_action_config(db):
 @pytest.mark.asyncio
 async def test_edit_automation_not_found(db):
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["edit_automation"]["executor"](
             {"id": "nonexistent-id", "name": "x"},
             group_jid="123@g.us",
@@ -777,7 +765,7 @@ async def test_edit_automation_wrong_group_rejected(db):
     db.commit()
 
     tools = get_automation_tools()
-    with patch("app.tools.automation_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.automation_tools.SessionLocal", return_value=SessionCM(db)):
         result = await tools["edit_automation"]["executor"](
             {"id": rule.id, "name": "hacked"},
             group_jid="999@g.us",

@@ -15,6 +15,7 @@ from app.reports.labels import get as L
 from app.reports.pdf_report import build_appendix_flowables
 from app.reports.render_pdf import _bidi_then_xml, _font, render_pdf
 from app.reports.spec import Column, ReportSpec, Row, TableSection
+from app.utils.invoice_amount import to_float_or_none
 
 
 class NoDataError(Exception):
@@ -87,11 +88,15 @@ class InvoiceGenerator:
                 # amount_original can be any currency (USD, EUR, ILS, ...) -> format_amount.
                 # amount_ils is always ILS by definition of this column -> format_currency
                 # with the symbol style, matching the old _fmt_ils behavior exactly.
-                orig = format_amount(float(r.amount_original) if r.amount_original else None, r.currency_original)
-                ils = format_currency(float(r.amount_ils), "₪") if r.amount_ils else "—"
+                # format_amount already returns "—" for a None amount, so
+                # to_float_or_none can be passed straight through. format_currency
+                # does NOT guard None itself, so its call keeps an explicit check.
+                orig = format_amount(to_float_or_none(r.amount_original), r.currency_original)
+                amount_ils_f = to_float_or_none(r.amount_ils)
+                ils = format_currency(amount_ils_f, "₪") if amount_ils_f is not None else "—"
                 cells = [date_s, inv_num, vendor, desc, orig, ils]
             else:
-                amt = format_amount(float(r.amount_original) if r.amount_original else None, r.currency_original)
+                amt = format_amount(to_float_or_none(r.amount_original), r.currency_original)
                 cells = [date_s, inv_num, vendor, desc, amt]
 
             rows.append(Row(cells=cells, style="flagged" if r.flagged else "normal"))

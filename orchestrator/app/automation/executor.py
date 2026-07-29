@@ -52,6 +52,18 @@ class AutomationExecutor:
             mentions=config.get("mentions"),
         )
 
+    @staticmethod
+    def _tool_unavailable_suffix(tool_name: str) -> str:
+        return f"tool '{tool_name}' is not available. Ask your administrator to enable it."
+
+    @staticmethod
+    def _tool_unavailable_message(tool_name: str) -> str:
+        return f"⚙️ Automation could not run: {AutomationExecutor._tool_unavailable_suffix(tool_name)}"
+
+    @staticmethod
+    def _tool_unavailable_workflow_message(tool_name: str, step: int) -> str:
+        return f"⚙️ Automation workflow could not run step {step + 1}: {AutomationExecutor._tool_unavailable_suffix(tool_name)}"
+
     async def _run_tool(self, group_jid: str, config: dict) -> None:
         from app.agent.confirmation import confirmation_store as _store
 
@@ -66,11 +78,7 @@ class AutomationExecutor:
 
         if not reg.has_tool(tool_name):
             logger.warning("Automation: tool %r not in registry (rule group %s)", tool_name, group_jid)
-            await send_message(
-                group_jid,
-                f"⚙️ Automation could not run: tool '{tool_name}' is not available. "
-                f"Ask your administrator to enable it.",
-            )
+            await send_message(group_jid, self._tool_unavailable_message(tool_name))
             return
 
         result = await reg.execute(tool_name, params, group_jid=group_jid, is_admin=False, sender="", confirmation_store=_store)
@@ -116,12 +124,7 @@ class AutomationExecutor:
                     "Automation workflow step %d: tool %r not in registry (group %s)",
                     i, tool_name, group_jid,
                 )
-                await send_message(
-                    group_jid,
-                    f"⚙️ Automation workflow could not run step {i + 1}: "
-                    f"tool '{tool_name}' is not available. "
-                    f"Ask your administrator to enable it.",
-                )
+                await send_message(group_jid, self._tool_unavailable_workflow_message(tool_name, i))
                 return
 
             try:

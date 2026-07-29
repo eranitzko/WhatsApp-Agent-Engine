@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.utils.invoice_amount import validate_invoice_amount
+from app.utils.invoice_amount import to_float_or_none, validate_invoice_amount
 
 
 def test_validate_invoice_amount_positive():
@@ -31,3 +31,18 @@ def test_validate_invoice_amount_non_numeric_rejected():
     result = validate_invoice_amount("not a number")
     assert result.amount is None
     assert "invalid" in result.error.lower()
+
+
+def test_to_float_or_none_preserves_valid_zero():
+    """Regression: must use `is not None`, not truthiness — a truthy check
+    would silently convert a legitimate Decimal('0') to None, indistinguishable
+    from a missing value."""
+    assert to_float_or_none(Decimal("0")) == 0.0
+
+
+def test_to_float_or_none_none_stays_none():
+    assert to_float_or_none(None) is None
+
+
+def test_to_float_or_none_negative_preserved():
+    assert to_float_or_none(Decimal("-22.5")) == -22.5

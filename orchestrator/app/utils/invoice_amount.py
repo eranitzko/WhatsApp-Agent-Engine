@@ -40,3 +40,10 @@ def validate_invoice_amount(value: object) -> AmountValidation:
     if amount == 0:
         return AmountValidation(None, "Amount cannot be zero.")
     return AmountValidation(amount, None)
+
+
+def to_float_or_none(x: Decimal | None) -> float | None:
+    """Convert a Decimal to float, preserving None as None — using `is not
+    None` rather than truthiness, so a legitimate zero value is never
+    silently converted to None (indistinguishable from "missing")."""
+    return float(x) if x is not None else None

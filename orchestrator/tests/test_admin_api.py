@@ -6,31 +6,15 @@ from fastapi.testclient import TestClient
 from fastapi import FastAPI
 
 from app.admin.api import router as api_router
-from app.db.models import Blueprint, GroupRegistry, AdminNumbers
+from app.db.models import GroupRegistry, AdminNumbers
+from tests.conftest import SessionCM, seed_blueprint, seed_group
 
 
 # -- helpers -----------------------------------------------------------------
 
-class _SessionCM:
-    """Context manager that returns a new session from the given factory."""
-
-    def __init__(self, factory):
-        self._factory = factory
-        self._sess = None
-
-    def __enter__(self):
-        self._sess = self._factory()
-        return self._sess
-
-    def __exit__(self, *a):
-        if self._sess:
-            self._sess.close()
-
-
 def _seed(db):
-    db.add(Blueprint(id="fa", display_name="Family Accounting",
-                     system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="111@g.us", blueprint_id="fa"))
+    seed_blueprint(db, id="fa", display_name="Family Accounting")
+    seed_group(db, "111@g.us", blueprint_id="fa")
     db.add(AdminNumbers(phone_number="972500000001"))
     db.commit()
 
@@ -59,7 +43,7 @@ async def test_list_groups(db):
     async def _mock_bridge_groups():
         return {"111@g.us": {"name": "Test Group", "participants": []}}
 
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)), \
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)), \
          patch.object(admin_api, "_fetch_bridge_groups", _mock_bridge_groups):
         app = _make_app(db)
         client = TestClient(app)
@@ -87,7 +71,7 @@ async def test_list_groups_bridge_fallback(db):
     async def _empty_bridge_groups():
         return {}
 
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)), \
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)), \
          patch.object(admin_api, "_fetch_bridge_groups", _empty_bridge_groups):
         client = TestClient(app)
         resp = client.get("/admin/api/groups")
@@ -104,7 +88,7 @@ async def test_register_group(db):
     Session = _get_session_factory(db)
     app = _make_app(db)
 
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app)
         resp = client.post("/admin/api/groups",
                            json={"group_jid": "222@g.us", "blueprint_id": "fa"})
@@ -126,7 +110,7 @@ async def test_delete_group(db):
     Session = _get_session_factory(db)
     app = _make_app(db)
 
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app)
         resp = client.delete("/admin/api/groups/111%40g.us")
         assert resp.status_code == 200
@@ -145,7 +129,7 @@ def test_list_admins(db):
     Session = _get_session_factory(db)
     app = _make_app(db)
 
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app)
         resp = client.get("/admin/api/admins")
         assert resp.status_code == 200
@@ -160,7 +144,7 @@ def test_add_admin(db):
     Session = _get_session_factory(db)
     app = _make_app(db)
 
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app)
         resp = client.post("/admin/api/admins", json={"phone_number": "972500000099"})
         assert resp.status_code == 200
@@ -178,7 +162,7 @@ def test_delete_admin(db):
     Session = _get_session_factory(db)
     app = _make_app(db)
 
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app)
         resp = client.delete("/admin/api/admins/972500000001")
         assert resp.status_code == 200
@@ -197,7 +181,7 @@ def test_list_blueprints(db):
     Session = _get_session_factory(db)
     app = _make_app(db)
 
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app)
         resp = client.get("/admin/api/blueprints")
         assert resp.status_code == 200
@@ -212,7 +196,7 @@ def test_endpoints_require_auth(db):
     app = _make_app(db, override_auth=False)
 
     Session = _get_session_factory(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app, raise_server_exceptions=False)
         assert client.get("/admin/api/groups").status_code == 401
         assert client.get("/admin/api/admins").status_code == 401
@@ -227,7 +211,7 @@ def test_register_group_duplicate_returns_409(db):
     app.dependency_overrides[require_auth] = lambda: None
 
     Session = _get_session_factory(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/admin/api/groups",
                            json={"group_jid": "111@g.us", "blueprint_id": "fa"})
@@ -242,7 +226,7 @@ def test_add_admin_duplicate_returns_409(db):
     app.dependency_overrides[require_auth] = lambda: None
 
     Session = _get_session_factory(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/admin/api/admins",
                            json={"phone_number": "972500000001"})
@@ -256,20 +240,15 @@ from app.db.models import Household, HouseholdMember
 
 def _seed_household_prereqs(db):
     """Seed blueprint + group so household member FK on private_group_jid can resolve."""
-    from app.db.models import Blueprint, GroupRegistry
-    if db.query(Blueprint).filter_by(id="fa").first() is None:
-        db.add(Blueprint(id="fa", display_name="Family Accounting",
-                         system_prompt="p", tools_enabled="[]"))
-    if db.query(GroupRegistry).filter_by(group_jid="priv_g@g.us").first() is None:
-        db.add(GroupRegistry(group_jid="priv_g@g.us", blueprint_id="fa"))
-    db.commit()
+    seed_blueprint(db, id="fa", display_name="Family Accounting")
+    seed_group(db, "priv_g@g.us", blueprint_id="fa")
 
 
 def test_list_households_empty(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)
     app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         resp = TestClient(app).get("/admin/api/households")
     assert resp.status_code == 200
     assert resp.json() == []
@@ -279,7 +258,7 @@ def test_create_and_list_household(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)
     app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app)
         create_resp = client.post("/admin/api/households", json={"name": "Itzkovitch"})
         assert create_resp.status_code == 200
@@ -297,7 +276,7 @@ def test_create_household_empty_name_returns_400(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)
     app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         resp = TestClient(app, raise_server_exceptions=False).post(
             "/admin/api/households", json={"name": "  "}
         )
@@ -308,7 +287,7 @@ def test_delete_household_removes_members(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)
     app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app)
         h = client.post("/admin/api/households", json={"name": "Family"}).json()
         hid = h["id"]
@@ -328,7 +307,7 @@ def test_delete_household_not_found(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)
     app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         resp = TestClient(app, raise_server_exceptions=False).delete(
             "/admin/api/households/nonexistent-id"
         )
@@ -339,7 +318,7 @@ def test_add_household_member(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)
     app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app)
         hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
         resp = client.post(f"/admin/api/households/{hid}/members",
@@ -361,7 +340,7 @@ def test_add_household_member_idempotent(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)
     app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app)
         hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
         client.post(f"/admin/api/households/{hid}/members", json={"phone": "972507777777"})
@@ -381,7 +360,7 @@ def test_add_household_member_cross_household_conflict_returns_409(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)
     app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app, raise_server_exceptions=False)
         h1 = client.post("/admin/api/households", json={"name": "H1"}).json()["id"]
         h2 = client.post("/admin/api/households", json={"name": "H2"}).json()["id"]
@@ -394,7 +373,7 @@ def test_add_household_member_invalid_phone_returns_400(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)
     app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app, raise_server_exceptions=False)
         hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
         resp = client.post(f"/admin/api/households/{hid}/members", json={"phone": "abc"})
@@ -405,7 +384,7 @@ def test_update_household_member_display_name(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)
     app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app)
         hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
         client.post(f"/admin/api/households/{hid}/members",
@@ -422,7 +401,7 @@ def test_update_household_member_links_private_group_jid(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)
     app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app)
         hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
         client.post(f"/admin/api/households/{hid}/members", json={"phone": "972500011111"})
@@ -438,7 +417,7 @@ def test_remove_household_member(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)
     app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         client = TestClient(app)
         hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
         client.post(f"/admin/api/households/{hid}/members", json={"phone": "972506666666"})
@@ -454,7 +433,7 @@ def test_remove_household_member_not_found_returns_404(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)
     app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)):
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
         hid = TestClient(app).post("/admin/api/households", json={"name": "F"}).json()["id"]
         resp = TestClient(app, raise_server_exceptions=False).delete(
             f"/admin/api/households/{hid}/members/972500000000"
@@ -464,10 +443,10 @@ def test_remove_household_member_not_found_returns_404(db):
 
 def test_approve_registration_autolinks_household_member(db):
     """approve_registration sets private_group_jid on an existing HouseholdMember."""
-    from app.db.models import Blueprint, GroupRegistry, UserAccount, GroupParticipant
-    db.add(Blueprint(id="fa", display_name="FA", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="newgrp@g.us", blueprint_id="fa",
-                         group_type="unregistered", status="active"))
+    from app.db.models import UserAccount, GroupParticipant
+    seed_blueprint(db, id="fa", display_name="FA")
+    seed_group(db, "newgrp@g.us", blueprint_id="fa",
+               group_type="unregistered", status="active")
     # Seed the participant so approve_registration can discover the phone
     db.add(GroupParticipant(group_jid="newgrp@g.us", phone="972501112223", status="active"))
     h = Household(name="Family")
@@ -481,7 +460,7 @@ def test_approve_registration_autolinks_household_member(db):
     app = _make_app(db)
     from unittest.mock import AsyncMock
     import app.bridge_client as _bc_mod
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: _SessionCM(Session)), \
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)), \
          patch.object(_bc_mod, "send_message", new=AsyncMock()):
         client = TestClient(app)
         resp = client.post(

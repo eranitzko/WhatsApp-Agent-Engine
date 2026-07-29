@@ -14,9 +14,10 @@ from app.db.models import (
     LedgerEntry, LedgerSettlement, ScheduledMessage, UserProfile, ReportFormat,
 )
 from app.db.session import SessionLocal
-from app.tools.accounting_fifo import DebtLeg, apply_payment
+from app.tools.accounting_fifo import DebtLeg, apply_payment, net_pair, split_evenly
 from app.tools.accounting_fx import to_ils
 from app.agent.correction_queue import correction_queue
+from app.utils.phone import resolve_sender_phone
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +56,6 @@ def _phone_to_name_from_db(db, group_jid: str) -> dict[str, str]:
 def _count_admins(db) -> int:
     from app.db.models import AdminNumbers
     return db.query(AdminNumbers).count()
-
-
-def _sender_phone(ctx: dict) -> str:
-    if resolved := ctx.get("resolved_phone"):
-        return resolved
-    sender = ctx.get("sender", "")
-    return sender.split("@")[0].split(":")[0]
 
 
 def _net_owed(
@@ -428,8 +422,7 @@ _SCHEMAS: dict[str, dict] = {
 async def _exec_record_transaction(params: dict, **ctx) -> str:
     from datetime import date as _date
     group_jid = ctx.get("group_jid", "")
-    sender = ctx.get("sender", "")
-    sender_phone = ctx.get("resolved_phone") or sender.split("@")[0].split(":")[0]
+    sender_phone = resolve_sender_phone(ctx)
 
     payer_phone: str = params["payer_phone"]
     participant_phones: list[str] = params["participant_phones"]
@@ -473,8 +466,7 @@ async def _exec_record_transaction(params: dict, **ctx) -> str:
 
 async def _legacy_record_transaction(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
-    sender = ctx.get("sender", "")
-    sender_phone = ctx.get("resolved_phone") or sender.split("@")[0].split(":")[0]
+    sender_phone = resolve_sender_phone(ctx)
     payer = params["payer_phone"]
     participants = params["participant_phones"]
     amount = Decimal(str(params["amount"]))
@@ -491,7 +483,7 @@ async def _legacy_record_transaction(params: dict, **ctx) -> str:
     if not participants:
         return "Error: participant_phones must not be empty."
 
-    per_person = (amount_ils / Decimal(len(participants))).quantize(Decimal("0.01"))
+    per_person = split_evenly(amount_ils, len(participants))[0]
     desc_with_fx = (
         f"{description} (original: {amount} {currency.upper()})"
         if currency.upper() != "ILS"
@@ -561,8 +553,7 @@ async def _legacy_record_transaction(params: dict, **ctx) -> str:
 
 async def _exec_record_payment(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
-    sender = ctx.get("sender", "")
-    sender_phone = ctx.get("resolved_phone") or sender.split("@")[0].split(":")[0]
+    sender_phone = resolve_sender_phone(ctx)
     payer = params["payer_phone"]
     payee = params["payee_phone"]
     amount_ils = Decimal(str(params["amount_ils"]))
@@ -620,12 +611,12 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
 
     # Non-admins may only query their own phone
     if not is_admin:
-        phone_a = _sender_phone(ctx)
+        phone_a = resolve_sender_phone(ctx)
         phone_b = None
 
     with SessionLocal() as db:
         household_id = (
-            _account_service.get_household_id(db, _sender_phone(ctx))
+            _account_service.get_household_id(db, resolve_sender_phone(ctx))
             if _account_service else None
         )
 
@@ -648,11 +639,11 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
             net = net_vs_group(phone_a, counterparts_a) if phone_a not in household \
                 else -net_vs_group(phone_b, counterparts_b)
             la, lb = label(phone_a), label(phone_b)
-            if net > Decimal("0"):
-                return f"{la} owes {lb}: {net:.2f} ILS"
-            elif net < Decimal("0"):
-                return f"{lb} owes {la}: {(-net):.2f} ILS"
-            return f"{la} and {lb} are settled up."
+            result = net_pair(la, lb, net)
+            if result is None:
+                return f"{la} and {lb} are settled up."
+            debtor, creditor, amount = result
+            return f"{debtor} owes {creditor}: {amount:.2f} ILS"
 
         q = db.query(LedgerEntry).filter(
             or_(LedgerEntry.from_phone == phone_a, LedgerEntry.to_phone == phone_a),
@@ -671,21 +662,23 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
         individual_partners = sorted(all_partners - household)
         lines = []
         if household_partners and phone_a not in household:
-            net = net_vs_group(phone_a, household_partners)
             la = label(phone_a)
-            if net > Decimal("0"):
-                lines.append(f"{la} owes Parents: {net:.2f} ILS")
-            elif net < Decimal("0"):
-                lines.append(f"Parents owe {la}: {(-net):.2f} ILS")
+            result = net_pair(la, "Parents", net_vs_group(phone_a, household_partners))
+            if result is not None:
+                debtor, creditor, amount = result
+                # "Parents" is a plural label -> "Parents owe", but any other
+                # (individual) debtor takes the singular "owes" — preserve
+                # both original phrasings depending on which side nets debtor.
+                verb = "owes" if debtor == la else "owe"
+                lines.append(f"{debtor} {verb} {creditor}: {amount:.2f} ILS")
         for partner in individual_partners:
             a_owes = _net_owed(db, group_jid, phone_a, partner, household_id)
             p_owes = _net_owed(db, group_jid, partner, phone_a, household_id)
-            net = a_owes - p_owes
             la, lp = label(phone_a), label(partner)
-            if net > Decimal("0"):
-                lines.append(f"{la} owes {lp}: {net:.2f} ILS")
-            elif net < Decimal("0"):
-                lines.append(f"{lp} owes {la}: {(-net):.2f} ILS")
+            result = net_pair(la, lp, a_owes - p_owes)
+            if result is not None:
+                debtor, creditor, amount = result
+                lines.append(f"{debtor} owes {creditor}: {amount:.2f} ILS")
         return "\n".join(lines) if lines else f"No open balances for {label(phone_a)}."
 
 
@@ -693,7 +686,7 @@ async def _exec_get_debt_summary(params: dict, **ctx) -> str:
     from collections import defaultdict
     group_jid = ctx.get("group_jid", "")
     is_admin = ctx.get("is_admin", False)
-    sender_phone = _sender_phone(ctx)
+    sender_phone = resolve_sender_phone(ctx)
 
     with SessionLocal() as db:
         household_id = (
@@ -719,25 +712,42 @@ async def _exec_get_debt_summary(params: dict, **ctx) -> str:
     if not rows:
         return "No open debts." if is_admin else "You have no open debts."
 
-    # Aggregate net per (debtor, creditor) pair
-    net: dict = defaultdict(Decimal)
+    # Aggregate gross remaining per directed (debtor, creditor) pair
+    gross: dict = defaultdict(Decimal)
     oldest: dict = {}
     for r in rows:
         key = (r.from_phone, r.to_phone)
-        net[key] += r.amount_ils - (r.amount_settled_ils or Decimal("0"))
+        gross[key] += r.amount_ils - (r.amount_settled_ils or Decimal("0"))
         if key not in oldest or r.transaction_date < oldest[key]:
             oldest[key] = r.transaction_date
 
-    lines = []
-    for (debtor, creditor), amount in sorted(net.items(), key=lambda x: -x[1]):
-        if amount <= Decimal("0"):
+    # Bilaterally net each pair (A,B) against (B,A) into one signed line —
+    # matching get_balance's netting. Without this, the same pair can show
+    # up as two separate, contradictory "A owes B" / "B owes A" lines.
+    seen_pairs: set = set()
+    net_lines: list = []
+    for (a, b) in gross:
+        pair = frozenset((a, b))
+        if pair in seen_pairs:
             continue
-        lines.append(
-            f"{debtor} owes {creditor}: ₪{float(amount):,.2f} "
-            f"(since {oldest[(debtor, creditor)]})"
-        )
-    if not lines:
+        seen_pairs.add(pair)
+        forward = gross.get((a, b), Decimal("0"))
+        reverse = gross.get((b, a), Decimal("0"))
+        result = net_pair(a, b, forward - reverse)
+        if result is None:
+            continue
+        debtor, creditor, amount = result
+        since = min(d for d in (oldest.get((a, b)), oldest.get((b, a))) if d is not None)
+        net_lines.append((amount, debtor, creditor, since))
+
+    if not net_lines:
         return "No open debts." if is_admin else "You have no open debts."
+
+    net_lines.sort(key=lambda x: -x[0])
+    lines = [
+        f"{debtor} owes {creditor}: ₪{float(amount):,.2f} (since {since})"
+        for amount, debtor, creditor, since in net_lines
+    ]
     return "\n".join(lines)
 
 
@@ -751,10 +761,10 @@ async def _exec_get_history(params: dict, **ctx) -> str:
     if is_admin:
         phone = params.get("phone")
     else:
-        phone = _sender_phone(ctx)
+        phone = resolve_sender_phone(ctx)
 
     with SessionLocal() as db:
-        _scope_phone = _sender_phone(ctx)
+        _scope_phone = resolve_sender_phone(ctx)
         household_id = (
             _account_service.get_household_id(db, _scope_phone)
             if _account_service and _scope_phone else None
@@ -798,7 +808,7 @@ async def _exec_get_transaction(params: dict, **ctx) -> str:
     if len(tx_prefix) < 8:
         return "Transaction ID prefix must be at least 8 characters. Use the ID shown in get_history."
     with SessionLocal() as db:
-        _admin_phone = _sender_phone(ctx)
+        _admin_phone = resolve_sender_phone(ctx)
         _household_id = (
             _account_service.get_household_id(db, _admin_phone)
             if _account_service and _admin_phone else None
@@ -829,7 +839,7 @@ async def _exec_get_transaction(params: dict, **ctx) -> str:
 
 async def _exec_set_reminder(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
-    to_phone = _sender_phone(ctx)
+    to_phone = resolve_sender_phone(ctx)
     if not to_phone:
         return "Error: could not determine sender phone. Please try again."
     message = params["message"]
@@ -862,7 +872,7 @@ async def _exec_set_reminder(params: dict, **ctx) -> str:
 
 async def _exec_list_reminders(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
-    to_phone = _sender_phone(ctx)
+    to_phone = resolve_sender_phone(ctx)
     if not to_phone:
         return "Error: could not determine sender phone."
     now = datetime.now(timezone.utc)
@@ -890,7 +900,7 @@ async def _exec_list_reminders(params: dict, **ctx) -> str:
 
 async def _exec_cancel_reminder(params: dict, **ctx) -> str:
     group_jid = ctx.get("group_jid", "")
-    to_phone = _sender_phone(ctx)
+    to_phone = resolve_sender_phone(ctx)
     if not to_phone:
         return "Error: could not determine sender phone."
     reminder_id_prefix = params.get("reminder_id", "").strip()
@@ -917,7 +927,7 @@ async def _exec_cancel_reminder(params: dict, **ctx) -> str:
 
 
 async def _exec_save_email(params: dict, **ctx) -> str:
-    phone = _sender_phone(ctx)
+    phone = resolve_sender_phone(ctx)
     if not phone:
         return "Error: could not determine your phone number."
     email = params["email"].strip()
@@ -1015,7 +1025,7 @@ async def _exec_correct_transaction(params: dict, **ctx) -> str:
     if not ctx.get("is_admin"):
         return "Only admins can correct transactions."
     group_jid = ctx.get("group_jid", "")
-    admin_phone = _sender_phone(ctx)
+    admin_phone = resolve_sender_phone(ctx)
     tx_prefix = params.get("transaction_id", "").strip()
     if len(tx_prefix) < 8:
         return "Transaction ID prefix must be at least 8 characters. Use the ID shown in get_history."
@@ -1100,7 +1110,7 @@ async def _exec_correct_transaction(params: dict, **ctx) -> str:
     confirmation_store = ctx.get("confirmation_store")
     if confirmation_store:
         # admin_phone (above) is already the resolved canonical phone via
-        # _sender_phone(ctx) — re-deriving a raw sender split here caused the
+        # resolve_sender_phone(ctx) — re-deriving a raw sender split here caused the
         # confirmation intercept (which compares against the resolved
         # sender_phone) to permanently reject the original requester's own
         # "yes" whenever WhatsApp sent a LID.
@@ -1120,7 +1130,7 @@ async def _exec_apply_correction(params: dict, **ctx) -> str:
     """Internal tool called by the confirmation flow when admin says 'yes'."""
     group_jid = ctx.get("group_jid", "")
     token = params.get("token", "")
-    admin_phone = params.get("admin_phone", "") or _sender_phone(ctx)
+    admin_phone = params.get("admin_phone", "") or resolve_sender_phone(ctx)
 
     correction = correction_queue.get_by_token(group_jid, token)
     if correction is None:
@@ -1133,7 +1143,7 @@ async def _exec_apply_correction(params: dict, **ctx) -> str:
     payer = changes["payer"]
 
     with SessionLocal() as db:
-        _apply_admin_phone = _sender_phone(ctx)
+        _apply_admin_phone = resolve_sender_phone(ctx)
         _apply_household_id = (
             _account_service.get_household_id(db, _apply_admin_phone)
             if _account_service and _apply_admin_phone else None
@@ -1166,7 +1176,7 @@ async def _exec_apply_correction(params: dict, **ctx) -> str:
         else:
             total_ils = sum(leg.amount_ils for leg in legs)
 
-        per_person = (total_ils / Decimal(len(new_participants))).quantize(Decimal("0.01"))
+        per_person = split_evenly(total_ils, len(new_participants))[0]
         new_date_val = date.fromisoformat(changes["new_date"]) if changes.get("new_date") else None
 
         # Remove legs for removed participants
@@ -1287,7 +1297,7 @@ async def _exec_resend_confirmation(params: dict, **ctx) -> str:
     from app import bridge_client
 
     group_jid: str = ctx.get("group_jid", "")
-    sender_phone: str = ctx.get("resolved_phone") or ctx.get("sender", "").split("@")[0].split(":")[0]
+    sender_phone: str = resolve_sender_phone(ctx)
     target_hint: str | None = params.get("target_name", "").strip() or None
 
     now = datetime.now(timezone.utc)

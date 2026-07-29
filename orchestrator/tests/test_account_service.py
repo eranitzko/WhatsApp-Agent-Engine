@@ -2,28 +2,29 @@ from decimal import Decimal
 from datetime import datetime, timezone, timedelta
 import pytest
 from app.db.models import (
-    UserAccount, GroupRegistry, AdminNumbers, UserProfile, Blueprint,
+    UserAccount, GroupRegistry, AdminNumbers, UserProfile,
 )
 from app.accounting.account_service import AccountService
+from tests.conftest import seed_blueprint, seed_group, seed_household
 
 
+# Thin wrappers around the shared conftest fixtures, kept local (not fully
+# inlined at call sites) because this file's tests need a "family_accounting"
+# blueprint with custom fields (model, tools_enabled) that the shared
+# seed_blueprint's defaults don't provide — seed_group/seed_household's
+# internal auto-seed of "family_accounting" then becomes a no-op here,
+# since seed_blueprint is idempotent by id.
 def _seed_blueprint(db):
-    if db.query(Blueprint).filter_by(id="family_accounting").first() is None:
-        bp = Blueprint(
-            id="family_accounting", display_name="FA",
-            system_prompt="x", model="claude-sonnet-4-6",
-            tools_enabled='["record_transaction"]',
-        )
-        db.add(bp)
-        db.commit()
+    seed_blueprint(
+        db, id="family_accounting", display_name="FA",
+        system_prompt="x", model="claude-sonnet-4-6",
+        tools_enabled='["record_transaction"]',
+    )
 
 
 def _seed_group(db, jid: str, group_type: str = "personal") -> GroupRegistry:
     _seed_blueprint(db)
-    g = GroupRegistry(group_jid=jid, blueprint_id="family_accounting", group_type=group_type)
-    db.add(g)
-    db.commit()
-    return g
+    return seed_group(db, jid, blueprint_id="family_accounting", group_type=group_type)
 
 
 def _seed_user(db, phone: str, group_jid: str, role: str = "owner") -> UserAccount:
@@ -181,6 +182,35 @@ def test_handle_confirmation_reply_yes_flips_status(db):
     assert conf.status == "confirmed"
 
 
+def test_handle_confirmation_reply_recognizes_word_used_elsewhere(db):
+    """Regression: handle_confirmation_reply had its own independent yes/no
+    word list ({"yes","כן","y","אישור"} / {"no","לא","n","ביטול"}), missed by
+    Task 4's original audit of the other 7 call sites. It must recognize the
+    full union in app.agent.reply_words, e.g. "confirm" (accepted by
+    ConfirmationStore/MultiConfirmationStore but not, until this fix, here)."""
+    _seed_group(db, "tal_grp2b@g.us")
+    _seed_user(db, "972512", "tal_grp2b@g.us")
+    now = datetime.now(timezone.utc)
+    conf = CrossGroupConfirmation(
+        initiator_phone="972500",
+        initiator_group_jid="eden_grp@g.us",
+        target_phone="972512",
+        target_group_jid="tal_grp2b@g.us",
+        action_type="record_expense",
+        action_payload='{"amount_ils": "50.00"}',
+        status="pending",
+        expires_at=now + timedelta(hours=24),
+    )
+    db.add(conf)
+    db.commit()
+
+    svc = AccountService()
+    resolved = svc.handle_confirmation_reply(db, "tal_grp2b@g.us", "972512", "confirm")
+    assert resolved is not None
+    db.refresh(conf)
+    assert conf.status == "confirmed"
+
+
 def test_handle_confirmation_reply_no_flips_status(db):
     _seed_group(db, "tal_grp3@g.us")
     _seed_user(db, "972513", "tal_grp3@g.us")
@@ -285,23 +315,19 @@ async def test_process_second_party_creates_confirmation(db):
 # resolve_inbound — LID-safe group-JID-first strategy
 # ---------------------------------------------------------------------------
 
-from app.db.models import Household, HouseholdMember
+from app.db.models import HouseholdMember
 
 
 def _seed_household(db, phone: str, group_jid: str, blueprint_id: str = "family_accounting") -> tuple:
-    """Create Household + HouseholdMember + GroupRegistry so FK constraints hold."""
+    """Create Household + HouseholdMember + GroupRegistry so FK constraints hold.
+
+    Kept as a local wrapper (not inlined) for the same reason as _seed_blueprint
+    above: pre-seeds the custom "family_accounting" blueprint fields this file
+    needs before delegating to the shared seed_household, whose own auto-seed
+    becomes a no-op for that id.
+    """
     _seed_blueprint(db)
-    g = db.query(GroupRegistry).filter_by(group_jid=group_jid).first()
-    if g is None:
-        g = GroupRegistry(group_jid=group_jid, blueprint_id=blueprint_id, group_type="personal")
-        db.add(g)
-    h = Household(name="Test Family")
-    db.add(h)
-    db.flush()
-    m = HouseholdMember(household_id=h.id, phone=phone, private_group_jid=group_jid)
-    db.add(m)
-    db.commit()
-    return h, m
+    return seed_household(db, phone, group_jid, blueprint_id=blueprint_id)
 
 
 def test_resolve_inbound_group_jid_first_returns_canonical_phone(db):

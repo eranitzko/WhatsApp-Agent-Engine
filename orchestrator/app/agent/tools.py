@@ -722,7 +722,8 @@ async def exec_request_confirmation(
     # the raw value here caused the confirmation intercept below (which
     # compares against the resolved sender_phone) to permanently reject the
     # original requester's own "yes" whenever WhatsApp sent a LID.
-    staged_by = resolved_phone or (sender.split("@")[0].split(":")[0] if sender else "")
+    from app.utils.phone import resolve_sender_phone
+    staged_by = resolve_sender_phone({"resolved_phone": resolved_phone, "sender": sender})
     from app.agent.confirmation import confirmation_store
     if not confirmation_store.set(group_id, action, params, description, staged_by=staged_by):
         return {

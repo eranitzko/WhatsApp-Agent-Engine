@@ -31,6 +31,8 @@ from app.tools.split_tools import get_split_tools
 from app.tools.split_tools import set_account_service as set_split_account_service
 from app.tools.automation_tools import get_automation_tools
 from app.export.tool import get_export_tools
+from app.utils.phone import resolve_sender_phone
+from app.agent.reply_words import is_affirmative, is_negative
 from app.tools.send_email_tool import get_send_email_tools
 from app.automation.executor import AutomationExecutor
 from app.scheduler import start_scheduler, stop_scheduler, set_automation_executor
@@ -299,11 +301,21 @@ async def _process(payload: WebhookPayload) -> None:
 
         text = payload.text or payload.caption or ""
 
+        # Resolve inbound identity before EVERYTHING below, including the
+        # command-handler dispatch — command_handler's admin check must see
+        # the resolved canonical phone, not a raw LID, or a real admin in a
+        # shared group gets silently rejected from /bind, /pause, etc.
+        _inbound_phone, _inbound_household_id = account_service.resolve_inbound(
+            db, payload.jid, payload.sender
+        )
+
         # Commands are checked before blueprint lookup (/bind works on unregistered groups).
         # Invalidate the route cache after any command so the next message sees fresh state.
         if command_handler.is_command(text):
-            sender_phone = payload.sender.split("@")[0].split(":")[0]
-            reply = await command_handler.handle(db, payload.jid, sender_phone, text)
+            _command_sender_phone = resolve_sender_phone(
+                {"resolved_phone": _inbound_phone, "sender": payload.sender}
+            )
+            reply = await command_handler.handle(db, payload.jid, _command_sender_phone, text)
             if reply:
                 await _send(payload.jid, reply)
             router.invalidate(payload.jid)
@@ -314,16 +326,12 @@ async def _process(payload: WebhookPayload) -> None:
         if _bot_phone and payload.sender.split("@")[0].split(":")[0] == _bot_phone:
             return
 
-        # Resolve inbound identity before blueprint gate — needed for confirmation intercept
-        # on groups that may not be registered (counterpart's private group with LID sender).
-        _inbound_phone, _inbound_household_id = account_service.resolve_inbound(
-            db, payload.jid, payload.sender
-        )
-
         # Cross-group confirmation intercept — BEFORE router.resolve so an unregistered
         # counterpart group cannot silently drop a "yes" reply.
-        if text.strip().lower() in ("yes", "no", "כן", "לא", "y", "n", "אישור", "ביטול"):
-            _phone_for_lookup = _inbound_phone or payload.sender.split("@")[0].split(":")[0]
+        if is_affirmative(text) or is_negative(text):
+            _phone_for_lookup = resolve_sender_phone(
+                {"resolved_phone": _inbound_phone, "sender": payload.sender}
+            )
             conf = account_service.handle_confirmation_reply(
                 db, payload.jid, _phone_for_lookup, text,
                 household_id=_inbound_household_id,
@@ -376,7 +384,7 @@ async def _process(payload: WebhookPayload) -> None:
             return
 
         # Yes/no intercepts — only relevant for registered sys_admin groups
-        if text.strip().lower() in ("yes", "no", "כן", "לא", "y", "n"):
+        if is_affirmative(text) or is_negative(text):
             group_type = account_service.get_group_type(db, payload.jid)
             if group_type == "sys_admin":
                 if group_registration_handler.is_pending_reply(db, payload.jid, text):
@@ -431,7 +439,7 @@ async def _process(payload: WebhookPayload) -> None:
         # re-deriving a raw, unresolved phone from payload.sender — that
         # duplicate extraction was the root cause of admins being misidentified
         # as non-admins whenever WhatsApp sent a LID instead of a phone number.
-        _acl_phone = _inbound_phone or payload.sender.split("@")[0].split(":")[0]
+        _acl_phone = resolve_sender_phone({"resolved_phone": _inbound_phone, "sender": payload.sender})
         if not _is_valid_sender_phone(_acl_phone):
             logger.warning("Rejecting message with invalid sender phone format: %r", _acl_phone)
             return

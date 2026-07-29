@@ -66,6 +66,10 @@ Rules:
 # Fields that contribute to the confidence estimate (used for cross-validation)
 _KEY_FIELDS = ("invoice_date", "invoice_number", "vendor", "amount_original", "currency_original")
 
+# Default date formats tried before falling back to admin-configured extra
+# formats — both paths go through the one shared parsing engine below.
+_DEFAULT_DATE_FORMATS = [parse_format_string("YYYY-MM-DD"), parse_format_string("DD/MM/YYYY")]
+
 
 def _build_prompt(custom_instructions: str | None) -> str:
     """Append admin-configured group hints (GroupRegistry.custom_instructions —
@@ -113,31 +117,21 @@ def _validate_and_normalise(raw: dict) -> dict:
     """Normalise Gemini output and ensure all expected keys exist."""
     out: dict = {}
 
-    # invoice_date: coerce to date string YYYY-MM-DD
+    # invoice_date: try the default formats (ISO, then Israeli DD/MM/YYYY)
+    # first, then any admin-configured extra formats — all through the one
+    # shared parsing engine in app/utils/date_formats.py, instead of two
+    # hardcoded, 4-digit-year-only regexes that silently failed on 2-digit
+    # years the shared engine already handles.
     raw_date = raw.get("invoice_date")
     if raw_date and isinstance(raw_date, str):
-        # Try YYYY-MM-DD (or YYYY/MM/DD, YYYY.MM.DD) first
-        match = re.search(r"(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})", raw_date)
-        if match:
-            y, m, d = match.groups()
-            try:
-                parsed = date(int(y), int(m), int(d))
-                out["invoice_date"] = parsed.isoformat()
-            except ValueError:
-                out["invoice_date"] = None
-        else:
-            # Fallback: DD/MM/YYYY or DD.MM.YYYY (Israeli/European format)
-            match = re.search(r"(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})", raw_date)
-            if match:
-                d, m, y = match.groups()
-                try:
-                    parsed = date(int(y), int(m), int(d))
-                    out["invoice_date"] = parsed.isoformat()
-                except ValueError:
-                    out["invoice_date"] = None
-            else:
-                extra = _try_extra_date_formats(raw_date)
-                out["invoice_date"] = extra.isoformat() if extra else None
+        parsed = None
+        for fmt in _DEFAULT_DATE_FORMATS:
+            parsed = try_fmt(raw_date, fmt)
+            if parsed:
+                break
+        if not parsed:
+            parsed = _try_extra_date_formats(raw_date)
+        out["invoice_date"] = parsed.isoformat() if parsed else None
     else:
         out["invoice_date"] = None
 

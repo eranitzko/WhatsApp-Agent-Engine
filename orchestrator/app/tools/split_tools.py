@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date as _date
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from app.db.session import SessionLocal
@@ -62,8 +62,8 @@ _SCHEMA = {
 
 
 async def _execute_record_split(params: dict, **kwargs) -> str:
-    sender = kwargs.get("sender", "")
-    sender_phone = sender.split("@")[0].split(":")[0]
+    from app.utils.phone import resolve_sender_phone
+    sender_phone = resolve_sender_phone(kwargs)
     group_jid = kwargs.get("group_jid", "")
 
     payer_phone: str = params["payer_phone"]
@@ -121,17 +121,14 @@ def _compute_shares(
 
     unspecified = [p for p in non_payer_phones if p not in specified]
 
+    from app.tools.accounting_fifo import split_evenly
     if unspecified:
         if total_participants and total_participants > len(non_payer_phones):
             # Equal split across all participants; payer absorbs own share
-            per_person = (total / total_participants).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
+            per_person = split_evenly(total, total_participants)[0]
         else:
             remaining = total - specified_total
-            per_person = (remaining / len(unspecified)).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
+            per_person = split_evenly(remaining, len(unspecified))[0]
     else:
         per_person = Decimal("0")
 

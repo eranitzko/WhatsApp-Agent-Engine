@@ -11,6 +11,7 @@ from app.db.models import (
     LedgerEntry, UserProfile, ReportFormat,
 )
 from app.agent.correction_queue import CorrectionQueue
+from tests.conftest import SessionCM
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -47,21 +48,12 @@ def _add_entry(db, group_jid, from_phone, to_phone, amount_ils,
     return entry
 
 
-class _CM:
-    def __init__(self, session):
-        self._s = session
-    def __enter__(self):
-        return self._s
-    def __exit__(self, *a):
-        pass
-
-
 # ── Task: save_email ──────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_save_email_creates_profile(db):
     _seed(db)
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
         result = await tools["set_report_email"]["executor"](
@@ -83,7 +75,7 @@ async def test_save_email_updates_existing(db):
     db.add(UserProfile(phone="972500000001", email="old@example.com"))
     db.commit()
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
         await tools["set_report_email"]["executor"](
@@ -106,7 +98,7 @@ async def test_get_balance_non_admin_sees_own_only(db):
     _add_entry(db, "123@g.us", "972500000002", "972500000001", Decimal("100"))
     _add_entry(db, "123@g.us", "972500000003", "972500000001", Decimal("50"))
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
         # Non-admin Sivan queries — should see only their own balance
@@ -127,7 +119,7 @@ async def test_get_history_non_admin_sees_own_only(db):
     _add_entry(db, "123@g.us", "A", "B", Decimal("100"), description="A owes B")
     _add_entry(db, "123@g.us", "C", "B", Decimal("200"), description="C owes B")
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
         result = await tools["get_history"]["executor"](
@@ -146,7 +138,7 @@ async def test_get_history_admin_sees_all(db):
     _add_entry(db, "123@g.us", "A", "B", Decimal("100"), description="A owes B")
     _add_entry(db, "123@g.us", "C", "B", Decimal("200"), description="C owes B")
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
         result = await tools["get_history"]["executor"](
@@ -166,7 +158,7 @@ async def test_correct_transaction_non_admin_rejected(db):
     _seed(db)
     entry = _add_entry(db, "123@g.us", "A", "B", Decimal("100"), tx_id="txabc12345")
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
         result = await tools["correct_transaction"]["executor"](
@@ -184,7 +176,7 @@ async def test_correct_transaction_blocks_if_settled(db):
     _add_entry(db, "123@g.us", "A", "B", Decimal("100"),
                amount_settled_ils=Decimal("50"), tx_id="txabc12345")
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
         result = await tools["correct_transaction"]["executor"](
@@ -208,7 +200,7 @@ async def test_correct_transaction_enqueues_and_shows_diff(db):
     from app.agent.confirmation import ConfirmationStore
     store = ConfirmationStore()
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)), \
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)), \
          patch("app.tools.accounting_tools.correction_queue", fresh_queue):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
@@ -253,7 +245,7 @@ async def test_apply_correction_updates_amount(db):
         max_slots=2,
     )
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)), \
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)), \
          patch("app.tools.accounting_tools.correction_queue", fresh_queue):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
@@ -295,7 +287,7 @@ async def test_apply_correction_updates_date(db):
         max_slots=2,
     )
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)), \
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)), \
          patch("app.tools.accounting_tools.correction_queue", fresh_queue):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
@@ -359,7 +351,7 @@ def test_correction_queue_remove():
 @pytest.mark.asyncio
 async def test_create_report_format(db):
     _seed(db)
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
         result = await tools["create_report_format"]["executor"](
@@ -384,7 +376,7 @@ async def test_create_report_format(db):
 @pytest.mark.asyncio
 async def test_create_report_format_non_admin_rejected(db):
     _seed(db)
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
         result = await tools["create_report_format"]["executor"](
@@ -407,7 +399,7 @@ async def test_list_report_formats(db):
     ))
     db.commit()
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
         result = await tools["list_report_formats"]["executor"](
@@ -430,7 +422,7 @@ async def test_delete_report_format(db):
     ))
     db.commit()
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
         result = await tools["delete_report_format"]["executor"](

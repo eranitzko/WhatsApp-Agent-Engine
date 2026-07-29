@@ -14,6 +14,7 @@ from app.db.session import SessionLocal
 from app.db.models import LedgerEntry
 from app.reports.formatting import format_currency as _fmt_currency
 from app.reports.formatting import format_date as _fmt_date
+from app.tools.accounting_fifo import net_pair
 
 
 def _phone_to_name_from_db(db, group_jid: str, phones: set[str] | None = None) -> dict[str, str]:
@@ -83,7 +84,7 @@ def generate_ledger_xlsx(
         names = _phone_to_name_from_db(db, group_jid, phones)
 
     if not include_settled:
-        entries = [e for e in entries if (e.amount_ils - (e.amount_settled_ils or Decimal("0"))) > Decimal("0")]
+        entries = [e for e in entries if e.remaining_ils > Decimal("0")]
 
     if sort_by == "person":
         entries = sorted(entries, key=lambda e: names.get(e.from_phone, e.from_phone))
@@ -136,7 +137,7 @@ def generate_ledger_xlsx(
 def _compute_net_balances(entries: list, names: dict[str, str]) -> dict[tuple[str, str], Decimal]:
     raw: dict[tuple[str, str], Decimal] = {}
     for e in entries:
-        remaining = e.amount_ils - (e.amount_settled_ils or Decimal("0"))
+        remaining = e.remaining_ils
         if remaining <= Decimal("0"):
             continue
         frm = names.get(e.from_phone, e.from_phone)
@@ -154,11 +155,10 @@ def _compute_net_balances(entries: list, names: dict[str, str]) -> dict[tuple[st
             continue
         seen.add(canonical)
         reverse = raw.get((b, a), Decimal("0"))
-        net = amt - reverse
-        if net > Decimal("0"):
-            netted[(a, b)] = net
-        elif net < Decimal("0"):
-            netted[(b, a)] = -net
+        result = net_pair(a, b, amt - reverse)
+        if result is not None:
+            debtor, creditor, amount = result
+            netted[(debtor, creditor)] = amount
     return netted
 
 
@@ -189,7 +189,7 @@ def _write_transactions_sheet(ws, entries, names, date_format, currency_display,
             ws.append([f"── {group_key} ──"])
             last_group_key = group_key
 
-        remaining = e.amount_ils - (e.amount_settled_ils or Decimal("0"))
+        remaining = e.remaining_ils
         ws.append([
             _fmt_date(e.transaction_date, date_format),
             names.get(e.from_phone, e.from_phone),
@@ -332,7 +332,7 @@ def generate_ledger_pdf(
         ledger_entries = [
             e for e in entries
             if e.entry_type == "payment"
-            or (e.amount_ils - (e.amount_settled_ils or Decimal("0"))) > 0
+            or e.remaining_ils > 0
         ]
 
     pairs: dict[tuple[str, str], list] = {}
@@ -366,7 +366,7 @@ def generate_ledger_pdf(
             for e in rows_sorted:
                 date_s = _fmt_date(e.transaction_date, date_format)
                 desc_s = (e.description or "")[:60]
-                remaining = e.amount_ils - (e.amount_settled_ils or Decimal("0"))
+                remaining = e.remaining_ils
 
                 signed_amount = -e.amount_ils if e.entry_type == "payment" else e.amount_ils
                 amt_s = _fmt_currency(float(signed_amount), currency_display)

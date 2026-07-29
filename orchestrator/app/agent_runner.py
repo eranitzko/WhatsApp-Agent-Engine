@@ -407,7 +407,7 @@ class AgentRunner:
         """Write a confirmed multi-party transaction to DB."""
         from app.db.session import SessionLocal
         from app.db.models import LedgerEntry, LedgerSettlement
-        from app.tools.accounting_fifo import DebtLeg, apply_payment
+        from app.tools.accounting_fifo import apply_payment
         import uuid
         from datetime import date, timezone
         from decimal import Decimal
@@ -454,26 +454,8 @@ class AgentRunner:
             now = datetime.now(timezone.utc)
 
             with SessionLocal() as db:
-                open_rows = (
-                    db.query(LedgerEntry)
-                    .filter(
-                        LedgerEntry.group_jid == group_jid,
-                        LedgerEntry.from_phone == payer,
-                        LedgerEntry.to_phone == payee,
-                        LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
-                    )
-                    .order_by(LedgerEntry.transaction_date)
-                    .all()
-                )
-                debt_legs = [
-                    DebtLeg(
-                        id=r.id,
-                        amount_ils=r.amount_ils,
-                        amount_settled_ils=r.amount_settled_ils or Decimal("0"),
-                        transaction_date=r.transaction_date,
-                    )
-                    for r in open_rows
-                ]
+                from app.tools.accounting_fifo import fetch_open_debt_legs
+                debt_legs = fetch_open_debt_legs(db, group_jid, payer, payee)
                 result = apply_payment(amount_ils, debt_legs)
                 for leg_id, new_settled in result.updated_legs:
                     row = db.get(LedgerEntry, leg_id)

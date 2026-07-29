@@ -131,8 +131,8 @@ async def _exec_request_confirmation(params: dict, **ctx) -> str:
     # the raw value here caused agent_runner's confirmation intercept (which
     # compares against the resolved sender_phone) to permanently reject the
     # original requester's own "yes" whenever WhatsApp sent a LID.
-    sender_raw = ctx.get("sender", "")
-    staged_by = ctx.get("resolved_phone") or (sender_raw.split("@")[0].split(":")[0] if sender_raw else "")
+    from app.utils.phone import resolve_sender_phone
+    staged_by = resolve_sender_phone(ctx)
 
     try:
         if not confirmation_store.set(group_jid, action, action_params, description, staged_by=staged_by):

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.agent.multi_confirmation import MultiConfirmationStore, PendingMultiConfirmation
 from app.db.models import Blueprint, GroupRegistry, AdminNumbers, LedgerEntry
+from tests.conftest import SessionCM
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -35,15 +36,6 @@ def _add_entry(db, group_jid, from_phone, to_phone, amount_ils,
     db.add(entry)
     db.commit()
     return entry
-
-
-class _CM:
-    def __init__(self, session):
-        self._s = session
-    def __enter__(self):
-        return self._s
-    def __exit__(self, *a):
-        pass
 
 
 # ── MultiConfirmationStore unit tests ─────────────────────────────────────────
@@ -139,7 +131,7 @@ async def test_record_transaction_self_records_immediately(db):
     mcs = MultiConfirmationStore()
     mcs.set_sender(AsyncMock())
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)), \
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)), \
          patch("app.tools.accounting_tools.to_ils", new=AsyncMock(return_value=Decimal("100"))):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
@@ -166,7 +158,7 @@ async def test_record_transaction_payer_sends_awaits_participants(db):
     sender_mock = AsyncMock()
     mcs.set_sender(sender_mock)
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)), \
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)), \
          patch("app.tools.accounting_tools.to_ils", new=AsyncMock(return_value=Decimal("300"))):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
@@ -198,7 +190,7 @@ async def test_record_transaction_third_party_awaits_all(db):
     sender_mock = AsyncMock()
     mcs.set_sender(sender_mock)
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)), \
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)), \
          patch("app.tools.accounting_tools.to_ils", new=AsyncMock(return_value=Decimal("300"))):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
@@ -231,7 +223,7 @@ async def test_record_payment_payer_sends_awaits_payee(db):
     sender_mock = AsyncMock()
     mcs.set_sender(sender_mock)
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
         result = await tools["record_payment"]["executor"](
@@ -256,7 +248,7 @@ async def test_record_payment_payee_sends_awaits_payer(db):
     sender_mock = AsyncMock()
     mcs.set_sender(sender_mock)
 
-    with patch("app.tools.accounting_tools.SessionLocal", return_value=_CM(db)):
+    with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
         from app.tools.accounting_tools import get_accounting_tools
         tools = get_accounting_tools()
         result = await tools["record_payment"]["executor"](
@@ -312,7 +304,7 @@ async def test_agent_runner_intercepts_yes_and_commits(db):
     ctx = ContextStore()
     cs = ConfirmationStore()
 
-    with patch("app.db.session.SessionLocal", return_value=_CM(db)):
+    with patch("app.db.session.SessionLocal", return_value=SessionCM(db)):
         result = await runner.run(
             blueprint=bp,
             group_jid="123@g.us",

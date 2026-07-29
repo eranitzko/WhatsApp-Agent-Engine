@@ -2,8 +2,9 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 from sqlalchemy.exc import IntegrityError
-from app.db.models import GroupParticipant, GroupRegistry, Blueprint, AdminNumbers
+from app.db.models import GroupParticipant, AdminNumbers
 from app.participants import build_participant_block
+from tests.conftest import seed_blueprint, seed_group as _seed_group_shared
 
 
 def test_participant_insert_and_fetch(db):
@@ -93,10 +94,12 @@ def _upsert(db, group_jid, phone, push_name=None, admin_name=None,
     return row
 
 
+# Local wrapper (not inlined) because this file wants a custom blueprint
+# display_name ("IC") that the shared seed_blueprint's default doesn't
+# provide — seed_group's internal auto-seed becomes a no-op for this id.
 def _seed_group(db):
-    db.add(Blueprint(id="invoice_curator", display_name="IC", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="invoice_curator"))
-    db.commit()
+    seed_blueprint(db, id="invoice_curator", display_name="IC")
+    _seed_group_shared(db, "123@g.us", blueprint_id="invoice_curator")
 
 
 def test_upsert_new_participant(db):
@@ -139,8 +142,8 @@ def test_participant_remove_sets_status(db):
 @pytest.mark.asyncio
 async def test_sync_bootstraps_participants(db):
     db.add(AdminNumbers(phone_number="972500000001"))
-    db.add(Blueprint(id="invoice_curator", display_name="IC", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="invoice_curator"))
+    seed_blueprint(db, id="invoice_curator", display_name="IC")
+    _seed_group_shared(db, "123@g.us", blueprint_id="invoice_curator")
     db.commit()
 
     from app.command_handler import CommandHandler
@@ -165,8 +168,8 @@ async def test_sync_bootstraps_participants(db):
 # ── Task 5: build_participant_block ───────────────────────────────────────────
 
 def test_build_participant_block_basic(db):
-    db.add(Blueprint(id="fa", display_name="FA", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="fa"))
+    seed_blueprint(db, id="fa", display_name="FA")
+    _seed_group_shared(db, "123@g.us", blueprint_id="fa")
     db.add(GroupParticipant(group_jid="123@g.us", phone="972501111111",
                              push_name="Eran", is_household=True, status="active"))
     db.add(GroupParticipant(group_jid="123@g.us", phone="972502222222",
@@ -184,8 +187,8 @@ def test_build_participant_block_basic(db):
 
 
 def test_build_participant_block_removed_included(db):
-    db.add(Blueprint(id="fa", display_name="FA", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="456@g.us", blueprint_id="fa"))
+    seed_blueprint(db, id="fa", display_name="FA")
+    _seed_group_shared(db, "456@g.us", blueprint_id="fa")
     db.add(GroupParticipant(group_jid="456@g.us", phone="972501111111",
                              push_name="Eran", status="active"))
     db.add(GroupParticipant(group_jid="456@g.us", phone="972509999999",
@@ -198,8 +201,8 @@ def test_build_participant_block_removed_included(db):
 
 
 def test_build_participant_block_admin_name_takes_priority(db):
-    db.add(Blueprint(id="fa", display_name="FA", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="789@g.us", blueprint_id="fa"))
+    seed_blueprint(db, id="fa", display_name="FA")
+    _seed_group_shared(db, "789@g.us", blueprint_id="fa")
     db.add(GroupParticipant(group_jid="789@g.us", phone="972501111111",
                              push_name="Eran W.", admin_name="Eran", status="active"))
     db.commit()
@@ -217,8 +220,8 @@ def test_build_participant_block_empty_group(db):
 def test_build_participant_block_marks_acl_admin_by_canonical_phone(db):
     """A participant whose GroupParticipant.phone is their real, canonical
     phone (already matching AdminNumbers directly) is marked '(admin)'."""
-    db.add(Blueprint(id="fa2", display_name="FA", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="admin1@g.us", blueprint_id="fa2"))
+    seed_blueprint(db, id="fa2", display_name="FA")
+    _seed_group_shared(db, "admin1@g.us", blueprint_id="fa2")
     db.add(AdminNumbers(phone_number="972501111111", label="Eran"))
     db.add(GroupParticipant(group_jid="admin1@g.us", phone="972501111111",
                              push_name="Eran", status="active"))
@@ -240,8 +243,8 @@ def test_build_participant_block_marks_acl_admin_via_known_lid(db):
     admin (Sivan) that she wasn't one."""
     from app.db.models import UserProfile
 
-    db.add(Blueprint(id="fa3", display_name="FA", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="admin2@g.us", blueprint_id="fa3"))
+    seed_blueprint(db, id="fa3", display_name="FA")
+    _seed_group_shared(db, "admin2@g.us", blueprint_id="fa3")
     db.add(AdminNumbers(phone_number="972528695501", label="Sivan"))
     db.add(UserProfile(phone="972528695501", known_lid="8650248708313"))
     db.add(GroupParticipant(group_jid="admin2@g.us", phone="8650248708313",
@@ -274,8 +277,8 @@ def _make_registry():
 
 @pytest.mark.asyncio
 async def test_rename_participant_sets_admin_name(db):
-    db.add(Blueprint(id="fa", display_name="FA", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="fa"))
+    seed_blueprint(db, id="fa", display_name="FA")
+    _seed_group_shared(db, "123@g.us", blueprint_id="fa")
     db.add(GroupParticipant(group_jid="123@g.us", phone="972501111111",
                              push_name="Eran W.", status="active"))
     db.commit()
@@ -297,8 +300,8 @@ async def test_rename_participant_sets_admin_name(db):
 
 @pytest.mark.asyncio
 async def test_rename_participant_rejects_non_admin(db):
-    db.add(Blueprint(id="fa", display_name="FA", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="fa"))
+    seed_blueprint(db, id="fa", display_name="FA")
+    _seed_group_shared(db, "123@g.us", blueprint_id="fa")
     db.add(GroupParticipant(group_jid="123@g.us", phone="972501111111",
                              push_name="Eran", status="active"))
     db.commit()
@@ -320,8 +323,8 @@ async def test_rename_participant_rejects_non_admin(db):
 
 @pytest.mark.asyncio
 async def test_set_household_marks_participant(db):
-    db.add(Blueprint(id="fa", display_name="FA", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="fa"))
+    seed_blueprint(db, id="fa", display_name="FA")
+    _seed_group_shared(db, "123@g.us", blueprint_id="fa")
     db.add(GroupParticipant(group_jid="123@g.us", phone="972501111111",
                              push_name="Eran", status="active"))
     db.commit()
@@ -347,8 +350,8 @@ from app.tools.accounting_tools import _household_phones_from_db, _phone_to_name
 
 
 def test_household_phones_from_db(db):
-    db.add(Blueprint(id="fa", display_name="FA", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="fa"))
+    seed_blueprint(db, id="fa", display_name="FA")
+    _seed_group_shared(db, "123@g.us", blueprint_id="fa")
     db.add(GroupParticipant(group_jid="123@g.us", phone="972501111111",
                              push_name="Eran", is_household=True, status="active"))
     db.add(GroupParticipant(group_jid="123@g.us", phone="972502222222",
@@ -362,8 +365,8 @@ def test_household_phones_from_db(db):
 
 
 def test_phone_to_name_from_db_household_maps_to_parents(db):
-    db.add(Blueprint(id="fa", display_name="FA", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="fa"))
+    seed_blueprint(db, id="fa", display_name="FA")
+    _seed_group_shared(db, "123@g.us", blueprint_id="fa")
     db.add(GroupParticipant(group_jid="123@g.us", phone="972501111111",
                              admin_name="Eran", is_household=True, status="active"))
     db.add(GroupParticipant(group_jid="123@g.us", phone="972503333333",
@@ -376,8 +379,8 @@ def test_phone_to_name_from_db_household_maps_to_parents(db):
 
 
 def test_phone_to_name_from_db_admin_name_priority(db):
-    db.add(Blueprint(id="fa", display_name="FA", system_prompt="p", tools_enabled="[]"))
-    db.add(GroupRegistry(group_jid="123@g.us", blueprint_id="fa"))
+    seed_blueprint(db, id="fa", display_name="FA")
+    _seed_group_shared(db, "123@g.us", blueprint_id="fa")
     db.add(GroupParticipant(group_jid="123@g.us", phone="972501111111",
                              push_name="Eran W.", admin_name="Eran", status="active"))
     db.commit()

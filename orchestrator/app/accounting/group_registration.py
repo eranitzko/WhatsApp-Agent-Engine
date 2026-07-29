@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app import bridge_client
+from app.agent.reply_words import is_affirmative, is_negative
 from app.db.models import (
     AdminNumbers, GroupRegistry, UserAccount, Blueprint, UserProfile,
 )
@@ -94,9 +95,8 @@ class GroupRegistrationHandler:
             return False
 
         pending = self._pending.pop(target_jid)
-        reply_lower = reply.strip().lower()
 
-        if reply_lower in ("yes", "כן", "y"):
+        if is_affirmative(reply):
             await self._register_group(
                 db, target_jid, pending["human_phones"], pending["group_type"],
                 welcome="Your account is ready. You can start recording transactions here."
@@ -112,7 +112,7 @@ class GroupRegistrationHandler:
                         pass
             return True
 
-        if reply_lower in ("no", "לא", "n"):
+        if is_negative(reply):
             db.query(GroupRegistry).filter_by(group_jid=target_jid).delete()
             db.commit()
             try:
@@ -129,7 +129,7 @@ class GroupRegistrationHandler:
         """True if this group has a pending registration and text is yes/no."""
         if self._find_pending_for_admin(admin_group_jid) is None:
             return False
-        return text.strip().lower() in ("yes", "no", "כן", "לא", "y", "n")
+        return is_affirmative(text) or is_negative(text)
 
     def _find_pending_for_admin(self, admin_group_jid: str) -> str | None:
         for target_jid, info in self._pending.items():
