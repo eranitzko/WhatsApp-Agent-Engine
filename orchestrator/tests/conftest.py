@@ -43,7 +43,13 @@ def seed_group(db, jid, blueprint_id=None, **overrides):
     """Create (or return existing) GroupRegistry row, auto-seeding its
     Blueprint if missing. This makes the FK-ordering bug class
     (GroupRegistry referencing a never-created Blueprint, silently fine only
-    because SQLite doesn't enforce FKs by default) structurally impossible."""
+    because SQLite doesn't enforce FKs by default) structurally impossible.
+
+    Idempotent by jid (group_jid is the primary key) for the same reason as
+    seed_blueprint's own idempotency: a caller wanting custom group fields
+    can call this first with overrides, then rely on seed_household's
+    internal seed_group(db, group_jid, blueprint_id=...) call becoming a
+    no-op for that jid instead of raising IntegrityError on the duplicate PK."""
     from app.db.models import GroupRegistry
     existing = db.query(GroupRegistry).filter_by(group_jid=jid).first()
     if existing:

@@ -11,6 +11,9 @@ from tests.conftest import SessionCM, seed_blueprint, seed_group
 
 # ── ORM tests ─────────────────────────────────────────────────────────────────
 
+# Local wrapper (not inlined) because this file wants a custom blueprint
+# display_name ("Invoice Curator") that the shared seed_blueprint's default
+# doesn't provide — seed_group's internal auto-seed becomes a no-op for this id.
 def _seed_group_for_orm(db):
     seed_blueprint(db, id="invoice_curator", display_name="Invoice Curator")
     seed_group(db, "123@g.us", blueprint_id="invoice_curator")
@@ -186,7 +189,13 @@ from app.tools.automation_tools import get_automation_tools
 
 
 def _seed_group(db):
-    """Seed a GroupRegistry row so FK constraints are satisfied."""
+    """Seed a GroupRegistry row so FK constraints are satisfied.
+
+    Local wrapper (not inlined) because this file wants a custom blueprint
+    display_name ("Family Accounting") that the shared seed_blueprint's
+    default doesn't provide — seed_group's internal auto-seed becomes a
+    no-op for this id.
+    """
     seed_blueprint(db, id="family_accounting", display_name="Family Accounting")
     seed_group(db, "123@g.us", blueprint_id="family_accounting")
 

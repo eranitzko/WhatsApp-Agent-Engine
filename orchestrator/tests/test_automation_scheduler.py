@@ -11,6 +11,9 @@ from app.automation.executor import AutomationExecutor
 from tests.conftest import SessionCM, seed_blueprint, seed_group as _seed_group_shared
 
 
+# Local wrapper (not inlined) because this file wants a custom blueprint
+# display_name ("FA") that the shared seed_blueprint's default doesn't
+# provide — seed_group's internal auto-seed then becomes a no-op for this id.
 def _seed_group(db, group_jid="123@g.us"):
     seed_blueprint(db, id="family_accounting", display_name="FA")
     _seed_group_shared(db, group_jid, blueprint_id="family_accounting")

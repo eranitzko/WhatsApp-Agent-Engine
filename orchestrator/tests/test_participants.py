@@ -94,6 +94,9 @@ def _upsert(db, group_jid, phone, push_name=None, admin_name=None,
     return row
 
 
+# Local wrapper (not inlined) because this file wants a custom blueprint
+# display_name ("IC") that the shared seed_blueprint's default doesn't
+# provide — seed_group's internal auto-seed becomes a no-op for this id.
 def _seed_group(db):
     seed_blueprint(db, id="invoice_curator", display_name="IC")
     _seed_group_shared(db, "123@g.us", blueprint_id="invoice_curator")

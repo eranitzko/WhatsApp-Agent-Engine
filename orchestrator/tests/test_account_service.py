@@ -8,6 +8,12 @@ from app.accounting.account_service import AccountService
 from tests.conftest import seed_blueprint, seed_group, seed_household
 
 
+# Thin wrappers around the shared conftest fixtures, kept local (not fully
+# inlined at call sites) because this file's tests need a "family_accounting"
+# blueprint with custom fields (model, tools_enabled) that the shared
+# seed_blueprint's defaults don't provide — seed_group/seed_household's
+# internal auto-seed of "family_accounting" then becomes a no-op here,
+# since seed_blueprint is idempotent by id.
 def _seed_blueprint(db):
     seed_blueprint(
         db, id="family_accounting", display_name="FA",
@@ -313,7 +319,13 @@ from app.db.models import HouseholdMember
 
 
 def _seed_household(db, phone: str, group_jid: str, blueprint_id: str = "family_accounting") -> tuple:
-    """Create Household + HouseholdMember + GroupRegistry so FK constraints hold."""
+    """Create Household + HouseholdMember + GroupRegistry so FK constraints hold.
+
+    Kept as a local wrapper (not inlined) for the same reason as _seed_blueprint
+    above: pre-seeds the custom "family_accounting" blueprint fields this file
+    needs before delegating to the shared seed_household, whose own auto-seed
+    becomes a no-op for that id.
+    """
     _seed_blueprint(db)
     return seed_household(db, phone, group_jid, blueprint_id=blueprint_id)
 
