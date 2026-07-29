@@ -81,6 +81,30 @@ def apply_payment(payment_amount: Decimal, open_debts: list[DebtLeg]) -> Settlem
     )
 
 
+def net_pair(a: str, b: str, net: Decimal) -> tuple[str, str, Decimal] | None:
+    """Resolve a signed net amount between two parties into one directed
+    (debtor, creditor, amount) line, or None if they're exactly settled.
+
+    `net` is the amount a owes b minus the amount b owes a: positive means
+    a is the net debtor, negative means b is, zero means fully offset (the
+    caller should treat this as "nothing to show", not a $0 line).
+
+    This is the "net two directed amounts between A and B into one signed
+    line" shape that was independently duplicated (with an
+    `if net > 0: ... elif net < 0: ... else: ...` idiom) across
+    get_balance's two-phone/household/per-partner cases, get_debt_summary,
+    account_service.balance_update_message, and accounting_export's
+    _compute_net_balances. Callers that start from two raw directed amounts
+    (e.g. a_owes_b, b_owes_a) should subtract them first:
+    net_pair(a, b, a_owes_b - b_owes_a).
+    """
+    if net > Decimal("0"):
+        return (a, b, net)
+    elif net < Decimal("0"):
+        return (b, a, -net)
+    return None
+
+
 def fetch_open_debt_legs(db, group_jid: str, from_phone: str, to_phone: str, household_id: str | None = None) -> list[DebtLeg]:
     """Query open (partially/fully unsettled) LedgerEntry rows for a directed
     (from_phone, to_phone) pair, ordered oldest-first, as DebtLeg objects

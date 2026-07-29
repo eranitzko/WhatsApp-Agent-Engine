@@ -14,7 +14,7 @@ from app.db.models import (
     LedgerEntry, LedgerSettlement, ScheduledMessage, UserProfile, ReportFormat,
 )
 from app.db.session import SessionLocal
-from app.tools.accounting_fifo import DebtLeg, apply_payment, split_evenly
+from app.tools.accounting_fifo import DebtLeg, apply_payment, net_pair, split_evenly
 from app.tools.accounting_fx import to_ils
 from app.agent.correction_queue import correction_queue
 from app.utils.phone import resolve_sender_phone
@@ -639,11 +639,11 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
             net = net_vs_group(phone_a, counterparts_a) if phone_a not in household \
                 else -net_vs_group(phone_b, counterparts_b)
             la, lb = label(phone_a), label(phone_b)
-            if net > Decimal("0"):
-                return f"{la} owes {lb}: {net:.2f} ILS"
-            elif net < Decimal("0"):
-                return f"{lb} owes {la}: {(-net):.2f} ILS"
-            return f"{la} and {lb} are settled up."
+            result = net_pair(la, lb, net)
+            if result is None:
+                return f"{la} and {lb} are settled up."
+            debtor, creditor, amount = result
+            return f"{debtor} owes {creditor}: {amount:.2f} ILS"
 
         q = db.query(LedgerEntry).filter(
             or_(LedgerEntry.from_phone == phone_a, LedgerEntry.to_phone == phone_a),
@@ -662,21 +662,23 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
         individual_partners = sorted(all_partners - household)
         lines = []
         if household_partners and phone_a not in household:
-            net = net_vs_group(phone_a, household_partners)
             la = label(phone_a)
-            if net > Decimal("0"):
-                lines.append(f"{la} owes Parents: {net:.2f} ILS")
-            elif net < Decimal("0"):
-                lines.append(f"Parents owe {la}: {(-net):.2f} ILS")
+            result = net_pair(la, "Parents", net_vs_group(phone_a, household_partners))
+            if result is not None:
+                debtor, creditor, amount = result
+                # "Parents" is a plural label -> "Parents owe", but any other
+                # (individual) debtor takes the singular "owes" — preserve
+                # both original phrasings depending on which side nets debtor.
+                verb = "owes" if debtor == la else "owe"
+                lines.append(f"{debtor} {verb} {creditor}: {amount:.2f} ILS")
         for partner in individual_partners:
             a_owes = _net_owed(db, group_jid, phone_a, partner, household_id)
             p_owes = _net_owed(db, group_jid, partner, phone_a, household_id)
-            net = a_owes - p_owes
             la, lp = label(phone_a), label(partner)
-            if net > Decimal("0"):
-                lines.append(f"{la} owes {lp}: {net:.2f} ILS")
-            elif net < Decimal("0"):
-                lines.append(f"{lp} owes {la}: {(-net):.2f} ILS")
+            result = net_pair(la, lp, a_owes - p_owes)
+            if result is not None:
+                debtor, creditor, amount = result
+                lines.append(f"{debtor} owes {creditor}: {amount:.2f} ILS")
         return "\n".join(lines) if lines else f"No open balances for {label(phone_a)}."
 
 
@@ -731,11 +733,10 @@ async def _exec_get_debt_summary(params: dict, **ctx) -> str:
         seen_pairs.add(pair)
         forward = gross.get((a, b), Decimal("0"))
         reverse = gross.get((b, a), Decimal("0"))
-        diff = forward - reverse
-        if diff == Decimal("0"):
+        result = net_pair(a, b, forward - reverse)
+        if result is None:
             continue
-        debtor, creditor = (a, b) if diff > 0 else (b, a)
-        amount = abs(diff)
+        debtor, creditor, amount = result
         since = min(d for d in (oldest.get((a, b)), oldest.get((b, a))) if d is not None)
         net_lines.append((amount, debtor, creditor, since))
 

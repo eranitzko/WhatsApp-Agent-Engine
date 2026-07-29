@@ -14,6 +14,7 @@ from app.db.session import SessionLocal
 from app.db.models import LedgerEntry
 from app.reports.formatting import format_currency as _fmt_currency
 from app.reports.formatting import format_date as _fmt_date
+from app.tools.accounting_fifo import net_pair
 
 
 def _phone_to_name_from_db(db, group_jid: str, phones: set[str] | None = None) -> dict[str, str]:
@@ -154,11 +155,10 @@ def _compute_net_balances(entries: list, names: dict[str, str]) -> dict[tuple[st
             continue
         seen.add(canonical)
         reverse = raw.get((b, a), Decimal("0"))
-        net = amt - reverse
-        if net > Decimal("0"):
-            netted[(a, b)] = net
-        elif net < Decimal("0"):
-            netted[(b, a)] = -net
+        result = net_pair(a, b, amt - reverse)
+        if result is not None:
+            debtor, creditor, amount = result
+            netted[(debtor, creditor)] = amount
     return netted
 
 

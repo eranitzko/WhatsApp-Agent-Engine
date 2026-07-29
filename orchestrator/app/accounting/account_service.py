@@ -16,7 +16,7 @@ from app.db.models import (
     UserAccount, UserProfile,
 )
 from app.agent.reply_words import is_affirmative, is_negative
-from app.tools.accounting_fifo import DebtLeg, apply_payment
+from app.tools.accounting_fifo import DebtLeg, apply_payment, net_pair
 from app.tools.accounting_tools import _net_owed
 from app.utils.phone import normalize_phone
 
@@ -82,13 +82,16 @@ class AccountService:
         other_name = self.get_display_name(db, other_phone)
         owes = _net_owed(db, group_jid, phone, other_phone, household_id)
         owed = _net_owed(db, group_jid, other_phone, phone, household_id)
-        net = owes - owed
-        if net > Decimal("0"):
-            state = f"you owe {other_name} ₪{net:.2f}"
-        elif net < Decimal("0"):
-            state = f"{other_name} owes you ₪{(-net):.2f}"
-        else:
+        result = net_pair("you", other_name, owes - owed)
+        if result is None:
             state = "settled up"
+        else:
+            debtor, creditor, amount = result
+            # "you" is 2nd person ("you owe"), the other party is 3rd person
+            # ("X owes you") — preserve both original phrasings depending on
+            # which side nets debtor.
+            state = f"you owe {creditor} ₪{amount:.2f}" if debtor == "you" \
+                else f"{debtor} owes you ₪{amount:.2f}"
         return f"Updated. Your balance with {other_name} is now: {state}."
 
     def get_member_private_group(self, db: Session, phone: str) -> str | None:

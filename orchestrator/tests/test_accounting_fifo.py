@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.tools.accounting_fifo import DebtLeg, SettlementResult, apply_payment
+from app.tools.accounting_fifo import DebtLeg, SettlementResult, apply_payment, net_pair
 
 
 def _leg(id: str, amount: float, settled: float = 0.0, days_ago: int = 0) -> DebtLeg:
@@ -111,3 +111,35 @@ def test_split_evenly_returns_one_share_per_person():
 
     result = split_evenly(Decimal("100"), 4)
     assert result == [Decimal("25.00")] * 4
+
+
+def test_net_pair_a_nets_positive():
+    """a owes more than b owes back -> a is the debtor, amount is the positive diff."""
+    result = net_pair("alice", "bob", Decimal("30"))
+    assert result == ("alice", "bob", Decimal("30"))
+
+
+def test_net_pair_b_nets_positive():
+    """Negative net -> b is actually the debtor, and the amount is reported positive."""
+    result = net_pair("alice", "bob", Decimal("-30"))
+    assert result == ("bob", "alice", Decimal("30"))
+
+
+def test_net_pair_exact_zero_returns_none():
+    """Fully offset -> nothing to show, not a $0 line."""
+    assert net_pair("alice", "bob", Decimal("0")) is None
+
+
+def test_net_pair_computed_from_two_directed_amounts():
+    """Typical caller shape: subtract two raw directed amounts before calling."""
+    a_owes_b = Decimal("50")
+    b_owes_a = Decimal("20")
+    result = net_pair("alice", "bob", a_owes_b - b_owes_a)
+    assert result == ("alice", "bob", Decimal("30"))
+
+
+def test_net_pair_two_directed_amounts_exactly_offset():
+    """Two raw directed amounts that are equal net to exactly zero -> None."""
+    a_owes_b = Decimal("40")
+    b_owes_a = Decimal("40")
+    assert net_pair("alice", "bob", a_owes_b - b_owes_a) is None
