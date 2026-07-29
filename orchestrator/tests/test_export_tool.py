@@ -183,16 +183,17 @@ def test_invoice_generator_build_pdf_real_render_pdf_returns_bytes(db):
     from datetime import date
     from decimal import Decimal
 
-    from app.db.models import GroupConfig, Invoice
+    from app.db.models import GroupConfig
+    from tests.conftest import make_invoice
 
     db.add(GroupConfig(group_id="123@g.us", feedback_language="en"))
-    db.add(Invoice(
-        id="inv-1", group_id="123@g.us", message_id="msg-1", image_hash="hash1",
+    db.commit()
+    make_invoice(
+        db, group_id="123@g.us",
         invoice_date=date(2026, 5, 3), invoice_number="INV-1", vendor="Acme",
         description="Widgets", amount_original=Decimal("100"), currency_original="ILS",
         amount_ils=Decimal("100"), flagged=True,
-    ))
-    db.commit()
+    )
 
     from app.export.generators.invoice import InvoiceGenerator
 

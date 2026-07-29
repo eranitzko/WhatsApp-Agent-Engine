@@ -3,22 +3,19 @@ from decimal import Decimal
 
 import pytest
 
-from app.db.models import Invoice, LedgerEntry, LedgerSettlement
+from app.db.models import LedgerEntry, LedgerSettlement
 from app.automation.evaluators import ThresholdEvaluator
+from tests.conftest import make_invoice
 
 
 def _add_invoice(db, group_id, amount_ils, invoice_date=None):
-    from app.db.models import Invoice
-    inv = Invoice(
+    make_invoice(
+        db,
         group_id=group_id,
-        message_id=f"msg-{amount_ils}-{invoice_date}",
-        image_hash=f"hash-{amount_ils}-{invoice_date}",
         amount_ils=Decimal(str(amount_ils)),
         currency_original="ILS",
         invoice_date=invoice_date or date.today(),
     )
-    db.add(inv)
-    db.commit()
 
 
 def _add_ledger_entry(db, group_jid, from_phone, to_phone, amount_ils, amount_settled=0):
