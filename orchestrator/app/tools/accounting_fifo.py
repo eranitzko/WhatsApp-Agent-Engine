@@ -1,6 +1,9 @@
 """FIFO settlement logic, fully testable in isolation — no DB access in the
-core logic (DebtLeg, apply_payment). The one deliberate exception is
-fetch_open_debt_legs below, which does query the DB; it lives here anyway
+core logic (DebtLeg, apply_payment). This module has also become the shared
+home for other pure, DB-independent accounting utilities that don't belong
+to any one blueprint's tool file (split_evenly, net_pair) — consolidated
+here rather than each getting reinvented per call site. The one exception
+that DOES query the DB is fetch_open_debt_legs below; it lives here anyway
 since it's the natural counterpart to apply_payment (see its own docstring).
 """
 

@@ -143,3 +143,18 @@ def test_net_pair_two_directed_amounts_exactly_offset():
     a_owes_b = Decimal("40")
     b_owes_a = Decimal("40")
     assert net_pair("alice", "bob", a_owes_b - b_owes_a) is None
+
+
+def test_net_pair_two_directed_amounts_b_nets_debtor():
+    """Raw two-amount caller shape where b (not a) ends up the net debtor."""
+    a_owes_b = Decimal("20")
+    b_owes_a = Decimal("50")
+    result = net_pair("alice", "bob", a_owes_b - b_owes_a)
+    assert result == ("bob", "alice", Decimal("30"))
+
+
+def test_net_pair_smallest_nonzero_amount():
+    """Boundary: the smallest representable non-zero Decimal still nets a
+    result rather than being treated as effectively zero."""
+    result = net_pair("alice", "bob", Decimal("0.01"))
+    assert result == ("alice", "bob", Decimal("0.01"))
