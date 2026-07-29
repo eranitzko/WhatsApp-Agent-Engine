@@ -126,6 +126,11 @@ class SessionCM:
 
 
 def make_invoice(db, **overrides):
+    """Create an Invoice row with sensible defaults for every NOT-NULL column
+    (group_id, message_id, image_hash — the exact pair whose addition already
+    broke multiple tests independently before this factory existed, since
+    each test hand-built its own field set with no single place to update).
+    Pass overrides for any field a specific test asserts on."""
     from datetime import date
     from decimal import Decimal
     from app.db.models import Invoice
