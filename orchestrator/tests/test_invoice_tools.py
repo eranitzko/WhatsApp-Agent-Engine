@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from app.tools.invoice_tools import get_invoice_tools
-from tests.conftest import SessionCM
+from tests.conftest import SessionCM, make_invoice
 
 EXPECTED_TOOLS = [
     "get_status", "list_invoices", "get_invoice_summary", "update_config",
@@ -200,12 +200,11 @@ async def test_exec_set_invoice_amount_allows_negative_for_refund(db):
     from app.agent.tools import exec_set_invoice_amount
     from app.db.models import Invoice
 
-    db.add(Invoice(
-        id="inv-neg", group_id="123@g.us", message_id="msg-neg", image_hash="hash-neg",
+    make_invoice(
+        db, id="inv-neg", group_id="123@g.us",
         invoice_date=date(2026, 7, 14), vendor="Acme",
         amount_original=Decimal("22.5"), currency_original="ILS", amount_ils=Decimal("22.5"),
-    ))
-    db.commit()
+    )
 
     with patch("app.agent.tools.SessionLocal", return_value=SessionCM(db)):
         result = await exec_set_invoice_amount(
