@@ -3,7 +3,11 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from app.db.models import Invoice
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.db.models import Base, Invoice
 from app.pipeline.storage import invoice_to_sidecar_dict
 
 
@@ -53,3 +57,43 @@ def test_invoice_to_sidecar_dict_none_dates_stay_none():
     assert d["amount_original"] is None
     assert d["amount_ils"] is None
     assert d["exchange_rate"] is None
+
+
+def test_invoice_to_sidecar_dict_after_commit_and_session_close():
+    """Regression: pipeline.py persists the invoice via `with SessionLocal()
+    as db: db.add(invoice); db.commit()`, then calls invoice_to_sidecar_dict(
+    invoice) AFTER that block exits (session closed) — this is the real
+    production shape, unlike the tests above which use a bare Invoice()
+    never added to any session, so they never actually exercise this path.
+
+    SQLAlchemy's default expire_on_commit=True marks every attribute on a
+    committed instance as stale; reading an expired attribute normally
+    triggers a lazy reload from the session, which raises
+    DetachedInstanceError once that session has closed. The fix (a
+    db.refresh(invoice) call before the session closes, already the
+    pattern used in exec_set_invoice_date/exec_set_invoice_amount) must
+    make this safe to read afterward."""
+    engine = create_engine(
+        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+
+    invoice = Invoice(
+        id="inv-3", group_id="123@g.us", message_id="msg-3", image_hash="hash-3",
+        submitted_by="972501@s.whatsapp.net",
+        received_at=datetime(2026, 7, 14, tzinfo=timezone.utc),
+        invoice_date=date(2026, 7, 14), invoice_number="INV-3", vendor="Acme",
+        description="Widgets", amount_original=Decimal("100"), currency_original="ILS",
+        amount_ils=Decimal("100"), exchange_rate=Decimal("1"), rate_source="boi",
+        extraction_confidence=0.9, flagged=False, flag_reason=None,
+    )
+    with SessionLocal() as db:
+        db.add(invoice)
+        db.commit()
+        db.refresh(invoice)  # the fix: un-expire attributes before the session closes
+
+    # Session is closed now — this must not raise DetachedInstanceError.
+    d = invoice_to_sidecar_dict(invoice)
+    assert d["invoice_id"] == "inv-3"
+    assert d["vendor"] == "Acme"

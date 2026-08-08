@@ -209,6 +209,13 @@ async def process_image_event(event: dict) -> dict:
     with SessionLocal() as db:
         db.add(invoice)
         db.commit()
+        # Un-expire invoice's attributes before the session closes below —
+        # commit() marks them stale by default, and reading a stale attribute
+        # needs a live session to reload it. invoice_to_sidecar_dict(invoice)
+        # runs after this block exits, so without this refresh it raises
+        # DetachedInstanceError on every single invoice. Same pattern already
+        # used correctly in exec_set_invoice_date/exec_set_invoice_amount.
+        db.refresh(invoice)
 
     logger.info(
         "Invoice saved: id=%s vendor=%s amount=%s %s ils=%s flagged=%s",
