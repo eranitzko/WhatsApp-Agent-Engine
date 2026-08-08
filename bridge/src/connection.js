@@ -105,7 +105,11 @@ export async function connect() {
       console.log('\n📱 Scan this QR code with WhatsApp:\n')
       qrcode.generate(qr, { small: true })
       // Fire-and-forget: notify backend to email QR to admin
-      axios.post(`${process.env.BACKEND_URL}/internal/qr-notify`, { qr }).catch((err) => {
+      const qrHeaders = { 'Content-Type': 'application/json' }
+      if (process.env.WEBHOOK_SECRET) {
+        qrHeaders['Authorization'] = `Bearer ${process.env.WEBHOOK_SECRET}`
+      }
+      axios.post(`${process.env.BACKEND_URL}/internal/qr-notify`, { qr }, { headers: qrHeaders }).catch((err) => {
         console.warn('Could not send QR notification:', err.message)
       })
     }
