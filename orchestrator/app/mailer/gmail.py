@@ -73,6 +73,51 @@ def send_report_email(
         raise RuntimeError(f"Failed to send email: {exc}") from exc
 
 
+def send_bridge_down_email(down_since: str, detail: str) -> None:
+    """Notify GMAIL_USER that the WhatsApp bridge is unreachable.
+
+    Sent by the orchestrator's own periodic health check (app/scheduler.py),
+    not by the bridge itself — if the bridge container is fully down, it has
+    no way to report its own absence, so a separate, still-running process
+    has to notice and alert instead.
+
+    Args:
+        down_since: ISO timestamp of when the bridge was first seen unreachable.
+        detail: Short description of the failure (e.g. the connection error).
+
+    Raises:
+        RuntimeError: If sending fails.
+    """
+    if not settings.gmail_user or not settings.gmail_app_password:
+        raise RuntimeError("Gmail credentials not configured.")
+
+    msg = MIMEMultipart()
+    msg["From"]    = settings.gmail_user
+    msg["To"]      = settings.gmail_user
+    msg["Subject"] = "⚠️ Invoice Curator — WhatsApp bridge unreachable"
+
+    body = (
+        f"The WhatsApp bridge has been unreachable since {down_since}.\n\n"
+        f"Detail: {detail}\n\n"
+        "This is different from a QR-scan-needed notification — the bridge "
+        "itself isn't responding, not just logged out. Check the container: "
+        "docker ps / docker logs whatsapp-bridge-1 on the server."
+    )
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    try:
+        with smtplib.SMTP(_SMTP_HOST, _SMTP_PORT, timeout=30) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(settings.gmail_user, settings.gmail_app_password)
+            server.sendmail(settings.gmail_user, settings.gmail_user, msg.as_bytes())
+        logger.info("Bridge-down notification email sent to %s", settings.gmail_user)
+    except smtplib.SMTPException as exc:
+        logger.error("Gmail SMTP error sending bridge-down notification: %s", exc)
+        raise RuntimeError(f"Failed to send bridge-down email: {exc}") from exc
+
+
 def send_qr_email(qr_string: str) -> None:
     """Send the WhatsApp re-auth QR code as an inline image to GMAIL_USER.
 

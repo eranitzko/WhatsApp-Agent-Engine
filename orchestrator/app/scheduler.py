@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 _scheduler = AsyncIOScheduler()
 _BRIDGE_SECRET: str = os.environ.get("BRIDGE_SECRET", "")
 
+# Bridge health monitor state — module-level since _check_bridge_health runs
+# on a recurring timer and needs to remember an in-progress outage across calls.
+_bridge_down_since: datetime | None = None
+_bridge_alert_sent = False
+_BRIDGE_DOWN_ALERT_THRESHOLD = timedelta(minutes=5)
+
 # Set at startup by main.py via set_automation_executor()
 _automation_executor: "AutomationExecutor | None" = None
 
@@ -90,6 +96,40 @@ async def _dispatch_due_messages() -> None:
             except Exception:
                 logger.exception("Failed to dispatch scheduled message %s", msg.id)
         db.commit()
+
+
+# ── Bridge health monitor ─────────────────────────────────────────────────────
+
+async def _check_bridge_health() -> None:
+    """Poll the bridge's /health endpoint. If it stays unreachable for longer
+    than _BRIDGE_DOWN_ALERT_THRESHOLD, send exactly one email alert (not one
+    per check) until it recovers. The bridge can't report its own absence if
+    the whole container is down — this still-running process has to notice
+    instead. Short blips (a routine redeploy, a brief restart) never cross
+    the threshold and stay silent."""
+    global _bridge_down_since, _bridge_alert_sent
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.get(f"{settings.bridge_url}/health")
+        if _bridge_down_since is not None:
+            logger.info("Bridge reachable again (was down since %s)", _bridge_down_since)
+        _bridge_down_since = None
+        _bridge_alert_sent = False
+    except Exception as exc:
+        now = datetime.now(timezone.utc)
+        if _bridge_down_since is None:
+            _bridge_down_since = now
+            logger.warning("Bridge unreachable: %s", exc)
+            return
+        if not _bridge_alert_sent and now - _bridge_down_since >= _BRIDGE_DOWN_ALERT_THRESHOLD:
+            logger.error("Bridge unreachable since %s — sending email alert", _bridge_down_since)
+            try:
+                from app.mailer.gmail import send_bridge_down_email
+                send_bridge_down_email(_bridge_down_since.isoformat(), str(exc))
+                _bridge_alert_sent = True
+            except RuntimeError:
+                logger.exception("Failed to send bridge-down alert email")
 
 
 # ── Automation jobs ───────────────────────────────────────────────────────────
@@ -345,6 +385,9 @@ def start_scheduler() -> None:
         _expire_multi_confirmations, "interval", seconds=60, id="expire_multi_confirmations"
     )
     _scheduler.add_job(
+        _check_bridge_health, "interval", seconds=60, id="check_bridge_health"
+    )
+    _scheduler.add_job(
         _fire_recurring_rules, "interval", minutes=60, id="fire_recurring_rules"
     )
     _scheduler.add_job(
@@ -360,7 +403,7 @@ def start_scheduler() -> None:
         _expire_split_transactions, "interval", minutes=60, id="expire_split_transactions"
     )
     _scheduler.start()
-    logger.info("APScheduler started — 2 × 60s jobs, 5 × 60min automation jobs")
+    logger.info("APScheduler started — 3 × 60s jobs, 5 × 60min automation jobs")
 
 
 def stop_scheduler() -> None:
