@@ -9,6 +9,7 @@ import axios from 'axios'
 import P from 'pino'
 import qrcode from 'qrcode-terminal'
 import sharp from 'sharp'
+import { rm } from 'fs/promises'
 import { isGroupAdmin, invalidateGroup } from './adminCache.js'
 import { forwardToBackend } from './forwarder.js'
 
@@ -114,7 +115,18 @@ export async function connect() {
       const loggedOut = statusCode === DisconnectReason.loggedOut
 
       if (loggedOut) {
-        console.error('Logged out from WhatsApp. Exiting so Docker can restart and show a fresh QR.')
+        // Without this, the stale auth files on disk survive the restart —
+        // useMultiFileAuthState reloads the same now-invalid credentials,
+        // WhatsApp logs us out again immediately, and the process crash-loops
+        // forever without ever showing a fresh QR. Clearing them here is what
+        // actually makes "exiting so Docker can restart and show a fresh QR"
+        // true, instead of requiring someone to do this by hand on the server.
+        console.error('Logged out from WhatsApp. Clearing stale auth files and exiting so Docker can restart and show a fresh QR.')
+        try {
+          await rm(AUTH_PATH, { recursive: true, force: true })
+        } catch (err) {
+          console.error('Failed to clear auth files:', err.message)
+        }
         process.exit(1)
       } else {
         console.log(`Connection closed (code ${statusCode}). Reconnecting in ${RECONNECT_DELAY_MS}ms...`)
