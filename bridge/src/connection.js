@@ -9,7 +9,8 @@ import axios from 'axios'
 import P from 'pino'
 import qrcode from 'qrcode-terminal'
 import sharp from 'sharp'
-import { rm } from 'fs/promises'
+import { readdir, rm } from 'fs/promises'
+import { join } from 'path'
 import { isGroupAdmin, invalidateGroup } from './adminCache.js'
 import { forwardToBackend } from './forwarder.js'
 
@@ -123,7 +124,13 @@ export async function connect() {
         // true, instead of requiring someone to do this by hand on the server.
         console.error('Logged out from WhatsApp. Clearing stale auth files and exiting so Docker can restart and show a fresh QR.')
         try {
-          await rm(AUTH_PATH, { recursive: true, force: true })
+          // AUTH_PATH itself is a mounted volume directory — remove its
+          // contents, not the mount point (rm'ing the directory itself
+          // fails with EBUSY since it's an active mount).
+          const entries = await readdir(AUTH_PATH)
+          await Promise.all(
+            entries.map((entry) => rm(join(AUTH_PATH, entry), { recursive: true, force: true }))
+          )
         } catch (err) {
           console.error('Failed to clear auth files:', err.message)
         }
