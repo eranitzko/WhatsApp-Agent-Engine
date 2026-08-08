@@ -462,7 +462,18 @@ async def _process(payload: WebhookPayload) -> None:
         )
         await _send(payload.jid, reply)
     except Exception:
+        # Previously this only logged — any unhandled error (API billing
+        # failures, DB errors, etc.) left the user with silence, indistinguishable
+        # from the bridge itself being down. Tell the group something broke.
         logger.exception("Unhandled error processing event for group %s", payload.jid)
+        try:
+            await _send(
+                payload.jid,
+                "⚠️ Something went wrong processing that. Please try again in a moment — "
+                "if it keeps happening, let the admin know.",
+            )
+        except Exception:
+            logger.exception("Also failed to notify group %s of the error", payload.jid)
     finally:
         db.close()
         group_lock.release()
