@@ -15,6 +15,24 @@ import { forwardToBackend } from './forwarder.js'
 const AUTH_PATH = process.env.AUTH_PATH || './auth'
 const RECONNECT_DELAY_MS = 3000
 
+// Watchdog: Baileys occasionally hits an internal query timeout (e.g. inside
+// executeInitQueries) that gets caught and logged by its own logger without
+// ever firing our 'connection.update'/close handler — the socket is left in
+// a silently-dead state (process alive, WhatsApp traffic stopped) that the
+// normal reconnect logic above never sees. Detect this independently by
+// periodically probing the connection with a real request/response
+// round-trip (groupFetchAllParticipating, the same kind of query() call that
+// was seen hanging) and exiting if it keeps failing — Docker's
+// `restart: unless-stopped` policy then restarts the process and reconnects
+// cleanly, mirroring the existing loggedOut recovery path below.
+const WATCHDOG_CHECK_INTERVAL_MS = 2 * 60 * 1000
+const WATCHDOG_PROBE_TIMEOUT_MS = 20 * 1000
+const WATCHDOG_STALE_THRESHOLD_MS = 6 * 60 * 1000
+
+let lastAliveAt = Date.now()
+let connectionOpen = false
+let watchdogTimer = null
+
 // Prevent Baileys internal bad-request / unhandled rejections from crashing the process
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled rejection (non-fatal):', reason?.message || reason)
@@ -33,6 +51,34 @@ let sock = null
 
 export function getSocket() {
   return sock
+}
+
+function startWatchdog() {
+  if (watchdogTimer) return  // already running — connect() may be called again on reconnect
+  watchdogTimer = setInterval(async () => {
+    if (!sock || !connectionOpen) return  // reconnect already in progress; let it finish
+
+    try {
+      await Promise.race([
+        sock.groupFetchAllParticipating(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('watchdog probe timed out')), WATCHDOG_PROBE_TIMEOUT_MS)
+        ),
+      ])
+      lastAliveAt = Date.now()
+    } catch (err) {
+      console.warn('Watchdog probe failed:', err.message)
+    }
+
+    const staleFor = Date.now() - lastAliveAt
+    if (staleFor > WATCHDOG_STALE_THRESHOLD_MS) {
+      console.error(
+        `Watchdog: no successful liveness probe in ${Math.round(staleFor / 1000)}s — ` +
+        `connection appears stuck despite believing it's open. Exiting so Docker can restart and reconnect cleanly.`
+      )
+      process.exit(1)
+    }
+  }, WATCHDOG_CHECK_INTERVAL_MS)
 }
 
 export async function connect() {
@@ -63,11 +109,12 @@ export async function connect() {
     }
 
     if (connection === 'close') {
+      connectionOpen = false
       const statusCode = lastDisconnect?.error?.output?.statusCode
       const loggedOut = statusCode === DisconnectReason.loggedOut
 
       if (loggedOut) {
-        console.error('Logged out from WhatsApp. Exiting so watchdog can restart and show a fresh QR.')
+        console.error('Logged out from WhatsApp. Exiting so Docker can restart and show a fresh QR.')
         process.exit(1)
       } else {
         console.log(`Connection closed (code ${statusCode}). Reconnecting in ${RECONNECT_DELAY_MS}ms...`)
@@ -75,6 +122,9 @@ export async function connect() {
       }
     } else if (connection === 'open') {
       console.log('✅ Connected to WhatsApp')
+      connectionOpen = true
+      lastAliveAt = Date.now()
+      startWatchdog()
       // Appear offline — don't show the bot as "online" to contacts
       try {
         await sock.sendPresenceUpdate('unavailable')
