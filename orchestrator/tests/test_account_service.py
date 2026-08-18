@@ -158,6 +158,51 @@ async def test_request_confirmation_creates_row(db):
     )
 
 
+@pytest.mark.asyncio
+async def test_request_confirmation_delivery_failure_does_not_roll_back_other_pending_work(db):
+    """A failed bridge send must only discard THIS confirmation, not other
+    not-yet-committed work already staged in the same session (e.g. a sibling
+    split share, or the split header itself) — see process_split, which stages
+    several objects in one session before any of them commits."""
+    _seed_group(db, "tal_grp3@g.us")
+    _seed_user(db, "972513", "tal_grp3@g.us")
+    svc = AccountService()
+
+    # Simulate other work already staged earlier in the same session/transaction,
+    # not yet committed — mirrors process_split's self_confirmed row + header.
+    sibling = CrossGroupConfirmation(
+        initiator_phone="972500",
+        initiator_group_jid="eden_grp@g.us",
+        target_phone="972500",
+        target_group_jid="eden_grp@g.us",
+        action_type="split_share",
+        action_payload="{}",
+        status="self_confirmed",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    db.add(sibling)
+    db.flush()
+    sibling_id = sibling.id
+
+    with patch("app.accounting.account_service.bridge_client") as mock_bc:
+        mock_bc.send_message = AsyncMock(side_effect=RuntimeError("bridge unreachable"))
+        with pytest.raises(RuntimeError):
+            await svc.request_confirmation(
+                db=db,
+                initiator_phone="972500",
+                initiator_group_jid="eden_grp@g.us",
+                target_phone="972513",
+                action_type="record_expense",
+                action_payload={"amount_ils": "100.00"},
+                confirmation_message="Tal, Eden says you owe ₪100. Confirm?",
+            )
+
+    # The sibling row staged before the failed call must survive.
+    assert db.query(CrossGroupConfirmation).filter_by(id=sibling_id).first() is not None
+    # The failed confirmation itself must NOT have been persisted.
+    assert db.query(CrossGroupConfirmation).filter_by(target_phone="972513").first() is None
+
+
 def test_handle_confirmation_reply_yes_flips_status(db):
     _seed_group(db, "tal_grp2@g.us")
     _seed_user(db, "972512", "tal_grp2@g.us")

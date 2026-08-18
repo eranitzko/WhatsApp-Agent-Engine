@@ -335,10 +335,14 @@ class AccountService:
     ) -> CrossGroupConfirmation:
         """Create a CrossGroupConfirmation and deliver the request to the target.
 
-        Delivery robustness: if the bridge send fails, the CrossGroupConfirmation
-        row is NOT committed — the caller receives a RuntimeError and must surface
-        it to the reporter.  This guarantees the originating action never reports
-        success when the counterpart could not be reached.
+        Delivery robustness: if the bridge send fails, this CrossGroupConfirmation
+        row is deleted and the caller receives a RuntimeError — this guarantees the
+        originating action never reports success when the counterpart could not be
+        reached. Only THIS row is discarded (via db.delete + flush), not a full
+        session rollback — callers such as process_split stage other objects (the
+        split header, sibling shares) in the same session before any of them
+        commit, and a full rollback here would silently destroy that unrelated,
+        already-successful work too.
         """
         target_jid = self.get_primary_accounting_group(db, target_phone)
         if not target_jid:
@@ -373,8 +377,11 @@ class AccountService:
         try:
             await bridge_client.send_message(target_jid, confirmation_message)
         except Exception as exc:
-            # Roll back: don't leave a dangling pending conf if delivery failed
-            db.rollback()
+            # Discard only this row — do NOT roll back the whole session, which
+            # would also wipe out any other not-yet-committed work a caller has
+            # already staged (see process_split).
+            db.delete(conf)
+            db.flush()
             raise RuntimeError(
                 f"Could not deliver confirmation request to {target_phone}: {exc}. "
                 f"Transaction NOT recorded. Please try again."

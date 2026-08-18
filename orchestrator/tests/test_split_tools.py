@@ -88,6 +88,41 @@ async def test_process_split_reporter_is_participant_writes_own_share_pending(db
 
 
 @pytest.mark.asyncio
+async def test_process_split_first_share_notify_failure_does_not_lose_split_or_later_shares(db):
+    """If the FIRST co-debtor's confirmation can't be delivered (e.g. a transient
+    bridge outage), the split header and any later, successfully-delivered
+    shares in the same call must still be recorded — not silently destroyed
+    because one recipient was unreachable at that moment."""
+    _setup(db)
+    svc = AccountService()
+
+    async def fake_send(jid, _msg):
+        if jid == "tal_g@g.us":
+            raise RuntimeError("bridge unreachable")
+
+    with patch("app.accounting.account_service.bridge_client") as mock_bc:
+        mock_bc.send_message = AsyncMock(side_effect=fake_send)
+        split = await svc.process_split(
+            db=db,
+            reporter_phone="9725300",
+            reporter_group_jid="eran_g@g.us",
+            payer_phone="9725300",
+            shares=[
+                {"phone": "9725320", "amount_ils": Decimal("66.67")},  # Tal — fails first
+                {"phone": "9725310", "amount_ils": Decimal("66.67")},  # Eden — succeeds after
+            ],
+            total_amount=Decimal("200"),
+            description="restaurant",
+            transaction_date=date.today(),
+        )
+
+    assert db.query(SplitTransaction).filter_by(id=split.id).first() is not None
+    confs = db.query(CrossGroupConfirmation).filter_by(split_transaction_id=split.id).all()
+    phones = {c.target_phone for c in confs}
+    assert phones == {"9725310"}  # only Eden's — Tal's failed delivery was discarded
+
+
+@pytest.mark.asyncio
 async def test_decline_suspends_split(db):
     _setup(db)
     now = datetime.now(timezone.utc)
