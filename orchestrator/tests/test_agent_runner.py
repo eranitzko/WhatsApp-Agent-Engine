@@ -155,6 +155,90 @@ async def test_run_blocks_tool_not_in_blueprint(context, confirmation_store):
 
 
 @pytest.mark.asyncio
+async def test_run_executes_multiple_tool_calls_sequentially_not_concurrently(context, confirmation_store):
+    """Tool executors write to SQLite, and some (e.g. request_confirmation)
+    hold a write transaction open across an awaited network call. Running
+    several tool calls from one turn concurrently (asyncio.gather) caused a
+    real production bug: recording a multi-person expense split issues one
+    record_expense call per person, and the resulting concurrent SQLite
+    writes collided with 'database is locked', aborting the entire turn
+    with no reply at all. Tool calls within a turn must run sequentially."""
+    import asyncio as _asyncio
+
+    order: list[str] = []
+
+    async def slow_tool_a(params, **ctx):
+        order.append("a-start")
+        await _asyncio.sleep(0.05)
+        order.append("a-end")
+        return "a-done"
+
+    async def slow_tool_b(params, **ctx):
+        order.append("b-start")
+        await _asyncio.sleep(0.05)
+        order.append("b-end")
+        return "b-done"
+
+    registry = ToolRegistry()
+    registry.register({
+        "tool_a": {
+            "schema": {"name": "tool_a", "description": "x", "input_schema": {"type": "object", "properties": {}}},
+            "executor": slow_tool_a,
+        },
+        "tool_b": {
+            "schema": {"name": "tool_b", "description": "y", "input_schema": {"type": "object", "properties": {}}},
+            "executor": slow_tool_b,
+        },
+    })
+
+    block_a = MagicMock()
+    block_a.type = "tool_use"
+    block_a.name = "tool_a"
+    block_a.id = "tu_a"
+    block_a.input = {}
+    block_b = MagicMock()
+    block_b.type = "tool_use"
+    block_b.name = "tool_b"
+    block_b.id = "tu_b"
+    block_b.input = {}
+
+    first_response = MagicMock()
+    first_response.stop_reason = "tool_use"
+    first_response.content = [block_a, block_b]
+    second_response = make_end_turn_response("Both done.")
+
+    client = AsyncMock()
+    client.messages.create = AsyncMock(side_effect=[first_response, second_response])
+
+    blueprint = Blueprint(
+        id="test_bot_two_tools",
+        display_name="Test Bot",
+        system_prompt="You are helpful.",
+        model="claude-sonnet-4-6",
+        tools_enabled='["tool_a", "tool_b"]',
+        max_tool_turns=3,
+        context_window=4,
+        context_idle_reset_minutes=30,
+    )
+
+    runner = AgentRunner(client, registry)
+    result = await runner.run(
+        blueprint=blueprint,
+        group_jid="123@g.us",
+        sender="user@s.whatsapp.net",
+        is_admin=False,
+        message="do both",
+        context=context,
+        confirmation_store=confirmation_store,
+    )
+
+    assert result == "Both done."
+    # Sequential: a fully finishes before b starts. Concurrent (asyncio.gather)
+    # would interleave as ["a-start", "b-start", "a-end", "b-end"].
+    assert order == ["a-start", "a-end", "b-start", "b-end"]
+
+
+@pytest.mark.asyncio
 async def test_admin_tools_filtered_for_non_admins():
     """Non-admin users must not see admin-only tools in the API call."""
     import json

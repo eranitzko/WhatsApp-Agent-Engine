@@ -322,8 +322,13 @@ class AgentRunner:
                     # and can be stored in the context store.
                     messages.append({"role": "assistant", "content": [b.model_dump() for b in response.content]})
 
-                    # Run all tool calls in parallel — independent calls in one turn
-                    # are the common case and asyncio.gather cuts latency significantly.
+                    # Run tool calls sequentially, not in parallel. Executors write to
+                    # SQLite, and some (e.g. request_confirmation) hold a write
+                    # transaction open across an awaited bridge HTTP call — running
+                    # several concurrently (e.g. one record_expense per person in a
+                    # multi-way split) caused real "database is locked" collisions
+                    # that aborted the whole turn with no reply at all. See
+                    # tests/test_db_session.py and this test file's concurrency test.
                     async def _run_one(tc):
                         if tc.name not in allowed_tools:
                             logger.warning(
@@ -340,7 +345,7 @@ class AgentRunner:
                         )
                         return raw if isinstance(raw, str) else json.dumps(raw)
 
-                    result_texts = await asyncio.gather(*[_run_one(tc) for tc in tc_list])
+                    result_texts = [await _run_one(tc) for tc in tc_list]
 
                     tool_calls_made.extend([
                         {"name": tc.name, "preview": text[:120]}
