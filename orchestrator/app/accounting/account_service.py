@@ -955,14 +955,42 @@ class AccountService:
                 f"{split.description} (reported by {reporter_name}). Transaction suspended."
             )
 
-    async def finalize_split(self, db: Session, split: SplitTransaction) -> None:
-        """Commit all ledger entries for a fully confirmed split."""
+    async def finalize_split(
+        self, db: Session, split: SplitTransaction,
+        just_confirmed: "CrossGroupConfirmation | None" = None,
+    ) -> None:
+        """Commit all ledger entries once every share is confirmed.
+
+        If just_confirmed is given and the split isn't fully resolved yet,
+        that person gets an immediate lightweight acknowledgment instead of
+        silence until everyone else responds too — the ledger write itself
+        still waits for all_done, so a later decline can still cleanly
+        cancel the whole split before anything is recorded.
+        """
         confs = db.query(CrossGroupConfirmation).filter_by(
             split_transaction_id=split.id
         ).all()
 
         all_done = all(c.status in ("confirmed", "self_confirmed") for c in confs)
         if not all_done:
+            if just_confirmed is not None:
+                amount = Decimal(json.loads(just_confirmed.action_payload).get("amount_ils", "0"))
+                still_waiting = [
+                    self.get_display_name(db, c.target_phone)
+                    for c in confs if c.status == "pending"
+                ]
+                waiting_str = ", ".join(still_waiting) if still_waiting else "the others"
+                try:
+                    await bridge_client.send_message(
+                        just_confirmed.target_group_jid,
+                        f"Got it — your ₪{float(amount):.2f} share is confirmed. "
+                        f"Still waiting on: {waiting_str}."
+                    )
+                except Exception:
+                    logger.exception(
+                        "finalize_split: failed to ack early confirmer %s",
+                        just_confirmed.target_group_jid,
+                    )
             return
 
         for conf in confs:

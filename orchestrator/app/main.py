@@ -368,7 +368,7 @@ async def _process(payload: WebhookPayload) -> None:
                             id=conf.split_transaction_id
                         ).first()
                         if split:
-                            await account_service.finalize_split(db, split)
+                            await account_service.finalize_split(db, split, just_confirmed=conf)
                     else:
                         try:
                             await account_service.commit_confirmed_transaction(db, conf)
