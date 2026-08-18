@@ -139,7 +139,7 @@ async def test_request_confirmation_creates_row(db):
     svc = AccountService()
     with patch("app.accounting.account_service.bridge_client") as mock_bc:
         mock_bc.send_message = AsyncMock()
-        conf = await svc.request_confirmation(
+        conf, delivered = await svc.request_confirmation(
             db=db,
             initiator_phone="972500",
             initiator_group_jid="eden_grp@g.us",
@@ -148,6 +148,7 @@ async def test_request_confirmation_creates_row(db):
             action_payload={"amount_ils": "100.00"},
             confirmation_message="Tal, Eden says you owe ₪100. Confirm?",
         )
+    assert delivered is True
     assert conf.id is not None
     assert conf.status == "pending"
     assert conf.target_phone == "972511"
@@ -159,11 +160,14 @@ async def test_request_confirmation_creates_row(db):
 
 
 @pytest.mark.asyncio
-async def test_request_confirmation_delivery_failure_does_not_roll_back_other_pending_work(db):
-    """A failed bridge send must only discard THIS confirmation, not other
-    not-yet-committed work already staged in the same session (e.g. a sibling
-    split share, or the split header itself) — see process_split, which stages
-    several objects in one session before any of them commits."""
+async def test_request_confirmation_delivery_failure_keeps_row_and_sibling_work(db):
+    """A failed bridge send must NOT discard the CrossGroupConfirmation — it's
+    kept as a pending row (so resend_confirmation can retry it later) instead
+    of forcing the reporter to redo the whole entry from scratch. It also must
+    not roll back other not-yet-committed work already staged in the same
+    session (e.g. a sibling split share, or the split header itself) — see
+    process_split, which stages several objects in one session before any of
+    them commits."""
     _seed_group(db, "tal_grp3@g.us")
     _seed_user(db, "972513", "tal_grp3@g.us")
     svc = AccountService()
@@ -186,21 +190,24 @@ async def test_request_confirmation_delivery_failure_does_not_roll_back_other_pe
 
     with patch("app.accounting.account_service.bridge_client") as mock_bc:
         mock_bc.send_message = AsyncMock(side_effect=RuntimeError("bridge unreachable"))
-        with pytest.raises(RuntimeError):
-            await svc.request_confirmation(
-                db=db,
-                initiator_phone="972500",
-                initiator_group_jid="eden_grp@g.us",
-                target_phone="972513",
-                action_type="record_expense",
-                action_payload={"amount_ils": "100.00"},
-                confirmation_message="Tal, Eden says you owe ₪100. Confirm?",
-            )
+        conf, delivered = await svc.request_confirmation(
+            db=db,
+            initiator_phone="972500",
+            initiator_group_jid="eden_grp@g.us",
+            target_phone="972513",
+            action_type="record_expense",
+            action_payload={"amount_ils": "100.00"},
+            confirmation_message="Tal, Eden says you owe ₪100. Confirm?",
+        )
+
+    assert delivered is False
+    # The row survives, undelivered but pending — resend_confirmation can retry it.
+    persisted = db.query(CrossGroupConfirmation).filter_by(id=conf.id).first()
+    assert persisted is not None
+    assert persisted.status == "pending"
 
     # The sibling row staged before the failed call must survive.
     assert db.query(CrossGroupConfirmation).filter_by(id=sibling_id).first() is not None
-    # The failed confirmation itself must NOT have been persisted.
-    assert db.query(CrossGroupConfirmation).filter_by(target_phone="972513").first() is None
 
 
 def test_handle_confirmation_reply_yes_flips_status(db):
@@ -354,6 +361,37 @@ async def test_process_second_party_creates_confirmation(db):
     assert conf.status == "pending"
     # Tal notified
     mock_bc.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_second_party_delivery_failure_still_records_pending_confirmation(db):
+    """If the debtor can't be reached right now (e.g. transient bridge issue),
+    the claim must still be saved as a pending confirmation, not discarded —
+    the reporter shouldn't have to redo the whole entry, and resend_confirmation
+    can retry delivery later."""
+    _seed_group(db, "eden_grp3@g.us")
+    _seed_user(db, "9725240", "eden_grp3@g.us")  # Eden — reporter/creditor
+    _seed_group(db, "tal_grp5@g.us")
+    _seed_user(db, "9725250", "tal_grp5@g.us")   # Tal — debtor
+
+    svc = AccountService()
+    with patch("app.accounting.account_service.bridge_client") as mock_bc:
+        mock_bc.send_message = AsyncMock(side_effect=RuntimeError("bridge unreachable"))
+        result = await svc.process_transaction(
+            db=db,
+            reporter_phone="9725240",
+            reporter_group_jid="eden_grp3@g.us",
+            payer_phone="9725240",
+            debtor_phone="9725250",
+            amount_ils=Decimal("80"),
+            description="taxi",
+            transaction_date=date.today(),
+        )
+
+    assert "not recorded" not in result.lower()
+    conf = db.query(CrossGroupConfirmation).filter_by(target_phone="9725250").first()
+    assert conf is not None
+    assert conf.status == "pending"
 
 
 # ---------------------------------------------------------------------------

@@ -88,11 +88,13 @@ async def test_process_split_reporter_is_participant_writes_own_share_pending(db
 
 
 @pytest.mark.asyncio
-async def test_process_split_first_share_notify_failure_does_not_lose_split_or_later_shares(db):
+async def test_process_split_first_share_notify_failure_keeps_share_pending_for_resend(db):
     """If the FIRST co-debtor's confirmation can't be delivered (e.g. a transient
-    bridge outage), the split header and any later, successfully-delivered
-    shares in the same call must still be recorded — not silently destroyed
-    because one recipient was unreachable at that moment."""
+    bridge outage), the split header, that share, and any later shares in the
+    same call must still be recorded — not silently destroyed because one
+    recipient was unreachable at that moment. The undelivered share stays
+    pending so resend_confirmation can retry it, instead of forcing the
+    reporter to redo the whole split from scratch."""
     _setup(db)
     svc = AccountService()
 
@@ -118,8 +120,10 @@ async def test_process_split_first_share_notify_failure_does_not_lose_split_or_l
 
     assert db.query(SplitTransaction).filter_by(id=split.id).first() is not None
     confs = db.query(CrossGroupConfirmation).filter_by(split_transaction_id=split.id).all()
-    phones = {c.target_phone for c in confs}
-    assert phones == {"9725310"}  # only Eden's — Tal's failed delivery was discarded
+    by_phone = {c.target_phone: c for c in confs}
+    assert set(by_phone) == {"9725310", "9725320"}  # both shares survive
+    assert by_phone["9725320"].status == "pending"  # Tal's — undelivered, kept for resend
+    assert by_phone["9725310"].status == "pending"  # Eden's — delivered normally
 
 
 @pytest.mark.asyncio

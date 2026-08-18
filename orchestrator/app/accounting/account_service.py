@@ -332,17 +332,20 @@ class AccountService:
         action_payload: dict,
         confirmation_message: str,
         split_transaction_id: str | None = None,
-    ) -> CrossGroupConfirmation:
-        """Create a CrossGroupConfirmation and deliver the request to the target.
+    ) -> tuple[CrossGroupConfirmation, bool]:
+        """Create a CrossGroupConfirmation and attempt to deliver it to the target.
 
-        Delivery robustness: if the bridge send fails, this CrossGroupConfirmation
-        row is deleted and the caller receives a RuntimeError — this guarantees the
-        originating action never reports success when the counterpart could not be
-        reached. Only THIS row is discarded (via db.delete + flush), not a full
-        session rollback — callers such as process_split stage other objects (the
-        split header, sibling shares) in the same session before any of them
-        commit, and a full rollback here would silently destroy that unrelated,
-        already-successful work too.
+        Returns (conf, delivered). The row is always committed, whether or not
+        delivery succeeds — a transient bridge failure must not force the
+        reporter to redo the whole entry from scratch. When delivered is False,
+        the row is still saved as an ordinary pending confirmation so
+        resend_confirmation can retry it later; the caller should tell the
+        reporter honestly that it's recorded but not yet delivered, rather than
+        claiming either full success or total loss.
+
+        Raises ValueError if the target has no accounting group at all — that's
+        a permanent setup problem, not a transient delivery failure, so there's
+        nothing to save or retry.
         """
         target_jid = self.get_primary_accounting_group(db, target_phone)
         if not target_jid:
@@ -372,24 +375,22 @@ class AccountService:
             household_id=household_id,
         )
         db.add(conf)
-        db.flush()  # assign id without committing — we commit only after successful send
+        db.flush()
 
+        delivered = True
         try:
             await bridge_client.send_message(target_jid, confirmation_message)
-        except Exception as exc:
-            # Discard only this row — do NOT roll back the whole session, which
-            # would also wipe out any other not-yet-committed work a caller has
-            # already staged (see process_split).
-            db.delete(conf)
-            db.flush()
-            raise RuntimeError(
-                f"Could not deliver confirmation request to {target_phone}: {exc}. "
-                f"Transaction NOT recorded. Please try again."
-            ) from exc
+        except Exception:
+            logger.exception(
+                "request_confirmation: failed to deliver to %s (%s) — keeping "
+                "as pending for resend_confirmation",
+                target_phone, target_jid,
+            )
+            delivered = False
 
         db.commit()
         db.refresh(conf)
-        return conf
+        return conf, delivered
 
     def handle_confirmation_reply(
         self,
@@ -527,7 +528,7 @@ class AccountService:
                 f"Confirm? (yes / no)"
             )
             try:
-                await self.request_confirmation(
+                _conf, delivered = await self.request_confirmation(
                     db=db,
                     initiator_phone=reporter_phone,
                     initiator_group_jid=reporter_group_jid,
@@ -546,9 +547,14 @@ class AccountService:
                     confirmation_message=confirm_msg,
                     split_transaction_id=split_transaction_id,
                 )
-            except (ValueError, RuntimeError) as exc:
+            except ValueError as exc:
                 return str(exc)
-            return f"Confirmation request sent to {debtor_name}. I'll notify you when they respond."
+            if delivered:
+                return f"Confirmation request sent to {debtor_name}. I'll notify you when they respond."
+            return (
+                f"Recorded — but I couldn't reach {debtor_name} directly to ask for confirmation. "
+                f"It's saved as pending; ask them to check in, or try resend_confirmation later."
+            )
 
     # ── Payment FIFO settlement ───────────────────────────────────────────────
 
@@ -870,7 +876,7 @@ class AccountService:
                     f"Confirm? (yes / no)"
                 )
                 try:
-                    await self.request_confirmation(
+                    _conf, delivered = await self.request_confirmation(
                         db=db,
                         initiator_phone=reporter_phone,
                         initiator_group_jid=reporter_group_jid,
@@ -889,13 +895,21 @@ class AccountService:
                         confirmation_message=confirm_msg,
                         split_transaction_id=split.id,
                     )
-                except (ValueError, RuntimeError) as exc:
+                except ValueError as exc:
+                    # Target has no accounting group at all — nothing to save or retry.
                     logger.warning(
-                        "process_split: could not reach %s for split %s: %s",
+                        "process_split: %s has no accounting group for split %s: %s",
                         phone, split.id, exc,
                     )
-                    # Mark this share as undeliverable so the reporter knows
-                    db.flush()
+                    continue
+                if not delivered:
+                    # Share is still recorded as a pending confirmation (see
+                    # request_confirmation) — just couldn't notify them right now.
+                    logger.warning(
+                        "process_split: could not reach %s for split %s — "
+                        "kept as pending for resend_confirmation",
+                        phone, split.id,
+                    )
 
         db.commit()
         return split
