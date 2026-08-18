@@ -706,7 +706,7 @@ class AccountService:
                 f"Confirm? (yes / no)"
             )
             try:
-                await self.request_confirmation(
+                _conf, delivered = await self.request_confirmation(
                     db=db,
                     initiator_phone=reporter_phone,
                     initiator_group_jid=reporter_group_jid,
@@ -722,9 +722,14 @@ class AccountService:
                     },
                     confirmation_message=confirm_msg,
                 )
-            except (ValueError, RuntimeError) as exc:
+            except ValueError as exc:
                 return str(exc)
-            return f"Confirmation request sent to {payee_name}. I'll notify you when they respond."
+            if delivered:
+                return f"Confirmation request sent to {payee_name}. I'll notify you when they respond."
+            return (
+                f"Recorded — but I couldn't reach {payee_name} directly to confirm receipt. "
+                f"It's saved as pending; ask them to check in, or try resend_confirmation later."
+            )
 
     async def commit_confirmed_transaction(self, db: Session, conf: CrossGroupConfirmation) -> None:
         """Write the ledger entry (or payment) for a confirmed 2nd-party transaction.

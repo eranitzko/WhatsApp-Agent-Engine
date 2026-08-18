@@ -394,6 +394,35 @@ async def test_process_second_party_delivery_failure_still_records_pending_confi
     assert conf.status == "pending"
 
 
+@pytest.mark.asyncio
+async def test_process_payment_second_party_delivery_failure_tells_reporter_honestly(db):
+    """process_payment's 'I paid C' branch (payee must confirm) must also
+    surface a delivery failure honestly, not just claim 'Confirmation request
+    sent' regardless of whether it actually reached anyone."""
+    _seed_group(db, "eden_grp4@g.us")
+    _seed_user(db, "9725260", "eden_grp4@g.us")  # Eden — reporter/payer
+    _seed_group(db, "tal_grp6@g.us")
+    _seed_user(db, "9725270", "tal_grp6@g.us")   # Tal — payee, must confirm
+
+    svc = AccountService()
+    with patch("app.accounting.account_service.bridge_client") as mock_bc:
+        mock_bc.send_message = AsyncMock(side_effect=RuntimeError("bridge unreachable"))
+        result = await svc.process_payment(
+            db=db,
+            reporter_phone="9725260",
+            reporter_group_jid="eden_grp4@g.us",
+            payer_phone="9725260",
+            payee_phone="9725270",
+            amount_ils=Decimal("50"),
+            payment_date=date.today(),
+        )
+
+    assert "confirmation request sent" not in result.lower()
+    conf = db.query(CrossGroupConfirmation).filter_by(target_phone="9725270").first()
+    assert conf is not None
+    assert conf.status == "pending"
+
+
 # ---------------------------------------------------------------------------
 # resolve_inbound — LID-safe group-JID-first strategy
 # ---------------------------------------------------------------------------
