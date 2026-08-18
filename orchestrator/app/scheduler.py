@@ -100,36 +100,56 @@ async def _dispatch_due_messages() -> None:
 
 # ── Bridge health monitor ─────────────────────────────────────────────────────
 
-async def _check_bridge_health() -> None:
-    """Poll the bridge's /health endpoint. If it stays unreachable for longer
-    than _BRIDGE_DOWN_ALERT_THRESHOLD, send exactly one email alert (not one
-    per check) until it recovers. The bridge can't report its own absence if
-    the whole container is down — this still-running process has to notice
-    instead. Short blips (a routine redeploy, a brief restart) never cross
-    the threshold and stay silent."""
-    global _bridge_down_since, _bridge_alert_sent
+async def _bridge_unhealthy_reason() -> str | None:
+    """Return None if the bridge is genuinely healthy, else a short reason.
 
+    Checking HTTP reachability alone isn't enough: the bridge's Express
+    server can stay up and keep answering /health with 200 OK even while
+    its WhatsApp socket is stuck in an endless failed-reconnect loop (this
+    happened for 9+ days straight in production — every check here would
+    have reported "reachable" throughout). /health's own JSON body already
+    distinguishes this (`status: 'ok'` vs `'connecting'`); the check has to
+    actually read it."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            await client.get(f"{settings.bridge_url}/health")
+            resp = await client.get(f"{settings.bridge_url}/health")
+        status = resp.json().get("status")
+        if status == "ok":
+            return None
+        return f"bridge reachable but not connected to WhatsApp (status={status!r})"
+    except Exception as exc:
+        return f"bridge unreachable: {exc}"
+
+
+async def _check_bridge_health() -> None:
+    """Poll the bridge's /health endpoint (both reachability and its reported
+    WhatsApp connection status). If it stays unhealthy for longer than
+    _BRIDGE_DOWN_ALERT_THRESHOLD, send exactly one email alert (not one per
+    check) until it recovers. Short blips (a routine redeploy, a brief
+    reconnect) never cross the threshold and stay silent."""
+    global _bridge_down_since, _bridge_alert_sent
+
+    reason = await _bridge_unhealthy_reason()
+    if reason is None:
         if _bridge_down_since is not None:
-            logger.info("Bridge reachable again (was down since %s)", _bridge_down_since)
+            logger.info("Bridge healthy again (was unhealthy since %s)", _bridge_down_since)
         _bridge_down_since = None
         _bridge_alert_sent = False
-    except Exception as exc:
-        now = datetime.now(timezone.utc)
-        if _bridge_down_since is None:
-            _bridge_down_since = now
-            logger.warning("Bridge unreachable: %s", exc)
-            return
-        if not _bridge_alert_sent and now - _bridge_down_since >= _BRIDGE_DOWN_ALERT_THRESHOLD:
-            logger.error("Bridge unreachable since %s — sending email alert", _bridge_down_since)
-            try:
-                from app.mailer.gmail import send_bridge_down_email
-                send_bridge_down_email(_bridge_down_since.isoformat(), str(exc))
-                _bridge_alert_sent = True
-            except RuntimeError:
-                logger.exception("Failed to send bridge-down alert email")
+        return
+
+    now = datetime.now(timezone.utc)
+    if _bridge_down_since is None:
+        _bridge_down_since = now
+        logger.warning("Bridge unhealthy: %s", reason)
+        return
+    if not _bridge_alert_sent and now - _bridge_down_since >= _BRIDGE_DOWN_ALERT_THRESHOLD:
+        logger.error("Bridge unhealthy since %s — sending email alert", _bridge_down_since)
+        try:
+            from app.mailer.gmail import send_bridge_down_email
+            send_bridge_down_email(_bridge_down_since.isoformat(), reason)
+            _bridge_alert_sent = True
+        except RuntimeError:
+            logger.exception("Failed to send bridge-down alert email")
 
 
 # ── Automation jobs ───────────────────────────────────────────────────────────

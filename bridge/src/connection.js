@@ -22,18 +22,37 @@ const RECONNECT_DELAY_MS = 3000
 // ever firing our 'connection.update'/close handler — the socket is left in
 // a silently-dead state (process alive, WhatsApp traffic stopped) that the
 // normal reconnect logic above never sees. Detect this independently by
-// periodically probing the connection with a real request/response
-// round-trip (groupFetchAllParticipating, the same kind of query() call that
-// was seen hanging) and exiting if it keeps failing — Docker's
-// `restart: unless-stopped` policy then restarts the process and reconnects
-// cleanly, mirroring the existing loggedOut recovery path below.
-const WATCHDOG_CHECK_INTERVAL_MS = 2 * 60 * 1000
+// periodically probing the connection and exiting if it keeps failing —
+// Docker's `restart: unless-stopped` policy then restarts the process and
+// reconnects cleanly, mirroring the existing loggedOut recovery path below.
+//
+// The probe was originally groupFetchAllParticipating (a bulk metadata
+// fetch) on a 2-minute interval. Over ~3 hours of continuous polling this
+// got WhatsApp to start returning "rate-overlimit" on the probe itself,
+// which the watchdog correctly treated as a failure and restarted on — but
+// the *reconnect* was then also rate-limited, cascading into a connection
+// that failed every single handshake attempt (code 408) for 9+ days
+// straight, never reaching 'open' again, invisible to this watchdog since
+// it only runs once connectionOpen is true. sendPresenceUpdate is the same
+// lightweight, single-target call already used once per connect() below —
+// unlike a bulk group-metadata fetch, presence updates are core, extremely
+// frequent traffic in normal WhatsApp usage and much less likely to look
+// like abuse. Interval/threshold widened too, as extra margin.
+const WATCHDOG_CHECK_INTERVAL_MS = 5 * 60 * 1000
 const WATCHDOG_PROBE_TIMEOUT_MS = 20 * 1000
-const WATCHDOG_STALE_THRESHOLD_MS = 6 * 60 * 1000
+const WATCHDOG_STALE_THRESHOLD_MS = 15 * 60 * 1000
 
 let lastAliveAt = Date.now()
 let connectionOpen = false
 let watchdogTimer = null
+// Baileys refreshes an unscanned QR every ~20-30s; emailing every refresh
+// burned through Gmail's daily sending limit within minutes during an
+// extended outage, blocking the one channel meant to help. Throttle to at
+// most one email per QR_EMAIL_MIN_INTERVAL_MS instead — frequent enough
+// that a fresh QR is always in the inbox within a reasonable wait, far
+// below the daily quota even if an episode runs for hours.
+let lastQrEmailAt = 0
+const QR_EMAIL_MIN_INTERVAL_MS = 10 * 60 * 1000
 
 // Prevent Baileys internal bad-request / unhandled rejections from crashing the process
 process.on('unhandledRejection', (reason) => {
@@ -62,7 +81,7 @@ function startWatchdog() {
 
     try {
       await Promise.race([
-        sock.groupFetchAllParticipating(),
+        sock.sendPresenceUpdate('unavailable'),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('watchdog probe timed out')), WATCHDOG_PROBE_TIMEOUT_MS)
         ),
@@ -103,16 +122,19 @@ export async function connect() {
 
     if (qr) {
       console.log('\n📱 Scan this QR code with WhatsApp:\n')
-      console.log('RAW_QR_DATA:' + qr)
       qrcode.generate(qr, { small: true })
-      // Fire-and-forget: notify backend to email QR to admin
-      const qrHeaders = { 'Content-Type': 'application/json' }
-      if (process.env.WEBHOOK_SECRET) {
-        qrHeaders['Authorization'] = `Bearer ${process.env.WEBHOOK_SECRET}`
+      const sinceLastEmail = Date.now() - lastQrEmailAt
+      if (sinceLastEmail >= QR_EMAIL_MIN_INTERVAL_MS) {
+        lastQrEmailAt = Date.now()
+        const qrHeaders = { 'Content-Type': 'application/json' }
+        if (process.env.WEBHOOK_SECRET) {
+          qrHeaders['Authorization'] = `Bearer ${process.env.WEBHOOK_SECRET}`
+        }
+        // Fire-and-forget: notify backend to email QR to admin
+        axios.post(`${process.env.BACKEND_URL}/internal/qr-notify`, { qr }, { headers: qrHeaders }).catch((err) => {
+          console.warn('Could not send QR notification:', err.message)
+        })
       }
-      axios.post(`${process.env.BACKEND_URL}/internal/qr-notify`, { qr }, { headers: qrHeaders }).catch((err) => {
-        console.warn('Could not send QR notification:', err.message)
-      })
     }
 
     if (connection === 'close') {
