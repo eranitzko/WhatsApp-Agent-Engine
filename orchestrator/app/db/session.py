@@ -14,6 +14,16 @@ def set_sqlite_pragma(dbapi_conn, _connection_record):
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA foreign_keys=ON")
+    # WAL still serializes writers. Python's sqlite3 module already retries
+    # for 5s (its own default) before raising "database is locked", but
+    # that's not enough headroom: request_confirmation() holds its write
+    # transaction open across an awaited HTTP call to the bridge, and the
+    # agent runs several tool calls concurrently via asyncio.gather (e.g.
+    # one per person in a multi-way expense split) — so a queued writer can
+    # need to wait out several such HTTP round-trips in front of it. Without
+    # enough headroom here, a multi-person split can silently record only
+    # some people's shares with no error surfaced to anyone.
+    cursor.execute("PRAGMA busy_timeout=30000")
     cursor.close()
 
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
