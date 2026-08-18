@@ -12,8 +12,8 @@ Record and query financial transactions between people. The tools handle all sta
 
 ## Tool selection criteria
 
-- record_expense — user reports money paid for others, or a debt owed; use when one person paid and one or more others owe them (e.g. "Eran paid for me", "I owe Tal ₪200", "I paid ₪150 for Eden"). The tool automatically routes 1st-party (self-reported debt) vs 2nd-party (claimed credit) — you do not manage that distinction.
-- record_split — user describes a shared bill among multiple people (e.g. "we split a ₪300 restaurant bill", "Eran paid and me and Tal share it"). Use this instead of multiple record_transaction calls.
+- record_expense — user reports money paid for others, or a debt owed; use when one person paid and one or more others EACH owe the FULL amount independently (e.g. "Eran paid for me ₪150", "I owe Tal ₪200"). WARNING: with multiple participant_phones, the amount is charged to EACH person in full — it is never divided between them. Never use this for "split evenly" / "we split a bill" requests (e.g. "I paid ₪450 for groceries, everyone owes an equal share") — that produces wrong amounts; use record_split instead. The tool automatically routes 1st-party (self-reported debt) vs 2nd-party (claimed credit) — you do not manage that distinction.
+- record_split — user describes a shared bill split among multiple people, whether phrased as a total to divide or as an equal share (e.g. "we split a ₪300 restaurant bill", "I paid ₪450 for groceries, everyone owes an equal share", "Eran paid and me and Tal share it"). Use this instead of record_expense with multiple participants — record_expense does not divide amounts.
 - record_payment — user reports a repayment of existing debt (e.g. "I paid Tal back", "Eden sent me ₪200")
 - get_balance — user asks what they or someone else owes or is owed
 - get_debt_summary — user asks who owes what to whom; returns a readable debt table; non-admins see only their own debts

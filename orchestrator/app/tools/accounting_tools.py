@@ -82,8 +82,14 @@ _SCHEMAS: dict[str, dict] = {
         "category": "accounting",
         "access": "user",
         "description": (
-            "Use when one person paid for others, or a user acknowledges a debt. "
-            "Examples: 'Eran paid for me ₪150', 'I owe Tal ₪200', 'I paid for Eden'. "
+            "Use when one person paid and one or more OTHERS EACH independently owe the payer "
+            "the full 'amount' — e.g. 'Eran paid for me ₪150', 'I owe Tal ₪200', or monthly dues "
+            "each roommate owes separately. "
+            "If participant_phones has more than one person, 'amount' is charged to EACH of them "
+            "independently — it is NOT divided between them. "
+            "Do NOT use this to split one shared bill among several people (e.g. 'we split a ₪300 "
+            "dinner three ways', 'I paid ₪450 for groceries, everyone owes an equal share') — use "
+            "record_split instead, which divides the total into shares. "
             "Handles routing automatically: 1st-party (self-reported debt) is recorded immediately; "
             "2nd-party (claimed credit at another's expense) sends a confirmation request first. "
             "Returns: 'Recorded.' or 'Confirmation request sent to [Name].'"
@@ -95,9 +101,20 @@ _SCHEMAS: dict[str, dict] = {
                 "participant_phones": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Phones of people who owe the payer (excluding the payer)",
+                    "description": (
+                        "Phones of people who each owe the payer the FULL 'amount' independently "
+                        "(excluding the payer). Does NOT split 'amount' between them — for "
+                        "splitting one bill into shares, use record_split instead."
+                    ),
                 },
-                "amount": {"type": "number", "description": "Total amount paid"},
+                "amount": {
+                    "type": "number",
+                    "description": (
+                        "Amount EACH participant independently owes the payer — not a total to "
+                        "be divided across participant_phones. For splitting one shared bill, "
+                        "use record_split instead."
+                    ),
+                },
                 "currency": {"type": "string", "description": "ISO 4217 code, e.g. ILS, USD, EUR"},
                 "description": {"type": "string", "description": "What the payment was for"},
                 "transaction_date": {
