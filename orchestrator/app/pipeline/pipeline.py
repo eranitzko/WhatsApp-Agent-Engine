@@ -1,9 +1,10 @@
 """Invoice ingestion pipeline.
 
 Orchestrates the full flow for an incoming image event:
-  1. Compute SHA-256 hash → duplicate check (image hash)
+  1. Compute SHA-256 + perceptual hash → duplicate check (identical or
+     visually near-identical photo)
   2. Gemini OCR → structured extraction
-  3. Duplicate check (invoice number + vendor)
+  3. Duplicate check (amount + date)
   4. Confidence check → flag if below threshold
   5. In-memory resize → R2 upload
   6. Currency conversion
@@ -25,10 +26,31 @@ from app.config import settings
 from app.db.models import Invoice
 from app.db.session import SessionLocal
 from app.pipeline.converter import convert_to_ils
-from app.pipeline.dedup import check_image_hash, check_invoice_key, compute_hash
+from app.pipeline.dedup import (
+    check_amount_date_duplicate,
+    check_image_hash,
+    check_perceptual_hash,
+    compute_hash,
+    compute_perceptual_hash,
+)
 from app.pipeline.extractor import extract_invoice
 from app.pipeline.storage import invoice_to_sidecar_dict, upload_image, upload_metadata
 from app.utils.invoice_amount import to_float_or_none
+
+
+def _duplicate_response(existing: Invoice, reason: str, **extra) -> dict:
+    return {
+        "duplicate": True,
+        "duplicate_reason": reason,
+        "existing_invoice_id": existing.id,
+        "existing_vendor": existing.vendor,
+        "existing_date": str(existing.invoice_date) if existing.invoice_date else None,
+        "existing_amount": (
+            f"{existing.amount_original} {existing.currency_original}"
+            if existing.amount_original else None
+        ),
+        **extra,
+    }
 
 logger = logging.getLogger(__name__)
 
@@ -70,23 +92,14 @@ async def process_image_event(event: dict) -> dict:
 
     # ── 1. Hash ────────────────────────────────────────────────────────────────
     image_hash = compute_hash(image_bytes)
+    perceptual_hash = compute_perceptual_hash(image_bytes)
     logger.info("Processing image hash=%s from %s", image_hash[:12], sender)
 
-    # ── 2. Image-hash dedup ────────────────────────────────────────────────────
+    # ── 2. Exact image-hash dedup ────────────────────────────────────────────────
     existing_by_hash = check_image_hash(jid, image_hash)
     if existing_by_hash:
         logger.info("Duplicate image hash detected: %s", existing_by_hash.id)
-        return {
-            "duplicate": True,
-            "duplicate_reason": "identical_image",
-            "existing_invoice_id": existing_by_hash.id,
-            "existing_vendor": existing_by_hash.vendor,
-            "existing_date": str(existing_by_hash.invoice_date) if existing_by_hash.invoice_date else None,
-            "existing_amount": (
-                f"{existing_by_hash.amount_original} {existing_by_hash.currency_original}"
-                if existing_by_hash.amount_original else None
-            ),
-        }
+        return _duplicate_response(existing_by_hash, "identical_image")
 
     # ── 3. Gemini OCR ──────────────────────────────────────────────────────────
     extraction = await extract_invoice(image_bytes, mime_type, custom_instructions)
@@ -117,25 +130,23 @@ async def process_image_event(event: dict) -> dict:
 
     currency_original = extraction.get("currency_original")
 
-    # ── 4. Invoice-key dedup ──────────────────────────────────────────────────
-    existing_by_key = check_invoice_key(jid, invoice_number, vendor, invoice_date)
-    if existing_by_key:
-        logger.info("Duplicate invoice key detected: %s", existing_by_key.id)
-        return {
-            "duplicate": True,
-            "duplicate_reason": "same_invoice_number_and_vendor",
-            "existing_invoice_id": existing_by_key.id,
-            "existing_vendor": existing_by_key.vendor,
-            "existing_date": str(existing_by_key.invoice_date) if existing_by_key.invoice_date else None,
-            "existing_amount": (
-                f"{existing_by_key.amount_original} {existing_by_key.currency_original}"
-                if existing_by_key.amount_original else None
-            ),
-            # Include extraction so agent can compare
-            "extracted_vendor": vendor,
-            "extracted_date": invoice_date_str,
-            "extracted_amount": f"{amount_original} {currency_original}" if amount_original else None,
-        }
+    # ── 4. Duplicate dedup: same amount+date, or visually near-identical photo ──
+    # Vendor is deliberately not part of either check — see dedup.py's module
+    # docstring for why (OCR reads the same physical vendor name differently
+    # across separate resends).
+    existing_by_amount_date = check_amount_date_duplicate(jid, amount_original, currency_original, invoice_date)
+    existing_by_phash = check_perceptual_hash(jid, perceptual_hash)
+    existing_duplicate = existing_by_amount_date or existing_by_phash
+    if existing_duplicate:
+        reason = "same_amount_and_date" if existing_by_amount_date else "visually_similar_image"
+        logger.info("Duplicate detected (%s): %s", reason, existing_duplicate.id)
+        return _duplicate_response(
+            existing_duplicate, reason,
+            # Include extraction so the agent can compare
+            extracted_vendor=vendor,
+            extracted_date=invoice_date_str,
+            extracted_amount=f"{amount_original} {currency_original}" if amount_original else None,
+        )
 
     # ── 5. Confidence check + flagging ─────────────────────────────────────────
     flagged = False
@@ -188,6 +199,7 @@ async def process_image_event(event: dict) -> dict:
         group_id              = jid,
         message_id            = message_id,
         image_hash            = image_hash,
+        perceptual_hash       = perceptual_hash,
         r2_key                = r2_key,
         received_at           = datetime.now(timezone.utc),
         invoice_date          = invoice_date,

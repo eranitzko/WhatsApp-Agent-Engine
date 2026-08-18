@@ -308,8 +308,37 @@ async def test_exec_save_invoice_rejects_exact_duplicate(db):
         )
 
     assert result.get("duplicate") is True
-    assert result["duplicate_reason"] == "same_vendor_amount_date"
-    assert db.query(Invoice).filter_by(group_id="123@g.us", vendor="Acme").count() == 1
+    assert result["duplicate_reason"] == "same_amount_and_date"
+    assert db.query(Invoice).filter_by(group_id="123@g.us").count() == 1
+
+
+@pytest.mark.asyncio
+async def test_exec_save_invoice_rejects_duplicate_with_different_vendor(db):
+    """Regression: vendor is deliberately NOT part of this check anymore —
+    confirmed against production duplicates that Gemini's OCR reads the
+    same physical vendor name differently across separate resends (e.g. the
+    same receipt read as four different vendor-name spellings across four
+    sends), so an exact vendor match let those duplicates through."""
+    from datetime import date
+    from unittest.mock import patch
+    from app.agent.tools import exec_save_invoice
+    from app.db.models import Invoice
+    from tests.conftest import make_invoice
+
+    make_invoice(
+        db, group_id="123@g.us", vendor="קולבולית", amount_original=Decimal("30"),
+        currency_original="ILS", invoice_date=date(2026, 8, 8),
+    )
+
+    with patch("app.agent.tools.SessionLocal", return_value=SessionCM(db)), \
+         patch("app.pipeline.dedup.SessionLocal", return_value=SessionCM(db)):
+        result = await exec_save_invoice(
+            group_id="123@g.us", is_admin=True,
+            vendor="כורל בולית עין חרוד איחוד", amount=30.0, currency="ILS", date="2026-08-08",
+        )
+
+    assert result.get("duplicate") is True
+    assert db.query(Invoice).filter_by(group_id="123@g.us").count() == 1
 
 
 @pytest.mark.asyncio

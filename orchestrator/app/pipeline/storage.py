@@ -155,6 +155,7 @@ def invoice_to_sidecar_dict(invoice) -> dict:
         "group_id":              invoice.group_id,
         "message_id":            invoice.message_id,
         "image_hash":            invoice.image_hash,
+        "perceptual_hash":       invoice.perceptual_hash,
         "submitted_by":          invoice.submitted_by,
         "received_at":           invoice.received_at.isoformat() if invoice.received_at else None,
         "invoice_date":          invoice.invoice_date.isoformat() if invoice.invoice_date else None,

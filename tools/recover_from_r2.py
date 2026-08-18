@@ -30,7 +30,7 @@ async def main():
     from app.db.models import GroupRegistry, Invoice
     from app.db.session import SessionLocal
     from app.pipeline.converter import convert_to_ils
-    from app.pipeline.dedup import compute_hash
+    from app.pipeline.dedup import compute_hash, compute_perceptual_hash
     from app.pipeline.extractor import extract_invoice
     from app.pipeline.storage import upload_metadata
 
@@ -71,6 +71,7 @@ async def main():
 
             # Skip if image hash already in DB (different r2_key but same image)
             image_hash = compute_hash(image_bytes)
+            perceptual_hash = compute_perceptual_hash(image_bytes)
             if image_hash in existing_hashes:
                 logger.info("  Skipping — duplicate image hash")
                 continue
@@ -126,6 +127,7 @@ async def main():
                 group_id=GROUP_JID,
                 message_id=f"recovered:{r2_key}",  # synthetic message_id
                 image_hash=image_hash,
+                perceptual_hash=perceptual_hash,
                 r2_key=r2_key,
                 received_at=datetime.now(timezone.utc),
                 invoice_date=invoice_date,

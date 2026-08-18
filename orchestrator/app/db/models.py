@@ -25,6 +25,7 @@ class Invoice(Base):
     group_id = Column(String(255), nullable=False, index=True)
     message_id = Column(String(255), nullable=False, unique=True)
     image_hash = Column(String(64), nullable=False, index=True)   # SHA-256 hex
+    perceptual_hash = Column(String(32), nullable=True)             # pHash hex — near-duplicate photo detection
     r2_key = Column(String(512), nullable=True)                    # R2 object key for resized image
 
     received_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
