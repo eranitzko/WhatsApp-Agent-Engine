@@ -414,8 +414,9 @@ async def test_export_report_accounting_xlsx_by_email(db):
 
 
 @pytest.mark.asyncio
-async def test_export_report_non_admin_rejected(db):
-    _seed_bp_group(db, "family_accounting")
+async def test_export_invoice_report_non_admin_rejected(db):
+    """export_invoice_report stays admin-only regardless of caller."""
+    _seed_bp_group(db, "invoice_curator")
     from app.export.tool import _exec_export_report
 
     with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)):
@@ -425,6 +426,76 @@ async def test_export_report_non_admin_rejected(db):
         )
 
     assert "admin" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_export_accounting_report_non_admin_allowed(db):
+    """Any registered family_accounting member may export their own report —
+    not just sys-admins. Regular household members had no way to get a PDF
+    of their own ledger before this."""
+    _seed_bp_group(db, "family_accounting")
+    from app.export.tool import _exec_export_report
+
+    mock_gen = MagicMock()
+    mock_gen.build_pdf.return_value = (b"pdf", "ledger.pdf")
+    mock_deliver = AsyncMock()
+
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)), \
+         patch("app.export.tool.AccountingGenerator", return_value=mock_gen), \
+         patch("app.export.tool.deliver_files", mock_deliver):
+        result = await _exec_export_report(
+            {"format": "pdf", "delivery": "group"},
+            group_jid="123@g.us", is_admin=False, sender="972500000102@s.whatsapp.net",
+        )
+
+    assert "admin" not in result.lower()
+    mock_deliver.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_export_accounting_report_non_admin_filters_to_own_phone(db):
+    """A non-admin's report is scoped to their own ledger entries, not the
+    whole household's — matching get_debt_summary's existing self-only
+    behavior for non-admins."""
+    _seed_bp_group(db, "family_accounting")
+    from app.export.tool import _exec_export_report
+    import app.export.tool as tool_mod
+
+    mock_gen = MagicMock()
+    mock_gen.build_pdf.return_value = (b"pdf", "ledger.pdf")
+
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)), \
+         patch.object(tool_mod, "AccountingGenerator") as mock_cls, \
+         patch("app.export.tool.deliver_files", AsyncMock()):
+        mock_cls.return_value = mock_gen
+        await _exec_export_report(
+            {"format": "pdf", "delivery": "group"},
+            group_jid="123@g.us", is_admin=False, sender="972500000102@s.whatsapp.net",
+        )
+
+    mock_cls.assert_called_once_with("123@g.us", filter_phone="972500000102")
+
+
+@pytest.mark.asyncio
+async def test_export_accounting_report_admin_sees_full_household(db):
+    """An admin's report stays unfiltered — full household ledger."""
+    _seed_bp_group(db, "family_accounting")
+    from app.export.tool import _exec_export_report
+    import app.export.tool as tool_mod
+
+    mock_gen = MagicMock()
+    mock_gen.build_pdf.return_value = (b"pdf", "ledger.pdf")
+
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)), \
+         patch.object(tool_mod, "AccountingGenerator") as mock_cls, \
+         patch("app.export.tool.deliver_files", AsyncMock()):
+        mock_cls.return_value = mock_gen
+        await _exec_export_report(
+            {"format": "pdf", "delivery": "group"},
+            group_jid="123@g.us", is_admin=True, sender="972500000101@s.whatsapp.net",
+        )
+
+    mock_cls.assert_called_once_with("123@g.us", filter_phone=None)
 
 
 @pytest.mark.asyncio

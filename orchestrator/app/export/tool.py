@@ -49,12 +49,25 @@ def _load_report_format(group_jid: str, db) -> dict:
 
 
 async def _exec_export_report(params: dict, **ctx) -> str:
-    if not ctx.get("is_admin", False):
-        return "Export is admin only."
-
     from app.utils.phone import resolve_sender_phone
     group_jid: str = ctx.get("group_jid", "")
     sender_phone: str = resolve_sender_phone(ctx)
+    is_admin: bool = ctx.get("is_admin", False)
+
+    with SessionLocal() as db:
+        blueprint_id = _blueprint_for_group(group_jid, db)
+
+    if blueprint_id is None:
+        return "Group not registered."
+
+    # family_accounting: any registered household member may export their
+    # own report (scoped to their own ledger below) — not just sys-admins.
+    # export_invoice_report stays admin-only. This check is kept here (not
+    # just at the tool-schema access level) because the same executor serves
+    # both tools, and a caller like an automation rule can invoke a tool by
+    # name directly, bypassing the schema-level allowlist.
+    if not is_admin and blueprint_id != "family_accounting":
+        return "Export is admin only."
 
     fmt = params.get("format", "pdf")
     delivery = params.get("delivery", "group")
@@ -70,12 +83,6 @@ async def _exec_export_report(params: dict, **ctx) -> str:
     email = _resolve_email(params, sender_phone) if delivery in ("email", "both") else None
     if delivery in ("email", "both") and not email:
         return "No email address available. Provide one or save it with set_report_email."
-
-    with SessionLocal() as db:
-        blueprint_id = _blueprint_for_group(group_jid, db)
-
-    if blueprint_id is None:
-        return "Group not registered."
 
     files: list[tuple[str, str, bytes]] = []
 
@@ -97,7 +104,8 @@ async def _exec_export_report(params: dict, **ctx) -> str:
                 report_fmt_config = _load_report_format(group_jid, db)
             if language:
                 report_fmt_config = {**report_fmt_config, "language": language}
-            gen = AccountingGenerator(group_jid)
+            filter_phone = None if is_admin else sender_phone
+            gen = AccountingGenerator(group_jid, filter_phone=filter_phone)
             if fmt in ("pdf", "both"):
                 data, name = gen.build_pdf(fmt_config=report_fmt_config)
                 files.append((name, "application/pdf", data))
@@ -274,9 +282,11 @@ _SCHEMA_INVOICE = {
 _SCHEMA_ACCOUNTING = {
     "name": "export_accounting_report",
     "category": "export",
-    "access": "admin",
+    "access": "user",
     "description": (
-        "Generates and delivers an accounting ledger report (PDF or XLSX). Admin only. "
+        "Generates and delivers an accounting ledger report (PDF or XLSX). "
+        "Any registered household member can use this. Non-admins get a report "
+        "scoped to their own ledger entries only; admins get the full household ledger. "
         "PDF shows net balances and full transaction history. "
         "Delivers to the group chat, by email, or both. "
         "Returns: confirmation of what was sent and where."
