@@ -1,4 +1,5 @@
 import inspect
+from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
@@ -279,3 +280,57 @@ async def test_exec_save_invoice_rejects_zero():
         group_id="123@g.us", is_admin=True, vendor="Acme", amount=0, currency="ILS",
     )
     assert "zero" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_exec_save_invoice_rejects_exact_duplicate(db):
+    """Regression: save_invoice had no duplicate check at all, unlike the
+    image pipeline — the agent would sometimes call it redundantly right
+    after an image was already successfully processed (e.g. misreading the
+    pipeline's own "New invoice received" notification as a request to save
+    it again), silently creating a duplicate row every time."""
+    from datetime import date
+    from unittest.mock import patch
+    from app.agent.tools import exec_save_invoice
+    from app.db.models import Invoice
+    from tests.conftest import make_invoice
+
+    make_invoice(
+        db, group_id="123@g.us", vendor="Acme", amount_original=Decimal("30"),
+        currency_original="ILS", invoice_date=date(2026, 8, 8),
+    )
+
+    with patch("app.agent.tools.SessionLocal", return_value=SessionCM(db)), \
+         patch("app.pipeline.dedup.SessionLocal", return_value=SessionCM(db)):
+        result = await exec_save_invoice(
+            group_id="123@g.us", is_admin=True,
+            vendor="Acme", amount=30.0, currency="ILS", date="2026-08-08",
+        )
+
+    assert result.get("duplicate") is True
+    assert result["duplicate_reason"] == "same_vendor_amount_date"
+    assert db.query(Invoice).filter_by(group_id="123@g.us", vendor="Acme").count() == 1
+
+
+@pytest.mark.asyncio
+async def test_exec_save_invoice_allows_same_vendor_amount_different_date(db):
+    from datetime import date
+    from unittest.mock import patch
+    from app.agent.tools import exec_save_invoice
+    from app.db.models import Invoice
+    from tests.conftest import make_invoice
+
+    make_invoice(
+        db, group_id="123@g.us", vendor="Acme", amount_original=Decimal("30"),
+        currency_original="ILS", invoice_date=date(2026, 8, 1),
+    )
+
+    with patch("app.agent.tools.SessionLocal", return_value=SessionCM(db)), \
+         patch("app.pipeline.dedup.SessionLocal", return_value=SessionCM(db)):
+        result = await exec_save_invoice(
+            group_id="123@g.us", is_admin=True,
+            vendor="Acme", amount=30.0, currency="ILS", date="2026-08-08",
+        )
+
+    assert "duplicate" not in result
+    assert db.query(Invoice).filter_by(group_id="123@g.us", vendor="Acme").count() == 2

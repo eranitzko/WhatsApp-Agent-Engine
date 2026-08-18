@@ -198,6 +198,8 @@ TOOL_SCHEMAS: list[dict] = [
             "Use when a user provides invoice details in a message rather than by sending an image. "
             "Never use this to correct or replace an existing invoice — that creates a duplicate row instead of "
             "fixing the original; use set_invoice_date or set_invoice_amount instead. "
+            "Automatically rejects a save with the same vendor+amount+currency+date as an existing "
+            "invoice (returns duplicate=true) — relay that to the user instead of retrying. "
             "Converts non-ILS amounts to ILS automatically using the Bank of Israel rate for the invoice date. "
             "Returns: the saved invoice ID and ILS amount."
         ),
@@ -622,6 +624,26 @@ async def exec_save_invoice(
             invoice_date = datetime.strptime(date, "%Y-%m-%d").date()
         except ValueError:
             return {"error": f"Invalid date format: {date!r}. Use YYYY-MM-DD."}
+
+    # Dedup: unlike the image pipeline, this path had no duplicate check at
+    # all — the agent would sometimes call this redundantly right after an
+    # image was already successfully processed (e.g. misreading the
+    # pipeline's own "New invoice received" notification as a request to
+    # save it again), silently creating a duplicate row every time.
+    from app.pipeline.dedup import check_similar_manual_invoice
+    existing = check_similar_manual_invoice(group_id, vendor, amount_decimal, currency, invoice_date)
+    if existing:
+        return {
+            "duplicate": True,
+            "duplicate_reason": "same_vendor_amount_date",
+            "existing_invoice_id": existing.id,
+            "existing_vendor": existing.vendor,
+            "existing_date": str(existing.invoice_date) if existing.invoice_date else None,
+            "existing_amount": (
+                f"{existing.amount_original} {existing.currency_original}"
+                if existing.amount_original else None
+            ),
+        }
 
     # Convert to ILS
     conversion = await convert_to_ils(amount_decimal, currency, invoice_date)
