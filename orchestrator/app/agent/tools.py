@@ -45,8 +45,10 @@ TOOL_SCHEMAS: list[dict] = [
         "name": "list_invoices",
         "description": (
             "Use when a user wants to see the list of invoices for a month. "
-            "Returns: each invoice's ID, vendor, date, original amount, ILS amount, and flag status. "
-            "Defaults to the current month. Available to all members."
+            "Returns: each invoice's ID, vendor, date, original amount, ILS amount, flag status, "
+            "and a server-computed total_ils for the month. If you mention a total in your reply, "
+            "always use this total_ils value verbatim — never sum the line items yourself, that is "
+            "error-prone with many rows. Defaults to the current month. Available to all members."
         ),
         "input_schema": {
             "type": "object",
@@ -335,10 +337,16 @@ async def exec_list_invoices(group_id: str, month: int = None, year: int = None,
     if not matched:
         return {"invoices": [], "message": f"No invoices found for {month:02d}/{year}."}
 
+    total_ils = sum(float(r.amount_ils) for r in matched if r.amount_ils)
+
     return {
         "month": month,
         "year": year,
         "count": len(matched),
+        # Server-computed so the agent relays a verified number instead of
+        # summing the line items itself in the reply text (Claude has been
+        # observed to mis-add ~20 decimal line items by a few agorot).
+        "total_ils": round(total_ils, 2),
         "invoices": [
             {
                 "id": r.id,
