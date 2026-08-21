@@ -447,7 +447,13 @@ async def _process(payload: WebhookPayload) -> None:
                 await _send(payload.jid, f"Pipeline error: {pipeline_result['error']}")
                 return
             if pipeline_result.get("duplicate"):
-                return  # already saved; don't confuse the agent with an empty duplicate message
+                # Send the deterministic duplicate message directly, bypassing the
+                # agent entirely — this used to just `return` with no reply at all,
+                # which looked identical to the bot being dead to a user re-sending
+                # a photo. Skipping the LLM round-trip here also means a duplicate
+                # never has to wait on a Claude call at all.
+                await _send(payload.jid, _pipeline_result_to_message(pipeline_result))
+                return
             agent_message = _pipeline_result_to_message(pipeline_result)
 
         if not agent_message.strip():
@@ -499,7 +505,21 @@ async def _process(payload: WebhookPayload) -> None:
 
 def _pipeline_result_to_message(result: dict) -> str:
     if result.get("duplicate"):
-        return f"Duplicate invoice detected: {result.get('vendor', '')} {result.get('invoice_number', '')}."
+        # This branch was dead code until the caller's `return` (with no reply
+        # at all) was fixed to call this instead — so this bug went unnoticed:
+        # it read result["vendor"]/result["invoice_number"], but the duplicate
+        # response shape (pipeline.py's _duplicate_response) actually uses
+        # existing_vendor/existing_amount/existing_date, and the separate
+        # duplicate_message_id case (a bare {"duplicate": True,
+        # "duplicate_reason": ...}) has none of those keys at all.
+        if result.get("duplicate_reason") == "duplicate_message_id":
+            return "This invoice was already recorded."
+        vendor = result.get("existing_vendor") or result.get("extracted_vendor")
+        amount = result.get("existing_amount") or result.get("extracted_amount")
+        inv_date = result.get("existing_date") or result.get("extracted_date")
+        parts = [p for p in (vendor, amount, inv_date) if p]
+        detail = " | ".join(parts)
+        return f"Duplicate invoice detected — already recorded: {detail}." if detail else "Duplicate invoice detected — already recorded."
     parts = []
     if vendor := result.get("vendor"):
         parts.append(f"Vendor: {vendor}")

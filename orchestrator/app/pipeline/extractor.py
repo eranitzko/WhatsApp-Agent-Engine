@@ -178,7 +178,7 @@ def _call_gemini_sync(image_bytes: bytes, mime_type: str, custom_instructions: s
     image_part = {"mime_type": mime_type, "data": image_bytes}
     response = model.generate_content(
         [_build_prompt(custom_instructions), image_part],
-        request_options={"retry": no_retry},
+        request_options={"retry": no_retry, "timeout": settings.gemini_timeout_seconds},
     )
     return response.text.strip()
 

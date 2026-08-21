@@ -1,14 +1,17 @@
-"""Tests for app/pipeline/storage.py's R2 invoice sidecar dict builder."""
+"""Tests for app/pipeline/storage.py's R2 invoice sidecar dict builder and
+image resize helper."""
 
+import io
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
+from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.models import Base, Invoice
-from app.pipeline.storage import invoice_to_sidecar_dict
+from app.pipeline.storage import invoice_to_sidecar_dict, resize_image
 
 
 def test_invoice_to_sidecar_dict_has_all_19_fields():
@@ -99,3 +102,49 @@ def test_invoice_to_sidecar_dict_after_commit_and_session_close():
     d = invoice_to_sidecar_dict(invoice)
     assert d["invoice_id"] == "inv-3"
     assert d["vendor"] == "Acme"
+
+
+def _make_jpeg(width: int, height: int, quality: int = 85) -> bytes:
+    img = Image.new("RGB", (width, height), color=(120, 40, 200))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
+def test_resize_image_returns_input_unchanged_when_already_fitting_jpeg():
+    """Performance regression: the bridge already resizes to 1920px/q85
+    before sending, so re-decoding and re-encoding an image that's already
+    within the target on every single scan is pure wasted wall-clock time
+    on the critical path the user is waiting on."""
+    already_fitting = _make_jpeg(800, 600)
+    assert resize_image(already_fitting) is already_fitting
+
+
+def test_resize_image_still_resizes_oversized_image():
+    oversized = _make_jpeg(3000, 2000)
+    result = resize_image(oversized)
+    assert result != oversized
+    with Image.open(io.BytesIO(result)) as img:
+        assert max(img.size) <= 1920
+
+
+def test_resize_image_converts_non_rgb_mode():
+    img = Image.new("L", (400, 300), color=128)  # grayscale, not RGB
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    grayscale_jpeg = buf.getvalue()
+
+    result = resize_image(grayscale_jpeg)
+    with Image.open(io.BytesIO(result)) as out:
+        assert out.mode == "RGB"
+
+
+def test_resize_image_converts_non_jpeg_format():
+    img = Image.new("RGB", (400, 300), color=(10, 200, 30))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+
+    result = resize_image(png_bytes)
+    with Image.open(io.BytesIO(result)) as out:
+        assert out.format == "JPEG"

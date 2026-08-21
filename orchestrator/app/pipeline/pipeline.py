@@ -1,21 +1,23 @@
 """Invoice ingestion pipeline.
 
 Orchestrates the full flow for an incoming image event:
-  1. Compute SHA-256 + perceptual hash → duplicate check (identical or
-     visually near-identical photo)
+  1. Compute SHA-256 + perceptual hash → duplicate check (identical photo);
+     on OCR failure below, persist a flagged placeholder instead of losing
+     the photo entirely
   2. Gemini OCR → structured extraction
-  3. Duplicate check (amount + date)
+  3. Duplicate check (amount + date, then visually near-identical photo —
+     skipped if the cheaper amount+date check already matched)
   4. Confidence check → flag if below threshold
-  5. In-memory resize → R2 upload
-  6. Currency conversion
-  7. Persist to DB
-  8. Return result dict for the agent to acknowledge
+  5. R2 upload + currency conversion, concurrently (independent of each other)
+  6. Persist to DB
+  7. Return result dict for the agent to acknowledge
 
 Call process_image_event(event) from main.py for the "image" event type.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import uuid
@@ -51,6 +53,36 @@ def _duplicate_response(existing: Invoice, reason: str, **extra) -> dict:
         ),
         **extra,
     }
+
+
+def _already_has_message_id(message_id: str) -> bool:
+    """Guard against duplicate message_id (bridge retry or replayed message).
+    Shared by both the normal-extraction and extraction-failed persist paths."""
+    with SessionLocal() as db:
+        return db.query(Invoice).filter(Invoice.message_id == message_id).first() is not None
+
+
+async def _persist_and_sync_sidecar(invoice: Invoice) -> None:
+    """Insert+commit an Invoice, then upload its R2 metadata sidecar if it
+    has an r2_key. Shared by both the normal-extraction and
+    extraction-failed persist paths."""
+    with SessionLocal() as db:
+        db.add(invoice)
+        db.commit()
+        # Un-expire invoice's attributes before the session closes below —
+        # commit() marks them stale by default, and reading a stale attribute
+        # needs a live session to reload it. invoice_to_sidecar_dict(invoice)
+        # runs after this block exits, so without this refresh it raises
+        # DetachedInstanceError on every single invoice. Same pattern already
+        # used correctly in exec_set_invoice_date/exec_set_invoice_amount.
+        db.refresh(invoice)
+
+    if invoice.r2_key:
+        try:
+            await upload_metadata(invoice.r2_key, invoice_to_sidecar_dict(invoice))
+        except RuntimeError:
+            logger.warning("Metadata sidecar upload failed for invoice %s — data still in DB", invoice.id)
+
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +137,59 @@ async def process_image_event(event: dict) -> dict:
     extraction = await extract_invoice(image_bytes, mime_type, custom_instructions)
 
     if extraction.get("error"):
-        # Still persist a placeholder so the image isn't lost
-        logger.warning("Extraction failed: %s", extraction["error"])
-        return {"error": extraction["error"]}
+        # Previously just returned {"error": ...} here with a comment claiming
+        # a placeholder was persisted — it never actually was. Any Gemini
+        # timeout, malformed response, or un-retried 429 permanently discarded
+        # the photo: it only ever existed in memory. Upload it to R2 and save
+        # a flagged placeholder row instead, so the photo is recoverable and
+        # an admin can fill in the details manually via save_invoice.
+        logger.warning("Extraction failed: %s — persisting a flagged placeholder", extraction["error"])
+
+        if _already_has_message_id(message_id):
+            logger.info("Duplicate message_id %s — skipping insert", message_id)
+            return {"duplicate": True, "duplicate_reason": "duplicate_message_id"}
+
+        r2_key: str | None = None
+        try:
+            r2_key = await upload_image(image_bytes, jid, message_id)
+        except RuntimeError as exc:
+            logger.error("R2 upload also failed for unextractable image: %s", exc)
+
+        flag_reason = f"Could not read this invoice automatically: {extraction['error']}. Please provide the details manually."
+        invoice_id = str(uuid.uuid4())
+        invoice = Invoice(
+            id=invoice_id,
+            group_id=jid,
+            message_id=message_id,
+            image_hash=image_hash,
+            perceptual_hash=perceptual_hash,
+            r2_key=r2_key,
+            received_at=datetime.now(timezone.utc),
+            extraction_confidence=0.0,
+            flagged=True,
+            flag_reason=flag_reason,
+            submitted_by=sender,
+        )
+        await _persist_and_sync_sidecar(invoice)
+        logger.info("Placeholder invoice saved for failed extraction: id=%s", invoice_id)
+
+        return {
+            "invoice_id": invoice_id,
+            "vendor": None,
+            "invoice_number": None,
+            "invoice_date": None,
+            "description": None,
+            "amount_original": None,
+            "currency_original": None,
+            "amount_ils": None,
+            "exchange_rate": None,
+            "rate_source": None,
+            "confidence": 0.0,
+            "flagged": True,
+            "flag_reason": flag_reason,
+            "r2_key": r2_key,
+            "duplicate": False,
+        }
 
     invoice_date_str: str | None = extraction.get("invoice_date")
     invoice_date: date | None = None
@@ -135,7 +217,10 @@ async def process_image_event(event: dict) -> dict:
     # docstring for why (OCR reads the same physical vendor name differently
     # across separate resends).
     existing_by_amount_date = check_amount_date_duplicate(jid, amount_original, currency_original, invoice_date)
-    existing_by_phash = check_perceptual_hash(jid, perceptual_hash)
+    # check_perceptual_hash is an unindexed O(n) scan over the group's invoice
+    # history (Hamming distance can't be backed by a DB index) — skip it
+    # whenever the cheap, indexed amount+date lookup already found a match.
+    existing_by_phash = None if existing_by_amount_date else check_perceptual_hash(jid, perceptual_hash)
     existing_duplicate = existing_by_amount_date or existing_by_phash
     if existing_duplicate:
         reason = "same_amount_and_date" if existing_by_amount_date else "visually_similar_image"
@@ -157,24 +242,32 @@ async def process_image_event(event: dict) -> dict:
         flag_reason = f"Low extraction confidence ({confidence:.0%}). Please review manually."
         logger.info("Invoice flagged: low confidence %.2f", confidence)
 
-    # ── 6. R2 upload ──────────────────────────────────────────────────────────
-    r2_key: str | None = None
-    try:
-        r2_key = await upload_image(image_bytes, jid, message_id)
-    except RuntimeError as exc:
-        logger.error("R2 upload failed: %s — invoice saved without image", exc)
-        if not flagged:
-            flagged = True
-            flag_reason = f"Image upload failed: {exc}"
+    # ── 6+7. R2 upload + currency conversion (concurrent — neither depends on
+    # the other's result: upload_image only needs image_bytes, convert_to_ils
+    # only needs the OCR-extracted amount/currency) ─────────────────────────────
+    async def _do_upload() -> tuple[str | None, str | None]:
+        try:
+            return await upload_image(image_bytes, jid, message_id), None
+        except RuntimeError as exc:
+            logger.error("R2 upload failed: %s — invoice saved without image", exc)
+            return None, str(exc)
 
-    # ── 7. Currency conversion ─────────────────────────────────────────────────
+    async def _do_conversion():
+        if amount_original is not None and currency_original:
+            return await convert_to_ils(amount_original, currency_original, invoice_date)
+        return None
+
+    (r2_key, upload_error), conversion = await asyncio.gather(_do_upload(), _do_conversion())
+
     amount_ils    = None
     exchange_rate = None
     rate_source   = None
     rate_date_val = None
 
-    if amount_original is not None and currency_original:
-        conversion = await convert_to_ils(amount_original, currency_original, invoice_date)
+    if upload_error and not flagged:
+        flagged = True
+        flag_reason = f"Image upload failed: {upload_error}"
+    if conversion is not None:
         if conversion.error:
             logger.warning("Currency conversion failed: %s", conversion.error)
             if not flagged:
@@ -187,11 +280,9 @@ async def process_image_event(event: dict) -> dict:
             rate_date_val = conversion.rate_date
 
     # ── 8. Persist to DB ──────────────────────────────────────────────────────
-    # Guard against duplicate message_id (bridge retry or replayed message)
-    with SessionLocal() as db:
-        if db.query(Invoice).filter(Invoice.message_id == message_id).first():
-            logger.info("Duplicate message_id %s — skipping insert", message_id)
-            return {"duplicate": True, "duplicate_reason": "duplicate_message_id"}
+    if _already_has_message_id(message_id):
+        logger.info("Duplicate message_id %s — skipping insert", message_id)
+        return {"duplicate": True, "duplicate_reason": "duplicate_message_id"}
 
     invoice_id = str(uuid.uuid4())
     invoice = Invoice(
@@ -218,30 +309,12 @@ async def process_image_event(event: dict) -> dict:
         submitted_by          = sender,
     )
 
-    with SessionLocal() as db:
-        db.add(invoice)
-        db.commit()
-        # Un-expire invoice's attributes before the session closes below —
-        # commit() marks them stale by default, and reading a stale attribute
-        # needs a live session to reload it. invoice_to_sidecar_dict(invoice)
-        # runs after this block exits, so without this refresh it raises
-        # DetachedInstanceError on every single invoice. Same pattern already
-        # used correctly in exec_set_invoice_date/exec_set_invoice_amount.
-        db.refresh(invoice)
+    await _persist_and_sync_sidecar(invoice)
 
     logger.info(
         "Invoice saved: id=%s vendor=%s amount=%s %s ils=%s flagged=%s",
         invoice_id, vendor, amount_original, currency_original, amount_ils, flagged,
     )
-
-    # ── 9. R2 metadata sidecar ────────────────────────────────────────────────
-    # Upload extracted metadata as a JSON sidecar alongside the image so R2
-    # is the source of truth and the DB can be rebuilt from R2 if needed.
-    if r2_key:
-        try:
-            await upload_metadata(r2_key, invoice_to_sidecar_dict(invoice))
-        except RuntimeError:
-            logger.warning("Metadata sidecar upload failed for invoice %s — data still in DB", invoice_id)
 
     return {
         "invoice_id":       invoice_id,

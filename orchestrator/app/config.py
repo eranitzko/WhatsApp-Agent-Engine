@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # Google Gemini (vision / OCR only)
     gemini_api_key: str = ""
     gemini_model: str = "gemini-1.5-pro"
+    gemini_timeout_seconds: float = 45.0  # bound a hung (not erroring) vision call — the
+    # per-group asyncio.Lock is held across the whole pipeline, so an unbounded call
+    # here stalls that group's processing indefinitely with no recovery
 
     # Anthropic Claude (agent reasoning, tool use)
     anthropic_api_key: str = ""

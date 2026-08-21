@@ -38,14 +38,23 @@ def _get_client():
 def resize_image(image_bytes: bytes) -> bytes:
     """Resize image to max 1920px on longest side at JPEG quality 85%.
 
-    Returns JPEG bytes. Input can be any Pillow-supported format.
+    Returns JPEG bytes. Input can be any Pillow-supported format. If the
+    input is already an RGB JPEG within the target dimensions — the common
+    case, since the bridge already performs this exact resize/recompress
+    before sending — returns the bytes unchanged instead of redundantly
+    decoding and re-encoding an image that wouldn't change.
     """
     with Image.open(io.BytesIO(image_bytes)) as img:
-        img = img.convert("RGB")  # ensure JPEG-compatible mode
-
         max_px = settings.image_max_px
         w, h = img.size
-        if max(w, h) > max_px:
+        already_fits = max(w, h) <= max_px
+
+        if img.format == "JPEG" and img.mode == "RGB" and already_fits:
+            return image_bytes
+
+        img = img.convert("RGB")  # ensure JPEG-compatible mode
+
+        if not already_fits:
             scale = max_px / max(w, h)
             new_w = int(w * scale)
             new_h = int(h * scale)
