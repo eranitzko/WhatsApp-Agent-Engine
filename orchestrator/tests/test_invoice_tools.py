@@ -149,6 +149,31 @@ def test_save_invoice_schema_forbids_correcting_existing_invoices():
     assert "set_invoice_date" in description
 
 
+def test_system_prompt_forbids_save_invoice_on_pipeline_notification():
+    """Regression: the agent kept calling save_invoice in response to the
+    pipeline's own "New invoice received" notification (fed to it as a
+    plain user-role message, textually indistinguishable from a human
+    typing invoice details) — confirmed directly against a production
+    duplicate where the invoice_number, vendor, amount, and date all
+    matched an already-saved, already-photographed invoice exactly. The
+    prompt's save_invoice guidance said "call immediately" for any message
+    that looks like invoice details as text, with nothing distinguishing
+    the system's own notification from a genuine user request."""
+    from app.prompts.invoice_curator import INVOICE_CURATOR_SYSTEM_PROMPT
+    prompt = INVOICE_CURATOR_SYSTEM_PROMPT.lower()
+    assert "new invoice received" in prompt
+
+
+def test_save_invoice_schema_forbids_calling_on_pipeline_notification():
+    """Same regression as above, reinforced in the tool's own description —
+    the agent sees both the system prompt and every tool schema, so this
+    guidance was added in both places, matching the existing pattern for
+    the date-correction/save_invoice mixup fixed earlier."""
+    tools = get_invoice_tools()
+    description = tools["save_invoice"]["schema"]["description"].lower()
+    assert "new invoice received" in description
+
+
 def test_set_invoice_date_schema_tells_agent_to_look_up_id_first():
     """Regression companion to the above: set_invoice_date's description
     must tell the agent to call list_invoices first rather than falling

@@ -195,9 +195,11 @@ TOOL_SCHEMAS: list[dict] = [
         "name": "save_invoice",
         "description": (
             "Manually save a NEW invoice entered as text (no image). Admin only. "
-            "Use when a user provides invoice details in a message rather than by sending an image. "
-            "Never use this to correct or replace an existing invoice — that creates a duplicate row instead of "
-            "fixing the original; use set_invoice_date or set_invoice_amount instead. "
+            "Use when a user TYPES invoice details as a request to record them — never in response to a "
+            "'New invoice received' message, which is the system confirming an image was already processed "
+            "and saved automatically; calling this on that message creates a duplicate of it. "
+            "Never use this to correct or replace an existing invoice either — that also creates a duplicate "
+            "row instead of fixing the original; use set_invoice_date or set_invoice_amount instead. "
             "Automatically rejects a save with the same amount+currency+date as an existing invoice, "
             "regardless of vendor (returns duplicate=true) — relay that to the user instead of retrying. "
             "Converts non-ILS amounts to ILS automatically using the Bank of Israel rate for the invoice date. "
