@@ -54,6 +54,37 @@ def registry():
 
 
 @pytest.fixture
+def registry_with_admin_tool():
+    """A registry with one user-visible tool and one admin-only tool —
+    used to test the non-admin unavailable-tools notice."""
+    r = ToolRegistry()
+    r.register({
+        "say_hello": {
+            "schema": {"name": "say_hello", "description": "Greet", "input_schema": {"type": "object", "properties": {}}},
+            "executor": AsyncMock(return_value="Hello there!"),
+        },
+        "stage_action": {
+            "schema": {"name": "stage_action", "description": "Stage.", "access": "admin",
+                       "input_schema": {"type": "object", "properties": {}}},
+            "executor": AsyncMock(return_value="Staged."),
+        },
+    })
+    return r
+
+
+BLUEPRINT_WITH_ADMIN_TOOL = Blueprint(
+    id="test_bot_admin",
+    display_name="Test Bot",
+    system_prompt="You are helpful.",
+    model="claude-sonnet-4-6",
+    tools_enabled='["say_hello", "stage_action"]',
+    max_tool_turns=3,
+    context_window=4,
+    context_idle_reset_minutes=30,
+)
+
+
+@pytest.fixture
 def context():
     ctx = MagicMock()
     ctx.get_history = MagicMock(return_value=[])
@@ -85,6 +116,51 @@ async def test_run_returns_text_on_end_turn(registry, context, confirmation_stor
         confirmation_store=confirmation_store,
     )
     assert result == "Hello, how can I help?"
+
+
+@pytest.mark.asyncio
+async def test_non_admin_gets_unavailable_tools_notice(registry_with_admin_tool, context, confirmation_store):
+    """Regression: a non-admin's reduced toolset (e.g. no stage_action) was
+    observed to produce a fabricated confirmation message instead of an
+    honest refusal. The system prompt now names exactly which tools are
+    missing this turn, computed from the real allowed_tools list."""
+    client = AsyncMock()
+    client.messages.create = AsyncMock(return_value=make_end_turn_response("Sure."))
+    runner = AgentRunner(client, registry_with_admin_tool)
+    await runner.run(
+        blueprint=BLUEPRINT_WITH_ADMIN_TOOL,
+        group_jid="123@g.us",
+        sender="user@s.whatsapp.net",
+        is_admin=False,
+        message="do something admin-only",
+        context=context,
+        confirmation_store=confirmation_store,
+    )
+    system_blocks = client.messages.create.call_args.kwargs["system"]
+    notice = next((b["text"] for b in system_blocks if "unavailable this turn" in b["text"]), None)
+    assert notice is not None
+    assert "stage_action" in notice
+    assert "say_hello" not in notice
+
+
+@pytest.mark.asyncio
+async def test_admin_gets_no_unavailable_tools_notice(registry_with_admin_tool, context, confirmation_store):
+    """An admin has every tool, so there's nothing to warn about — the
+    notice block must not appear at all (it would be a confusing no-op)."""
+    client = AsyncMock()
+    client.messages.create = AsyncMock(return_value=make_end_turn_response("Sure."))
+    runner = AgentRunner(client, registry_with_admin_tool)
+    await runner.run(
+        blueprint=BLUEPRINT_WITH_ADMIN_TOOL,
+        group_jid="123@g.us",
+        sender="admin@s.whatsapp.net",
+        is_admin=True,
+        message="do something admin-only",
+        context=context,
+        confirmation_store=confirmation_store,
+    )
+    system_blocks = client.messages.create.call_args.kwargs["system"]
+    assert not any("unavailable this turn" in b["text"] for b in system_blocks)
 
 
 @pytest.mark.asyncio

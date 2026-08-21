@@ -170,6 +170,23 @@ class AgentRunner:
             "type": "text",
             "text": f"Today's date: {datetime.now(timezone.utc).date()}. Sender is_admin: {is_admin}. Sender phone: {sender_phone}.",
         })
+        if not is_admin:
+            # Named per-call, not just implied by a static blueprint-wide
+            # instruction — a non-admin's reduced toolset was observed to
+            # produce a fabricated confirmation message (e.g. describing a
+            # staged amount change, "reply yes to confirm") when stage_action
+            # itself wasn't in allowed_tools, instead of an honest refusal.
+            unavailable = [t for t in blueprint.tools_list() if t not in allowed_tools]
+            if unavailable:
+                system.append({
+                    "type": "text",
+                    "text": (
+                        f"This sender is not an admin, so these tools are unavailable this "
+                        f"turn: {', '.join(unavailable)}. Do not describe, simulate, or promise "
+                        "what any of them would do — if the request needs one, say so plainly "
+                        "instead (e.g. \"that requires an admin\")."
+                    ),
+                })
         tool_schemas = self.registry.get_schemas(allowed_tools)
 
         # ── Single-action confirmation intercept ──────────────────────────────
