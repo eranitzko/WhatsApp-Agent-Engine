@@ -232,6 +232,101 @@ def test_invoice_generator_generate_xlsx_returns_bytes():
     assert result == (b"xlsx-bytes", "invoices_May_2026.xlsx")
 
 
+def test_invoice_generator_build_pdf_language_override_ignores_group_config(db):
+    """One-off language override: build_pdf(language="he") must render in
+    Hebrew even though the group's saved feedback_language is "en" — and
+    must NOT persist that change (still "en" after the call). Mirrors the
+    one-off override family_accounting already had via fmt_config["language"];
+    invoice_curator never had an equivalent, hence the bug."""
+    from datetime import date
+    from decimal import Decimal
+
+    from app.db.models import GroupConfig
+    from tests.conftest import make_invoice
+
+    db.add(GroupConfig(group_id="123@g.us", feedback_language="en"))
+    db.commit()
+    make_invoice(
+        db, group_id="123@g.us",
+        invoice_date=date(2026, 5, 3), invoice_number="INV-1", vendor="Acme",
+        description="Widgets", amount_original=Decimal("100"), currency_original="ILS",
+        amount_ils=Decimal("100"),
+    )
+
+    from app.export.generators.invoice import InvoiceGenerator
+
+    with patch("app.export.generators.invoice.SessionLocal", return_value=SessionCM(db)), \
+         patch("app.reports.data.SessionLocal", return_value=SessionCM(db)):
+        gen = InvoiceGenerator("123@g.us")
+        result_bytes, _ = gen.build_pdf(month=5, year=2026, language="he")
+
+    assert result_bytes[:4] == b"%PDF"
+    # Not persisted — still "en" in the DB after a one-off override.
+    cfg = db.get(GroupConfig, "123@g.us")
+    assert cfg.feedback_language == "en"
+
+
+def test_invoice_generator_build_pdf_language_override_sets_spec_lang():
+    from app.export.generators.invoice import InvoiceGenerator
+
+    mock_row = MagicMock()
+    mock_row.invoice_date = None
+    mock_row.invoice_number = "INV-1"
+    mock_row.vendor = "Acme"
+    mock_row.description = "Widgets"
+    mock_row.amount_original = 100
+    mock_row.currency_original = "ILS"
+    mock_row.amount_ils = 100
+    mock_row.flagged = False
+
+    mock_data = MagicMock()
+    mock_data.rows = [mock_row]
+    mock_data.month = 5
+    mock_data.year = 2026
+    mock_data.period_label = None
+    mock_data.total_ils = 100
+    mock_data.show_dual_currency = False
+
+    mock_cfg = MagicMock()
+    mock_cfg.feedback_language = "en"
+    mock_cfg.report_header = None
+    mock_cfg.report_author = None
+    mock_cfg.force_dual_currency = False
+
+    with patch("app.export.generators.invoice.fetch_report_data", return_value=mock_data), \
+         patch("app.export.generators.invoice.render_pdf", return_value=b"pdf-bytes") as mock_render, \
+         patch("app.export.generators.invoice._get_invoice_config", return_value=mock_cfg):
+        gen = InvoiceGenerator("123@g.us")
+        gen.build_pdf(month=5, year=2026, language="he")
+
+    spec = mock_render.call_args.args[0]
+    assert spec.lang == "he"
+
+
+def test_invoice_generator_build_xlsx_language_override_passed_to_generate_excel():
+    from app.export.generators.invoice import InvoiceGenerator
+
+    mock_data = MagicMock()
+    mock_data.rows = [MagicMock()]
+    mock_data.month = 5
+    mock_data.year = 2026
+    mock_data.period_label = None
+
+    mock_cfg = MagicMock()
+    mock_cfg.feedback_language = "en"
+    mock_cfg.report_header = None
+    mock_cfg.report_author = None
+    mock_cfg.force_dual_currency = False
+
+    with patch("app.export.generators.invoice.fetch_report_data", return_value=mock_data), \
+         patch("app.export.generators.invoice.generate_excel", return_value=b"xlsx") as mock_excel, \
+         patch("app.export.generators.invoice._get_invoice_config", return_value=mock_cfg):
+        gen = InvoiceGenerator("123@g.us")
+        gen.build_xlsx(month=5, year=2026, language="he")
+
+    assert mock_excel.call_args.kwargs["lang"] == "he"
+
+
 def test_invoice_generator_no_data_raises():
     from app.export.generators.invoice import InvoiceGenerator, NoDataError
 
@@ -526,6 +621,40 @@ def test_export_invoice_report_has_invoice_params():
     props = tools["export_invoice_report"]["schema"]["input_schema"]["properties"]
     assert "month" in props
     assert "attach_images" in props
+
+
+def test_export_invoice_report_schema_has_language_param():
+    """Regression: export_invoice_report's schema never exposed a language
+    override at all (unlike export_accounting_report's) — so the agent had
+    no way to request one-off Hebrew, even though _exec_export_report always
+    parsed a language param that only the family_accounting branch used."""
+    from app.export.tool import get_export_tools
+    tools = get_export_tools()
+    props = tools["export_invoice_report"]["schema"]["input_schema"]["properties"]
+    assert "language" in props
+    assert props["language"]["enum"] == ["en", "he"]
+
+
+@pytest.mark.asyncio
+async def test_export_report_invoice_pdf_language_override_passed_through(db):
+    """The parsed language param must actually reach InvoiceGenerator for
+    invoice_curator, not just for family_accounting."""
+    _seed_bp_group(db, "invoice_curator")
+    from app.export.tool import _exec_export_report
+
+    mock_gen = MagicMock()
+    mock_gen.build_pdf.return_value = (b"pdf", "invoices_May_2026.pdf")
+    mock_deliver = AsyncMock()
+
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)), \
+         patch("app.export.tool.InvoiceGenerator", return_value=mock_gen), \
+         patch("app.export.tool.deliver_files", mock_deliver):
+        await _exec_export_report(
+            {"format": "pdf", "delivery": "group", "language": "he"},
+            group_jid="123@g.us", is_admin=True,
+        )
+
+    assert mock_gen.build_pdf.call_args.kwargs["language"] == "he"
 
 
 def test_export_accounting_report_has_no_invoice_params():

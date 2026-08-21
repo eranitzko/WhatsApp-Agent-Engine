@@ -92,11 +92,13 @@ async def _exec_export_report(params: dict, **ctx) -> str:
             if fmt in ("pdf", "both"):
                 data, name = gen.build_pdf(month=month, year=year,
                                            attach_images=attach_images,
-                                           start_date=start_date, end_date=end_date)
+                                           start_date=start_date, end_date=end_date,
+                                           language=language or None)
                 files.append((name, "application/pdf", data))
             if fmt in ("xlsx", "both"):
                 data, name = gen.build_xlsx(month=month, year=year,
-                                            start_date=start_date, end_date=end_date)
+                                            start_date=start_date, end_date=end_date,
+                                            language=language or None)
                 files.append((name, _XLSX_MIME, data))
 
         elif blueprint_id == "family_accounting":
@@ -265,6 +267,17 @@ _SCHEMA_INVOICE = {
             "end_date": {
                 "type": "string",
                 "description": "Custom range end YYYY-MM-DD. Overrides month/year.",
+            },
+            "language": {
+                "type": "string",
+                "enum": ["en", "he"],
+                "description": (
+                    "One-off report language override. Optional — uses the group's saved "
+                    "feedback_language (see update_config) if omitted. To make a language "
+                    "change persist across future reports, use "
+                    "update_config(key='language', value=...) instead of repeating this "
+                    "on every call."
+                ),
             },
             "subject": {
                 "type": "string",

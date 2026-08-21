@@ -53,8 +53,8 @@ class InvoiceGenerator:
     def _period_str(self, data) -> str:
         return data.period_label or f"{month_name[data.month]}_{data.year}"
 
-    def _build_spec(self, data, cfg) -> ReportSpec:
-        lang = cfg.feedback_language
+    def _build_spec(self, data, cfg, language: str | None = None) -> ReportSpec:
+        lang = language or cfg.feedback_language
         dual = data.show_dual_currency
 
         # width_weight values reproduce the old generate_pdf's fixed cm widths
@@ -129,9 +129,11 @@ class InvoiceGenerator:
         start_date: str | None = None,
         end_date: str | None = None,
         force_dual_currency: bool | None = None,
+        language: str | None = None,
     ) -> tuple[bytes, str]:
         data, cfg = self._fetch(month, year, start_date, end_date, force_dual_currency)
-        spec = self._build_spec(data, cfg)
+        lang = language or cfg.feedback_language
+        spec = self._build_spec(data, cfg, language=lang)
 
         extra_flowables: list = []
         flagged_count = sum(1 for r in data.rows if r.flagged)
@@ -139,14 +141,14 @@ class InvoiceGenerator:
             from reportlab.lib.styles import ParagraphStyle
             note_style = ParagraphStyle(
                 "FlaggedNote", fontName=_font(bold=False), fontSize=9,
-                textColor="#555555", alignment=2 if cfg.feedback_language == "he" else 0,
+                textColor="#555555", alignment=2 if lang == "he" else 0,
             )
             from reportlab.platypus import Paragraph
-            extra_flowables.append(Paragraph(_bidi_then_xml(L(cfg.feedback_language, "flagged_note")), note_style))
+            extra_flowables.append(Paragraph(_bidi_then_xml(L(lang, "flagged_note")), note_style))
 
         if attach_images:
             loader = download_image_sync
-            extra_flowables.extend(build_appendix_flowables(data.rows, cfg.feedback_language, loader))
+            extra_flowables.extend(build_appendix_flowables(data.rows, lang, loader))
 
         pdf_bytes = render_pdf(spec, extra_flowables=extra_flowables or None)
         filename = f"invoices_{self._period_str(data)}.pdf"
@@ -159,11 +161,12 @@ class InvoiceGenerator:
         start_date: str | None = None,
         end_date: str | None = None,
         force_dual_currency: bool | None = None,
+        language: str | None = None,
     ) -> tuple[bytes, str]:
         data, cfg = self._fetch(month, year, start_date, end_date, force_dual_currency)
         xlsx_bytes = generate_excel(
             data,
-            lang=cfg.feedback_language,
+            lang=language or cfg.feedback_language,
             title=cfg.report_header or None,
             author=cfg.report_author or None,
         )
