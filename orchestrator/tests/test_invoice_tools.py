@@ -151,7 +151,7 @@ def test_save_invoice_schema_forbids_correcting_existing_invoices():
 
 def test_system_prompt_forbids_save_invoice_on_pipeline_notification():
     """Regression: the agent kept calling save_invoice in response to the
-    pipeline's own "New invoice received" notification (fed to it as a
+    pipeline's own "Invoice auto-saved" notification (fed to it as a
     plain user-role message, textually indistinguishable from a human
     typing invoice details) — confirmed directly against a production
     duplicate where the invoice_number, vendor, amount, and date all
@@ -161,7 +161,7 @@ def test_system_prompt_forbids_save_invoice_on_pipeline_notification():
     the system's own notification from a genuine user request."""
     from app.prompts.invoice_curator import INVOICE_CURATOR_SYSTEM_PROMPT
     prompt = INVOICE_CURATOR_SYSTEM_PROMPT.lower()
-    assert "new invoice received" in prompt
+    assert "invoice auto-saved" in prompt
 
 
 def test_save_invoice_schema_forbids_calling_on_pipeline_notification():
@@ -171,7 +171,7 @@ def test_save_invoice_schema_forbids_calling_on_pipeline_notification():
     the date-correction/save_invoice mixup fixed earlier."""
     tools = get_invoice_tools()
     description = tools["save_invoice"]["schema"]["description"].lower()
-    assert "new invoice received" in description
+    assert "invoice auto-saved" in description
 
 
 def test_set_invoice_date_schema_tells_agent_to_look_up_id_first():
@@ -312,7 +312,7 @@ async def test_exec_save_invoice_rejects_exact_duplicate(db):
     """Regression: save_invoice had no duplicate check at all, unlike the
     image pipeline — the agent would sometimes call it redundantly right
     after an image was already successfully processed (e.g. misreading the
-    pipeline's own "New invoice received" notification as a request to save
+    pipeline's own "Invoice auto-saved" notification as a request to save
     it again), silently creating a duplicate row every time."""
     from datetime import date
     from unittest.mock import patch

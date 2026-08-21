@@ -532,7 +532,16 @@ def _pipeline_result_to_message(result: dict) -> str:
         parts.append(f"Invoice #: {inv_num}")
     if result.get("flagged"):
         parts.append(f"Flagged: {result.get('flag_reason', '')}")
-    return "New invoice received. " + " | ".join(parts) if parts else "New invoice received."
+    # Deliberately assertive, not a neutral "New invoice received" — this is
+    # fed to the agent as a plain user-role message with no other signal that
+    # it's machine-generated, and the pipeline has ALREADY decided (via its
+    # own amount+date+phash dedup, before this function is ever reached) that
+    # this is not a duplicate. A softer phrasing was observed to sometimes
+    # get re-interpreted as "check this for duplicates", producing a false
+    # "already exists, not saving" reply for a save that had, in fact, just
+    # succeeded — most often on an invoice's very first occurrence in a group.
+    prefix = "Invoice auto-saved — already confirmed unique, no need to verify or save again."
+    return f"{prefix} " + " | ".join(parts) if parts else prefix
 
 
 async def _send(jid: str, text: str, *, mentions: list[str] | None = None) -> None:

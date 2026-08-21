@@ -197,9 +197,9 @@ TOOL_SCHEMAS: list[dict] = [
         "name": "save_invoice",
         "description": (
             "Manually save a NEW invoice entered as text (no image). Admin only. "
-            "Use when a user TYPES invoice details as a request to record them — never in response to a "
-            "'New invoice received' message, which is the system confirming an image was already processed "
-            "and saved automatically; calling this on that message creates a duplicate of it. "
+            "Use when a user TYPES invoice details as a request to record them — never in response to an "
+            "'Invoice auto-saved' message, which is the system confirming an image was already processed, "
+            "deduplicated, and saved automatically; calling this on that message creates a duplicate of it. "
             "Never use this to correct or replace an existing invoice either — that also creates a duplicate "
             "row instead of fixing the original; use set_invoice_date or set_invoice_amount instead. "
             "Automatically rejects a save with the same amount+currency+date as an existing invoice, "
@@ -638,7 +638,7 @@ async def exec_save_invoice(
     # Dedup: unlike the image pipeline, this path had no duplicate check at
     # all — the agent would sometimes call this redundantly right after an
     # image was already successfully processed (e.g. misreading the
-    # pipeline's own "New invoice received" notification as a request to
+    # pipeline's own "Invoice auto-saved" notification as a request to
     # save it again), silently creating a duplicate row every time.
     from app.pipeline.dedup import check_amount_date_duplicate
     existing = check_amount_date_duplicate(group_id, amount_decimal, currency, invoice_date)

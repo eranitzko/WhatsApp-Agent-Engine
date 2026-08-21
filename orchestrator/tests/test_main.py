@@ -10,7 +10,7 @@ def test_new_invoice_message_includes_extracted_fields():
         "flagged": False,
     }
     msg = _pipeline_result_to_message(result)
-    assert "New invoice received" in msg
+    assert "Invoice auto-saved" in msg
     assert "Acme" in msg
     assert "100.0" in msg
 
