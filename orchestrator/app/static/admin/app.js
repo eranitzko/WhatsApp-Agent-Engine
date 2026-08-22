@@ -503,11 +503,22 @@ async function deletePerson(phone) {
 
 // ── Households ────────────────────────────────────────────────────────────────
 
+// Registered people, cached per-render for the "add member" search box —
+// keyed by household id so each card's picked group_jid is tracked
+// independently (cleared whenever that card's search input is hand-edited
+// after a pick, so a stale jid never gets submitted for an edited phone).
+let _peopleForHouseholds = [];
+const _pickedMemberGroupJid = {};
+
 async function renderHouseholds(app) {
   app.innerHTML = layout('households', '<p style="color:var(--muted)">Loading...</p>');
-  const res = await apiFetch('/households');
-  if (!res) return;
-  const households = await res.json();
+  const [hhRes, peopleRes] = await Promise.all([
+    apiFetch('/households'),
+    apiFetch('/people'),
+  ]);
+  if (!hhRes) return;
+  const households = await hhRes.json();
+  _peopleForHouseholds = peopleRes ? await peopleRes.json() : [];
 
   const cardsHtml = households.length
     ? households.map(h => `
@@ -517,30 +528,38 @@ async function renderHouseholds(app) {
             <button class="btn btn-danger" style="padding:4px 8px;font-size:11px" onclick="deleteHousehold('${escAttr(h.id)}','${escAttr(h.name)}')">Delete household</button>
           </div>
           <table class="table">
-            <thead><tr><th>Phone</th><th>Display Name</th><th>Private Group JID</th><th>Linked</th><th></th></tr></thead>
+            <thead><tr><th>Phone</th><th>Display Name</th><th>Linked</th><th></th></tr></thead>
             <tbody>
               ${h.members.length ? h.members.map(m => `
                 <tr>
                   <td>${escHtml(m.phone)}</td>
                   <td>${escHtml(m.display_name || '—')}</td>
-                  <td style="font-size:0.8em;color:var(--muted)">${escHtml(m.private_group_jid || '—')}</td>
                   <td>${m.linked ? '✅' : '—'}</td>
                   <td style="white-space:nowrap">
                     <button class="btn" style="padding:4px 8px;font-size:11px;border:1px solid var(--border)"
                       onclick="openMemberEdit(${escAttr(JSON.stringify(JSON.stringify({ household_id: h.id, ...m })))})">Edit</button>
                     <button class="btn btn-danger" style="padding:4px 8px;font-size:11px;margin-left:3px" onclick="removeHouseholdMember('${escAttr(h.id)}','${escAttr(m.phone)}')">✕</button>
                   </td>
-                </tr>`).join('') : '<tr><td colspan="5" class="empty">No members yet.</td></tr>'}
+                </tr>`).join('') : '<tr><td colspan="4" class="empty">No members yet.</td></tr>'}
             </tbody>
           </table>
           <details style="padding:12px 14px">
             <summary style="cursor:pointer;font-size:13px;color:var(--accent)">+ Add member</summary>
-            <div style="padding:12px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
-              <input id="new-member-phone-${escAttr(h.id)}" type="text" placeholder="Phone e.g. 972501234567" style="width:180px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+            <div style="padding:12px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start">
+              <div style="position:relative;width:220px">
+                <input id="new-member-search-${escAttr(h.id)}" type="text" placeholder="Search by phone or name…" autocomplete="off"
+                  oninput="onMemberSearchInput('${escAttr(h.id)}')"
+                  onblur="hideMemberSuggestionsSoon('${escAttr(h.id)}')"
+                  style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px;box-sizing:border-box">
+                <div id="new-member-suggestions-${escAttr(h.id)}"
+                  style="display:none;position:absolute;top:100%;left:0;right:0;z-index:10;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-top:2px;max-height:220px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.15)"></div>
+              </div>
               <input id="new-member-name-${escAttr(h.id)}" type="text" placeholder="Display name (optional)" style="width:160px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
-              <input id="new-member-jid-${escAttr(h.id)}" type="text" placeholder="Private Group JID (optional)" style="width:200px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
               <button class="btn btn-primary" onclick="addHouseholdMember('${escAttr(h.id)}')">Add</button>
             </div>
+            <p style="font-size:11px;color:var(--muted);margin:6px 0 0">
+              Pick a registered person from the dropdown, or type a new phone number for someone not registered yet.
+            </p>
           </details>
         </div>`).join('')
     : '<p class="empty">No households yet.</p>';
@@ -556,6 +575,49 @@ async function renderHouseholds(app) {
       </div>
     </details>
     <div id="household-modal-wrap"></div>`);
+}
+
+function onMemberSearchInput(householdId) {
+  _pickedMemberGroupJid[householdId] = null;
+  const input = document.getElementById('new-member-search-' + householdId);
+  const box = document.getElementById('new-member-suggestions-' + householdId);
+  const q = input.value.trim().toLowerCase();
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  const matches = _peopleForHouseholds.filter(p =>
+    (p.phone && p.phone.toLowerCase().includes(q)) ||
+    (p.display_name && p.display_name.toLowerCase().includes(q))
+  ).slice(0, 8);
+
+  if (!matches.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  box.innerHTML = matches.map(p => `
+    <div style="padding:8px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)"
+      onmousedown="event.preventDefault();selectMemberSuggestion('${escAttr(householdId)}','${escAttr(p.phone)}')">
+      <strong>${escHtml(p.display_name || p.phone)}</strong>
+      ${p.display_name ? `<span style="color:var(--muted)"> — ${escHtml(p.phone)}</span>` : ''}
+    </div>`).join('');
+  box.style.display = 'block';
+}
+
+function hideMemberSuggestionsSoon(householdId) {
+  // Delayed so a suggestion's own mousedown (which already preventDefault()s
+  // to keep focus) has time to fire its click before this hides the list.
+  setTimeout(() => {
+    const box = document.getElementById('new-member-suggestions-' + householdId);
+    if (box) { box.style.display = 'none'; }
+  }, 150);
+}
+
+function selectMemberSuggestion(householdId, phone) {
+  const person = _peopleForHouseholds.find(p => p.phone === phone);
+  if (!person) return;
+  document.getElementById('new-member-search-' + householdId).value = person.phone;
+  document.getElementById('new-member-name-' + householdId).value = person.display_name || '';
+  _pickedMemberGroupJid[householdId] = person.group_jid || person.primary_accounting_group_jid || null;
+  const box = document.getElementById('new-member-suggestions-' + householdId);
+  box.style.display = 'none';
+  box.innerHTML = '';
 }
 
 async function addHousehold() {
@@ -583,10 +645,15 @@ async function deleteHousehold(id, name) {
 }
 
 async function addHouseholdMember(householdId) {
-  const phone = document.getElementById('new-member-phone-' + householdId).value.trim();
-  if (!phone) { alert('Phone number is required.'); return; }
+  const phone = document.getElementById('new-member-search-' + householdId).value.trim();
+  if (!phone) { alert('Phone number is required — search and pick a person, or type a new phone number.'); return; }
   const display_name = document.getElementById('new-member-name-' + householdId).value.trim();
-  const private_group_jid = document.getElementById('new-member-jid-' + householdId).value.trim();
+  // Only trust the picked group_jid if the search box still holds that exact
+  // phone — onMemberSearchInput already clears this on any further typing,
+  // but this is a second guard against a stale pick slipping through.
+  const picked = _pickedMemberGroupJid[householdId];
+  const person = picked ? _peopleForHouseholds.find(p => p.phone === phone) : null;
+  const private_group_jid = person ? picked : null;
   const res = await apiFetch('/households/' + encodeURIComponent(householdId) + '/members', {
     method: 'POST',
     body: JSON.stringify({
@@ -600,6 +667,7 @@ async function addHouseholdMember(householdId) {
     alert('Failed to add member: ' + (body?.detail || 'Unknown error'));
     return;
   }
+  delete _pickedMemberGroupJid[householdId];
   renderHouseholds(document.getElementById('app'));
 }
 
@@ -627,10 +695,6 @@ function openMemberEdit(memberJson) {
           <label>Display Name</label>
           <input id="edit-member-name" type="text" value="${escAttr(m.display_name || '')}">
         </div>
-        <div class="form-group">
-          <label>Private Group JID</label>
-          <input id="edit-member-jid" type="text" value="${escAttr(m.private_group_jid || '')}">
-        </div>
         <div class="modal-footer">
           <button class="btn" onclick="closeMemberModal()">Cancel</button>
           <button class="btn btn-primary" onclick="saveMemberEdit('${escAttr(m.household_id)}','${escAttr(m.phone)}')">Save</button>
@@ -646,12 +710,13 @@ function closeMemberModal() {
 
 async function saveMemberEdit(householdId, phone) {
   const display_name = document.getElementById('edit-member-name').value.trim();
-  const private_group_jid = document.getElementById('edit-member-jid').value.trim();
+  // private_group_jid is deliberately not editable here — it's an internal
+  // linkage set automatically when a person registers, not something an
+  // admin should hand-edit. Omitting it from the body leaves it untouched.
   const res = await apiFetch('/households/' + encodeURIComponent(householdId) + '/members/' + encodeURIComponent(phone), {
     method: 'PATCH',
     body: JSON.stringify({
       display_name: display_name || null,
-      private_group_jid: private_group_jid || null,
     }),
   });
   if (!res || !res.ok) {
