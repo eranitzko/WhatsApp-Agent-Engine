@@ -554,7 +554,14 @@ async function renderHouseholds(app) {
                 <div id="new-member-suggestions-${escAttr(h.id)}"
                   style="display:none;position:absolute;top:100%;left:0;right:0;z-index:10;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-top:2px;max-height:220px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.15)"></div>
               </div>
-              <input id="new-member-name-${escAttr(h.id)}" type="text" placeholder="Display name (optional)" style="width:160px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+              <div style="position:relative;width:160px">
+                <input id="new-member-name-${escAttr(h.id)}" type="text" placeholder="Display name (optional)" autocomplete="off"
+                  oninput="onMemberSearchInput('${escAttr(h.id)}', 'new-member-name-${escAttr(h.id)}')"
+                  onblur="hideMemberSuggestionsSoon('${escAttr(h.id)}')"
+                  style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px;box-sizing:border-box">
+                <div id="new-member-name-suggestions-${escAttr(h.id)}"
+                  style="display:none;position:absolute;top:100%;left:0;right:0;z-index:10;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-top:2px;max-height:220px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.15)"></div>
+              </div>
               <button class="btn btn-primary" onclick="addHouseholdMember('${escAttr(h.id)}')">Add</button>
             </div>
             <p style="font-size:11px;color:var(--muted);margin:6px 0 0">
@@ -577,10 +584,17 @@ async function renderHouseholds(app) {
     <div id="household-modal-wrap"></div>`);
 }
 
-function onMemberSearchInput(householdId) {
+// Both the phone/search box and the Display Name box trigger the same
+// live search against registered people — someone might think of a
+// household member by phone, by their registered name, or by a nickname
+// close to it, and shouldn't have to know which field "does the search."
+// sourceInputId defaults to the phone/search field for its own oninput.
+function onMemberSearchInput(householdId, sourceInputId) {
+  sourceInputId = sourceInputId || ('new-member-search-' + householdId);
+  const isNameField = sourceInputId.startsWith('new-member-name-');
   _pickedMemberGroupJid[householdId] = null;
-  const input = document.getElementById('new-member-search-' + householdId);
-  const box = document.getElementById('new-member-suggestions-' + householdId);
+  const input = document.getElementById(sourceInputId);
+  const box = document.getElementById((isNameField ? 'new-member-name-suggestions-' : 'new-member-suggestions-') + householdId);
   const q = input.value.trim().toLowerCase();
   if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
 
@@ -604,8 +618,10 @@ function hideMemberSuggestionsSoon(householdId) {
   // Delayed so a suggestion's own mousedown (which already preventDefault()s
   // to keep focus) has time to fire its click before this hides the list.
   setTimeout(() => {
-    const box = document.getElementById('new-member-suggestions-' + householdId);
-    if (box) { box.style.display = 'none'; }
+    const box1 = document.getElementById('new-member-suggestions-' + householdId);
+    const box2 = document.getElementById('new-member-name-suggestions-' + householdId);
+    if (box1) { box1.style.display = 'none'; }
+    if (box2) { box2.style.display = 'none'; }
   }, 150);
 }
 
@@ -615,9 +631,10 @@ function selectMemberSuggestion(householdId, phone) {
   document.getElementById('new-member-search-' + householdId).value = person.phone;
   document.getElementById('new-member-name-' + householdId).value = person.display_name || '';
   _pickedMemberGroupJid[householdId] = person.group_jid || person.primary_accounting_group_jid || null;
-  const box = document.getElementById('new-member-suggestions-' + householdId);
-  box.style.display = 'none';
-  box.innerHTML = '';
+  for (const idPrefix of ['new-member-suggestions-', 'new-member-name-suggestions-']) {
+    const box = document.getElementById(idPrefix + householdId);
+    if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+  }
 }
 
 async function addHousehold() {
