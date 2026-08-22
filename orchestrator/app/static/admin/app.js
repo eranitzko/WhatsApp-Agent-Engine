@@ -26,6 +26,7 @@ async function route() {
   if (!getToken()) { renderLogin(app); return; }
   if (hash === 'groups') await renderGroups(app);
   else if (hash === 'people') await renderPeople(app);
+  else if (hash === 'households') await renderHouseholds(app);
   else if (hash === 'blueprints') await renderBlueprints(app);
   else if (hash === 'tools') await renderTools(app);
   else if (hash === 'settings') await renderSettings(app);
@@ -42,6 +43,7 @@ function layout(page, content) {
   const nav = [
     { hash: 'groups',     icon: '🏠', label: 'Groups' },
     { hash: 'people',     icon: '👥', label: 'People' },
+    { hash: 'households', icon: '🏡', label: 'Households' },
     { hash: 'blueprints', icon: '📋', label: 'Blueprints' },
     { hash: 'tools',      icon: '🔧', label: 'Tools' },
     { hash: 'settings',   icon: '⚙️', label: 'Settings' },
@@ -313,7 +315,7 @@ async function renderPeople(app) {
           <td>${p.is_admin ? '<span class="badge" style="background:#eff6ff;color:var(--accent)">Admin</span>' : ''}</td>
           <td style="white-space:nowrap">
             <button class="btn" style="padding:4px 8px;font-size:11px;border:1px solid var(--border)"
-              onclick="openPersonEdit(${JSON.stringify(JSON.stringify(p))})">Edit</button>
+              onclick="openPersonEdit(${escAttr(JSON.stringify(JSON.stringify(p)))})">Edit</button>
             <button class="btn btn-danger" style="padding:4px 8px;font-size:11px;margin-left:3px" onclick="deletePerson('${escAttr(p.phone)}')">✕</button>
           </td>
         </tr>`).join('')
@@ -497,6 +499,143 @@ async function deletePerson(phone) {
   if (!confirm(`Remove ${phone}? This removes their user account (admin status unchanged).`)) return;
   await apiFetch('/people/' + encodeURIComponent(phone), { method: 'DELETE' });
   renderPeople(document.getElementById('app'));
+}
+
+// ── Households ────────────────────────────────────────────────────────────────
+
+async function renderHouseholds(app) {
+  app.innerHTML = layout('households', '<p style="color:var(--muted)">Loading...</p>');
+  const res = await apiFetch('/households');
+  if (!res) return;
+  const households = await res.json();
+
+  const cardsHtml = households.length
+    ? households.map(h => `
+        <div class="table-wrap" style="margin-bottom:20px">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px">
+            <strong>${escHtml(h.name)}</strong>
+            <button class="btn btn-danger" style="padding:4px 8px;font-size:11px" onclick="deleteHousehold('${escAttr(h.id)}','${escAttr(h.name)}')">Delete household</button>
+          </div>
+          <table class="table">
+            <thead><tr><th>Phone</th><th>Display Name</th><th>Private Group JID</th><th>Linked</th><th></th></tr></thead>
+            <tbody>
+              ${h.members.length ? h.members.map(m => `
+                <tr>
+                  <td>${escHtml(m.phone)}</td>
+                  <td>${escHtml(m.display_name || '—')}</td>
+                  <td style="font-size:0.8em;color:var(--muted)">${escHtml(m.private_group_jid || '—')}</td>
+                  <td>${m.linked ? '✅' : '—'}</td>
+                  <td style="white-space:nowrap">
+                    <button class="btn" style="padding:4px 8px;font-size:11px;border:1px solid var(--border)"
+                      onclick="openMemberEdit(${escAttr(JSON.stringify(JSON.stringify({ household_id: h.id, ...m })))})">Edit</button>
+                    <button class="btn btn-danger" style="padding:4px 8px;font-size:11px;margin-left:3px" onclick="removeHouseholdMember('${escAttr(h.id)}','${escAttr(m.phone)}')">✕</button>
+                  </td>
+                </tr>`).join('') : '<tr><td colspan="5" class="empty">No members yet.</td></tr>'}
+            </tbody>
+          </table>
+          <details style="padding:12px 14px">
+            <summary style="cursor:pointer;font-size:13px;color:var(--accent)">+ Add member</summary>
+            <div style="padding:12px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
+              <input id="new-member-phone-${escAttr(h.id)}" type="text" placeholder="Phone e.g. 972501234567" style="width:180px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+              <input id="new-member-name-${escAttr(h.id)}" type="text" placeholder="Display name (optional)" style="width:160px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+              <input id="new-member-jid-${escAttr(h.id)}" type="text" placeholder="Private Group JID (optional)" style="width:200px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+              <button class="btn btn-primary" onclick="addHouseholdMember('${escAttr(h.id)}')">Add</button>
+            </div>
+          </details>
+        </div>`).join('')
+    : '<p class="empty">No households yet.</p>';
+
+  app.innerHTML = layout('households', `
+    <div class="page-header"><h2>Households</h2></div>
+    ${cardsHtml}
+    <details style="margin-top:20px">
+      <summary style="cursor:pointer;font-size:13px;color:var(--accent)">+ Add household</summary>
+      <div style="padding:16px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
+        <input id="new-household-name" type="text" placeholder="Household name" style="width:240px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+        <button class="btn btn-primary" onclick="addHousehold()">Add</button>
+      </div>
+    </details>
+    <div id="household-modal-wrap"></div>`);
+}
+
+async function addHousehold() {
+  const nameInput = document.getElementById('new-household-name');
+  const name = nameInput.value.trim();
+  if (!name) return;
+  await apiFetch('/households', { method: 'POST', body: JSON.stringify({ name }) });
+  renderHouseholds(document.getElementById('app'));
+}
+
+async function deleteHousehold(id, name) {
+  if (!confirm(`Delete household "${name}"? This removes all its members too.`)) return;
+  await apiFetch('/households/' + encodeURIComponent(id), { method: 'DELETE' });
+  renderHouseholds(document.getElementById('app'));
+}
+
+async function addHouseholdMember(householdId) {
+  const phone = document.getElementById('new-member-phone-' + householdId).value.trim();
+  if (!phone) return;
+  const display_name = document.getElementById('new-member-name-' + householdId).value.trim();
+  const private_group_jid = document.getElementById('new-member-jid-' + householdId).value.trim();
+  await apiFetch('/households/' + encodeURIComponent(householdId) + '/members', {
+    method: 'POST',
+    body: JSON.stringify({
+      phone,
+      display_name: display_name || null,
+      private_group_jid: private_group_jid || null,
+    }),
+  });
+  renderHouseholds(document.getElementById('app'));
+}
+
+async function removeHouseholdMember(householdId, phone) {
+  if (!confirm(`Remove ${phone} from this household?`)) return;
+  await apiFetch('/households/' + encodeURIComponent(householdId) + '/members/' + encodeURIComponent(phone), {
+    method: 'DELETE',
+  });
+  renderHouseholds(document.getElementById('app'));
+}
+
+function openMemberEdit(memberJson) {
+  const m = JSON.parse(memberJson);
+  document.getElementById('household-modal-wrap').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)closeMemberModal()">
+      <div class="modal">
+        <h3>Edit Member</h3>
+        <p class="subtitle">${escHtml(m.phone)}</p>
+        <div class="form-group">
+          <label>Display Name</label>
+          <input id="edit-member-name" type="text" value="${escAttr(m.display_name || '')}">
+        </div>
+        <div class="form-group">
+          <label>Private Group JID</label>
+          <input id="edit-member-jid" type="text" value="${escAttr(m.private_group_jid || '')}">
+        </div>
+        <div class="modal-footer">
+          <button class="btn" onclick="closeMemberModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="saveMemberEdit('${escAttr(m.household_id)}','${escAttr(m.phone)}')">Save</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function closeMemberModal() {
+  const wrap = document.getElementById('household-modal-wrap');
+  if (wrap) wrap.innerHTML = '';
+}
+
+async function saveMemberEdit(householdId, phone) {
+  const display_name = document.getElementById('edit-member-name').value.trim();
+  const private_group_jid = document.getElementById('edit-member-jid').value.trim();
+  await apiFetch('/households/' + encodeURIComponent(householdId) + '/members/' + encodeURIComponent(phone), {
+    method: 'PATCH',
+    body: JSON.stringify({
+      display_name: display_name || null,
+      private_group_jid: private_group_jid || null,
+    }),
+  });
+  closeMemberModal();
+  renderHouseholds(document.getElementById('app'));
 }
 
 // ── Blueprints (enhanced with tool editor) ────────────────────────────────────
