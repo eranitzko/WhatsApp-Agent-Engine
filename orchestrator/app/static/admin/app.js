@@ -561,23 +561,33 @@ async function renderHouseholds(app) {
 async function addHousehold() {
   const nameInput = document.getElementById('new-household-name');
   const name = nameInput.value.trim();
-  if (!name) return;
-  await apiFetch('/households', { method: 'POST', body: JSON.stringify({ name }) });
+  if (!name) { alert('Household name is required.'); return; }
+  const res = await apiFetch('/households', { method: 'POST', body: JSON.stringify({ name }) });
+  if (!res || !res.ok) {
+    const body = await res?.json().catch(() => ({}));
+    alert('Failed to add household: ' + (body?.detail || 'Unknown error'));
+    return;
+  }
   renderHouseholds(document.getElementById('app'));
 }
 
 async function deleteHousehold(id, name) {
   if (!confirm(`Delete household "${name}"? This removes all its members too.`)) return;
-  await apiFetch('/households/' + encodeURIComponent(id), { method: 'DELETE' });
+  const res = await apiFetch('/households/' + encodeURIComponent(id), { method: 'DELETE' });
+  if (!res || !res.ok) {
+    const body = await res?.json().catch(() => ({}));
+    alert('Failed to delete household: ' + (body?.detail || 'Unknown error'));
+    return;
+  }
   renderHouseholds(document.getElementById('app'));
 }
 
 async function addHouseholdMember(householdId) {
   const phone = document.getElementById('new-member-phone-' + householdId).value.trim();
-  if (!phone) return;
+  if (!phone) { alert('Phone number is required.'); return; }
   const display_name = document.getElementById('new-member-name-' + householdId).value.trim();
   const private_group_jid = document.getElementById('new-member-jid-' + householdId).value.trim();
-  await apiFetch('/households/' + encodeURIComponent(householdId) + '/members', {
+  const res = await apiFetch('/households/' + encodeURIComponent(householdId) + '/members', {
     method: 'POST',
     body: JSON.stringify({
       phone,
@@ -585,14 +595,24 @@ async function addHouseholdMember(householdId) {
       private_group_jid: private_group_jid || null,
     }),
   });
+  if (!res || !res.ok) {
+    const body = await res?.json().catch(() => ({}));
+    alert('Failed to add member: ' + (body?.detail || 'Unknown error'));
+    return;
+  }
   renderHouseholds(document.getElementById('app'));
 }
 
 async function removeHouseholdMember(householdId, phone) {
   if (!confirm(`Remove ${phone} from this household?`)) return;
-  await apiFetch('/households/' + encodeURIComponent(householdId) + '/members/' + encodeURIComponent(phone), {
+  const res = await apiFetch('/households/' + encodeURIComponent(householdId) + '/members/' + encodeURIComponent(phone), {
     method: 'DELETE',
   });
+  if (!res || !res.ok) {
+    const body = await res?.json().catch(() => ({}));
+    alert('Failed to remove member: ' + (body?.detail || 'Unknown error'));
+    return;
+  }
   renderHouseholds(document.getElementById('app'));
 }
 
@@ -627,13 +647,18 @@ function closeMemberModal() {
 async function saveMemberEdit(householdId, phone) {
   const display_name = document.getElementById('edit-member-name').value.trim();
   const private_group_jid = document.getElementById('edit-member-jid').value.trim();
-  await apiFetch('/households/' + encodeURIComponent(householdId) + '/members/' + encodeURIComponent(phone), {
+  const res = await apiFetch('/households/' + encodeURIComponent(householdId) + '/members/' + encodeURIComponent(phone), {
     method: 'PATCH',
     body: JSON.stringify({
       display_name: display_name || null,
       private_group_jid: private_group_jid || null,
     }),
   });
+  if (!res || !res.ok) {
+    const body = await res?.json().catch(() => ({}));
+    alert('Failed to save member: ' + (body?.detail || 'Unknown error'));
+    return;
+  }
   closeMemberModal();
   renderHouseholds(document.getElementById('app'));
 }
