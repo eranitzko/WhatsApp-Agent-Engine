@@ -468,7 +468,14 @@ class AccountService:
         else:
             return None
 
-        db.commit()
+        # Flush (not commit) — this status flip must land in the same commit
+        # as whatever the caller writes next (the ledger entry for a confirm,
+        # or the split-suspend for a decline), never durably visible on its
+        # own. A separate commit here created a window where a concurrent
+        # get_debt_summary call could see "confirmed" with no ledger entry
+        # yet (found via a 20-round stress-test simulation). Every caller
+        # path is responsible for its own db.commit() afterward.
+        db.flush()
         return conf
 
     # ── Transaction processing ────────────────────────────────────────────────
@@ -991,6 +998,10 @@ class AccountService:
                         "finalize_split: failed to ack early confirmer %s",
                         just_confirmed.target_group_jid,
                     )
+            # just_confirmed.status was only flushed by handle_confirmation_reply,
+            # not committed — this is the only write happening this turn, so it
+            # must be the one to durably persist it.
+            db.commit()
             return
 
         for conf in confs:

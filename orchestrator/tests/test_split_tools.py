@@ -239,6 +239,31 @@ async def test_finalize_split_early_confirmer_gets_immediate_ack_no_ledger_yet(d
 
 
 @pytest.mark.asyncio
+async def test_finalize_split_early_confirmer_status_change_is_committed(db):
+    """Regression: in production, just_confirmed.status is only flushed (not
+    yet committed) by handle_confirmation_reply before finalize_split runs —
+    see test_handle_confirmation_reply_status_flip_is_rollback_safe. The
+    early-confirmer branch (not all shares done yet) must therefore commit
+    itself, or the confirmer's own "yes" would silently roll back the moment
+    the request session closes without any further write (found via a
+    20-round admin-churn stress test)."""
+    _setup(db)
+    split, confs = _make_pending_split(db, num_shares=3)
+    confs[0].status = "confirmed"
+    db.flush()  # NOT db.commit() — matches real handle_confirmation_reply behavior
+
+    svc = AccountService()
+    with patch("app.accounting.account_service.bridge_client") as mock_bc:
+        mock_bc.send_message = AsyncMock()
+        await svc.finalize_split(db, split, just_confirmed=confs[0])
+
+    db.rollback()  # if finalize_split didn't commit, this would undo the flush too
+
+    reloaded = db.query(CrossGroupConfirmation).filter_by(id=confs[0].id).first()
+    assert reloaded.status == "confirmed"
+
+
+@pytest.mark.asyncio
 async def test_finalize_split_commits_and_acks_everyone_once_last_share_confirms(db):
     """Once every share is confirmed, all ledger entries commit together and
     every participant (not just the last confirmer) gets their own ack."""

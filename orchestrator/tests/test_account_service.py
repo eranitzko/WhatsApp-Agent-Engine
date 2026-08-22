@@ -293,6 +293,43 @@ def test_handle_confirmation_reply_returns_false_when_no_pending(db):
     assert result is None
 
 
+def test_handle_confirmation_reply_status_flip_is_rollback_safe(db):
+    """Regression: handle_confirmation_reply used to db.commit() immediately
+    after flipping status, durably persisting "confirmed" before the caller
+    had written the corresponding ledger entry. A concurrent get_debt_summary
+    call landing in that window saw a confirmed debt with no ledger trace
+    (found via a 20-round stress-test simulation). The status flip must now
+    only be flushed (visible within this transaction, so the caller's own
+    subsequent commit picks it up atomically with the ledger write) — not
+    committed — so that if the caller's write fails and rolls back, the
+    status flip rolls back with it instead of being left orphaned."""
+    _seed_group(db, "rb_grp@g.us")
+    _seed_user(db, "972514", "rb_grp@g.us")
+    now = datetime.now(timezone.utc)
+    conf = CrossGroupConfirmation(
+        initiator_phone="972500",
+        initiator_group_jid="eden_grp2@g.us",
+        target_phone="972514",
+        target_group_jid="rb_grp@g.us",
+        action_type="record_expense",
+        action_payload='{"amount_ils": "50.00"}',
+        status="pending",
+        expires_at=now + timedelta(hours=24),
+    )
+    db.add(conf)
+    db.commit()
+    conf_id = conf.id
+
+    svc = AccountService()
+    resolved = svc.handle_confirmation_reply(db, "rb_grp@g.us", "972514", "yes")
+    assert resolved.status == "confirmed"  # visible within this transaction
+
+    db.rollback()  # simulates the caller's subsequent ledger write failing
+
+    reloaded = db.query(CrossGroupConfirmation).filter_by(id=conf_id).first()
+    assert reloaded.status == "pending"  # the flip was not durably committed on its own
+
+
 from decimal import Decimal
 from datetime import date
 from app.db.models import LedgerEntry

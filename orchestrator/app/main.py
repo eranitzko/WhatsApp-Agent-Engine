@@ -382,6 +382,11 @@ async def _process(payload: WebhookPayload) -> None:
                                 conf.id,
                             )
                             try:
+                                # handle_confirmation_reply only flushed conf.status="confirmed"
+                                # (never committed it) so it lands atomically with the ledger
+                                # write; roll that transaction back first so this reset starts
+                                # from a clean state regardless of how far the failed write got.
+                                db.rollback()
                                 conf.status = "pending"
                                 db.commit()
                             except Exception:
@@ -397,6 +402,9 @@ async def _process(payload: WebhookPayload) -> None:
                             )
                         except Exception:
                             logger.exception("Failed to notify initiator of rejection for conf %s", conf.id)
+                        # handle_confirmation_reply only flushed conf.status="rejected" — this
+                        # branch does no other write, so it must be the one to commit it.
+                        db.commit()
                 return
 
         # Resolve blueprint via TTL cache — 0 DB hits on the hot path after first lookup
