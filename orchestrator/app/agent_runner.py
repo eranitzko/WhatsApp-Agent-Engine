@@ -206,6 +206,27 @@ class AgentRunner:
                         "This confirmation is intended for another user. "
                         "Only the person who requested this action can confirm or cancel it."
                     )
+                # ToolRegistry is a single global registry shared across every
+                # blueprint — the normal tool-use loop below guards against
+                # calling anything outside allowed_tools (see the
+                # `tc.name not in allowed_tools` check further down), but this
+                # separate confirmation-execute path called registry.execute()
+                # directly with no equivalent check, so a staged action naming
+                # a tool from another blueprint (or admin-only) would run
+                # unchecked once confirmed (security review finding).
+                if pending.action not in allowed_tools:
+                    logger.warning(
+                        "Blocked confirmation-execute of disallowed action | group=%s "
+                        "action=%s allowed=%s",
+                        group_jid, pending.action, allowed_tools,
+                    )
+                    confirmation_store.clear(group_jid)
+                    reply = "This action is no longer available and was cancelled."
+                    context.add_turn(group_jid, [
+                        {"role": "user", "content": message},
+                        {"role": "assistant", "content": reply},
+                    ], max_pairs=blueprint.context_window)
+                    return reply
                 logger.info(
                     "Confirmation fired | group=%s | action=%r | staged_by=%s | confirmer=%s",
                     group_jid, pending.action, pending.staged_by, sender_phone,

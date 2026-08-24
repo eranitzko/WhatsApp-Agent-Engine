@@ -108,6 +108,17 @@ def _make_executor(orig_fn, tool_name: str):
 # time and therefore cannot be patched at call time.  This also eliminates the
 # race condition that existed in the previous adapter.
 
+#  The schema's "enum" on `action` (agent/tools.py) only constrains what
+# Claude is *told* is valid — nothing enforced it server-side, so a
+# confused or prompt-injected model could stage any string, and
+# agent_runner's confirmation-execute path runs pending.action against the
+# single global ToolRegistry with no per-blueprint allowlist check. Mirror
+# the schema's enum here as the real, server-side gate (security review).
+_VALID_STAGED_ACTIONS = frozenset({
+    "remove_invoice", "send_email", "set_invoice_amount", "add_date_format",
+})
+
+
 async def _exec_request_confirmation(params: dict, **ctx) -> str:
     confirmation_store = ctx.get("confirmation_store")
     if not confirmation_store:
@@ -116,6 +127,9 @@ async def _exec_request_confirmation(params: dict, **ctx) -> str:
     action = params.get("action", "")
     action_params = params.get("params", {})
     description = params.get("description", action)
+
+    if action not in _VALID_STAGED_ACTIONS:
+        return f"'{action}' is not a valid action to stage."
 
     # Validate set_invoice_amount's new_amount NOW, before staging — otherwise
     # a doomed action gets staged (e.g. zero), the user confirms it, and only

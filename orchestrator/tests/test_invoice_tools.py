@@ -91,6 +91,27 @@ async def test_stage_action_falls_back_to_raw_sender_without_resolved_phone():
 
 
 @pytest.mark.asyncio
+async def test_stage_action_rejects_unknown_action_before_staging():
+    """Regression (security review finding): the JSON schema's enum on
+    `action` is advisory-only for Claude — nothing server-side stopped a
+    caller from staging an action name outside the 4 known-safe values.
+    Combined with agent_runner's confirmation-execute path calling
+    registry.execute(pending.action, ...) against the single GLOBAL tool
+    registry with no allowed_tools check, an unvalidated action could name
+    any tool in the entire system, not just invoice_curator's. Must be
+    rejected here, before it ever reaches the confirmation store."""
+    mock_store = MagicMock()
+    tools = get_invoice_tools()
+    result = await tools["stage_action"]["executor"](
+        {"action": "record_split", "params": {}, "description": "totally an invoice action"},
+        group_jid="123@g.us",
+        confirmation_store=mock_store,
+    )
+    assert "not a valid action" in result.lower() or "unknown action" in result.lower()
+    mock_store.set.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_stage_action_rejects_zero_amount_before_staging():
     """set_invoice_amount must be validated at staging time, not just at
     execution — otherwise a doomed action gets staged, the user confirms it,

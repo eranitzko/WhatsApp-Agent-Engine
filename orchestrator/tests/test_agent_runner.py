@@ -231,6 +231,46 @@ async def test_run_blocks_tool_not_in_blueprint(context, confirmation_store):
 
 
 @pytest.mark.asyncio
+async def test_confirmation_execute_blocks_action_not_in_blueprint(context):
+    """Regression (security review finding): the normal tool-use loop checks
+    `tc.name not in allowed_tools` before executing (see
+    test_run_blocks_tool_not_in_blueprint above), but the separate
+    confirmation-execute path called registry.execute(pending.action, ...)
+    directly against the single GLOBAL tool registry with no such check —
+    so a staged action naming a tool outside the current blueprint's
+    allowlist would run unchecked once confirmed. Uses the real
+    ConfirmationStore/PendingAction (not a mock) since the exact shape of
+    pending.action matters here."""
+    from app.agent.confirmation import ConfirmationStore
+
+    registry = ToolRegistry()
+    forbidden_executor = AsyncMock(return_value="SECRET DATA")
+    registry.register({
+        "forbidden_tool": {
+            "schema": {"name": "forbidden_tool", "description": "Forbidden", "input_schema": {"type": "object", "properties": {}}},
+            "executor": forbidden_executor,
+        }
+    })
+    real_store = ConfirmationStore()
+    real_store.set("123@g.us", "forbidden_tool", {}, "do the forbidden thing", staged_by="")
+
+    client = AsyncMock()
+    runner = AgentRunner(client, registry)
+    result = await runner.run(
+        blueprint=BLUEPRINT,  # tools_enabled = ["say_hello"] only — forbidden_tool is not in it
+        group_jid="123@g.us",
+        sender="user@s.whatsapp.net",
+        is_admin=False,
+        message="yes",
+        context=context,
+        confirmation_store=real_store,
+    )
+    forbidden_executor.assert_not_called()
+    client.messages.create.assert_not_called()
+    assert real_store.get("123@g.us") is None  # cleared, not left dangling
+
+
+@pytest.mark.asyncio
 async def test_run_executes_multiple_tool_calls_sequentially_not_concurrently(context, confirmation_store):
     """Tool executors write to SQLite, and some (e.g. request_confirmation)
     hold a write transaction open across an awaited network call. Running
