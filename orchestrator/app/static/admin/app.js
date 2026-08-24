@@ -320,15 +320,18 @@ async function submitRegisterGroup() {
 // ── People ───────────────────────────────────────────────────────────────────
 
 let _unregisteredParticipants = [];
+let _householdsForPeople = [];
 
 async function renderPeople(app) {
   app.innerHTML = layout('people', '<p style="color:var(--muted)">Loading...</p>');
-  const [peopleRes, pendingRes, unregRes] = await Promise.all([
+  const [peopleRes, pendingRes, unregRes, householdsRes] = await Promise.all([
     apiFetch('/people'),
     apiFetch('/people/pending'),
     apiFetch('/people/unregistered-participants'),
+    apiFetch('/households'),
   ]);
   if (!peopleRes) return;
+  _householdsForPeople = householdsRes ? await householdsRes.json() : [];
   const people = await peopleRes.json();
   const pending = pendingRes ? await pendingRes.json() : [];
   _unregisteredParticipants = unregRes ? await unregRes.json() : [];
@@ -402,6 +405,10 @@ async function renderPeople(app) {
           <div id="new-person-name-suggestions" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:10;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-top:2px;max-height:240px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.15)"></div>
         </div>
         <input id="new-person-jid" type="text" placeholder="Group JID (optional)" style="width:200px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+        <select id="new-person-household" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+          <option value="">No household</option>
+          ${_householdsForPeople.map(h => `<option value="${escAttr(h.id)}">${escHtml(h.name)}</option>`).join('')}
+        </select>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:8px 0">
           <input type="checkbox" id="new-person-admin"> Admin
         </label>
@@ -610,6 +617,7 @@ function clearNewPersonForm() {
   document.getElementById('new-person-name').value = '';
   document.getElementById('new-person-jid').value = '';
   document.getElementById('new-person-admin').checked = false;
+  document.getElementById('new-person-household').value = '';
   const hint = document.getElementById('new-person-hint');
   if (hint) {
     hint.textContent = 'Click the phone or name field to see people already seen in a registered group who aren’t in this list yet.';
@@ -630,11 +638,14 @@ async function addPerson() {
     alert('Please provide a Group JID or check "Admin" — a person must have at least one.');
     return;
   }
+  const displayName = document.getElementById('new-person-name').value.trim() || null;
+  const householdId = document.getElementById('new-person-household').value;
+
   const res = await apiFetch('/people', {
     method: 'POST',
     body: JSON.stringify({
       phone,
-      display_name: document.getElementById('new-person-name').value.trim() || null,
+      display_name: displayName,
       group_jid: jid || null,
       is_admin: isAdmin,
     }),
@@ -644,6 +655,18 @@ async function addPerson() {
     alert('Failed to add person: ' + (body?.detail || 'Unknown error'));
     return;
   }
+
+  if (householdId) {
+    const hhRes = await apiFetch('/households/' + encodeURIComponent(householdId) + '/members', {
+      method: 'POST',
+      body: JSON.stringify({ phone, display_name: displayName, private_group_jid: jid || null }),
+    });
+    if (!hhRes || !hhRes.ok) {
+      const body = await hhRes?.json().catch(() => ({}));
+      alert('Person was added, but adding them to the household failed: ' + (body?.detail || 'Unknown error'));
+    }
+  }
+
   renderPeople(document.getElementById('app'));
 }
 
@@ -662,15 +685,22 @@ async function deletePerson(phone) {
 let _peopleForHouseholds = [];
 const _pickedMemberGroupJid = {};
 
+let _groupNamesForHouseholds = {};
+
 async function renderHouseholds(app) {
   app.innerHTML = layout('households', '<p style="color:var(--muted)">Loading...</p>');
-  const [hhRes, peopleRes] = await Promise.all([
+  const [hhRes, peopleRes, groupsRes] = await Promise.all([
     apiFetch('/households'),
     apiFetch('/people'),
+    apiFetch('/groups'),
   ]);
   if (!hhRes) return;
   const households = await hhRes.json();
   _peopleForHouseholds = peopleRes ? await peopleRes.json() : [];
+  // Reuse /groups' already-bridge-resolved names (same data Groups tab
+  // shows) instead of duplicating that bridge lookup here.
+  const groupsList = groupsRes ? await groupsRes.json() : [];
+  _groupNamesForHouseholds = Object.fromEntries(groupsList.map(g => [g.group_jid, g.group_name]));
 
   const cardsHtml = households.length
     ? households.map(h => `
@@ -768,12 +798,16 @@ function onMemberSearchInput(householdId, sourceInputId) {
 
   if (!matches.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
 
-  box.innerHTML = matches.map(p => `
+  box.innerHTML = matches.map(p => {
+    const groupName = p.group_jid ? (_groupNamesForHouseholds[p.group_jid] || p.group_jid) : null;
+    return `
     <div style="padding:8px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)"
       onmousedown="event.preventDefault();selectMemberSuggestion('${escAttr(householdId)}','${escAttr(p.phone)}')">
       <strong>${escHtml(p.display_name || p.phone)}</strong>
       ${p.display_name ? `<span style="color:var(--muted)"> — ${escHtml(p.phone)}</span>` : ''}
-    </div>`).join('');
+      ${groupName ? `<div style="font-size:11px;color:var(--muted)">registered via ${escHtml(groupName)}</div>` : ''}
+    </div>`;
+  }).join('');
   box.style.display = 'block';
 }
 
