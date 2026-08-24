@@ -406,8 +406,9 @@ async function renderPeople(app) {
           <input type="checkbox" id="new-person-admin"> Admin
         </label>
         <button class="btn btn-primary" onclick="addPerson()">Add</button>
+        <button class="btn" onclick="clearNewPersonForm()">Clear</button>
       </div>
-      <p style="font-size:11px;color:var(--muted);margin:0 0 12px">
+      <p id="new-person-hint" style="font-size:11px;color:var(--muted);margin:0 0 12px">
         Click the phone or name field to see people already seen in a registered group who aren't in this list yet.
       </p>
     </details>
@@ -524,18 +525,33 @@ async function togglePersonAdmin(phone, isAdmin) {
 // on focus too (not just typing) so clicking either field shows the full
 // list immediately, per how this was asked for.
 //
+// IMPORTANT: GroupParticipant.phone is NOT reliably a real phone number.
+// For any sender WhatsApp doesn't hand us an E.164 number for, it's an
+// opaque internal LID instead (this codebase's own normalize_phone()
+// docstring names one as an example) — stored as-is because there's no
+// way to tell the two apart by format (both are plain digit strings).
+// The existing openAddPersonFromGroup flow already warns about this and
+// deliberately leaves the phone field for the admin to type by hand;
+// selectUnregisteredParticipant follows the same rule — it fills name and
+// group JID (both reliable) but never auto-fills phone with a value that
+// might silently be a LID.
+//
 // _newPersonHideTimer tracks the one pending hideNewPersonSuggestionsSoon
 // timeout, if any. Without this, clicking a field, clicking away, then
 // clicking back in fast (each blur/focus cycle stacks another independent
 // setTimeout) left an earlier blur's hide firing ~150ms AFTER the dropdown
 // had already been legitimately reopened — the box would flash open then
 // vanish on its own a moment later. Every focus/input now cancels any
-// pending hide, and every blur replaces (not stacks) the pending one.
+// pending hide; and switching between the two fields hides the OTHER
+// field's box immediately (not on a delay), so it doesn't linger open.
 let _newPersonHideTimer = null;
 
 function onNewPersonFieldFocus(sourceInputId) {
   if (_newPersonHideTimer) { clearTimeout(_newPersonHideTimer); _newPersonHideTimer = null; }
-  const isPhoneField = sourceInputId === 'new-person-phone';
+  const otherId = sourceInputId === 'new-person-phone' ? 'new-person-name-suggestions' : 'new-person-phone-suggestions';
+  const otherBox = document.getElementById(otherId);
+  if (otherBox) { otherBox.style.display = 'none'; }
+
   const input = document.getElementById(sourceInputId);
   const box = document.getElementById(sourceInputId + '-suggestions');
   const q = input.value.trim().toLowerCase();
@@ -551,9 +567,8 @@ function onNewPersonFieldFocus(sourceInputId) {
   box.innerHTML = matches.map(p => `
     <div style="padding:8px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)"
       onmousedown="event.preventDefault();selectUnregisteredParticipant('${escAttr(p.phone)}')">
-      <strong>${escHtml(p.name || p.phone)}</strong>
-      ${p.name ? `<span style="color:var(--muted)"> — ${escHtml(p.phone)}</span>` : ''}
-      <div style="font-size:11px;color:var(--muted)">${escHtml(p.group_jid)}</div>
+      <strong>${escHtml(p.name || '(no name known)')}</strong>
+      <div style="font-size:11px;color:var(--muted)">seen in ${escHtml(p.group_jid)} · internal ID ${escHtml(p.phone)}</div>
     </div>`).join('');
   box.style.display = 'block';
 }
@@ -573,9 +588,33 @@ function selectUnregisteredParticipant(phone) {
   if (_newPersonHideTimer) { clearTimeout(_newPersonHideTimer); _newPersonHideTimer = null; }
   const person = _unregisteredParticipants.find(p => p.phone === phone);
   if (!person) return;
-  document.getElementById('new-person-phone').value = person.phone;
   document.getElementById('new-person-name').value = person.name || '';
   document.getElementById('new-person-jid').value = person.group_jid || '';
+  const phoneInput = document.getElementById('new-person-phone');
+  phoneInput.value = '';
+  const hint = document.getElementById('new-person-hint');
+  if (hint) {
+    hint.textContent = '⚠️ WhatsApp doesn’t expose real phone numbers for group members — please type ' +
+      (person.name || 'their') + ' actual phone number below.';
+    hint.style.color = 'var(--danger, #dc2626)';
+  }
+  for (const id of ['new-person-phone-suggestions', 'new-person-name-suggestions']) {
+    const box = document.getElementById(id);
+    if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+  }
+  phoneInput.focus();
+}
+
+function clearNewPersonForm() {
+  document.getElementById('new-person-phone').value = '';
+  document.getElementById('new-person-name').value = '';
+  document.getElementById('new-person-jid').value = '';
+  document.getElementById('new-person-admin').checked = false;
+  const hint = document.getElementById('new-person-hint');
+  if (hint) {
+    hint.textContent = 'Click the phone or name field to see people already seen in a registered group who aren’t in this list yet.';
+    hint.style.color = 'var(--muted)';
+  }
   for (const id of ['new-person-phone-suggestions', 'new-person-name-suggestions']) {
     const box = document.getElementById(id);
     if (box) { box.style.display = 'none'; box.innerHTML = ''; }
@@ -717,6 +756,8 @@ function onMemberSearchInput(householdId, sourceInputId) {
   _pickedMemberGroupJid[householdId] = null;
   const input = document.getElementById(sourceInputId);
   const box = document.getElementById((isNameField ? 'new-member-name-suggestions-' : 'new-member-suggestions-') + householdId);
+  const otherBox = document.getElementById((isNameField ? 'new-member-suggestions-' : 'new-member-name-suggestions-') + householdId);
+  if (otherBox) { otherBox.style.display = 'none'; }
   const q = input.value.trim().toLowerCase();
   if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
 
