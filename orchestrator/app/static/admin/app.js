@@ -378,95 +378,129 @@ async function renderPeople(app) {
     </table></div>` : '';
 
   app.innerHTML = layout('people', `
-    <div class="page-header"><h2>People</h2></div>
+    <div class="page-header">
+      <h2>People</h2>
+      <button class="btn btn-primary" onclick="openAddPerson()">+ Add person</button>
+    </div>
     ${pendingSection}
     <h3 style="margin:${pending.length ? '28px' : '0'} 0 12px;font-size:15px">Registered</h3>
     <div class="table-wrap"><table class="table">
       <thead><tr><th>Phone</th><th>Display Name</th><th>Group JID</th><th></th><th></th></tr></thead>
       <tbody>${peopleRows}</tbody>
     </table></div>
-    <details style="margin-top:20px">
-      <summary style="cursor:pointer;font-size:13px;color:var(--accent)">+ Add person</summary>
-      <div style="padding:16px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start">
-        <div style="position:relative;width:180px">
-          <input id="new-person-phone" type="text" placeholder="Phone e.g. 972501234567" autocomplete="off"
-            onfocus="onNewPersonFieldFocus('new-person-phone')"
-            oninput="onNewPersonFieldFocus('new-person-phone')"
-            onblur="hideNewPersonSuggestionsSoon()"
-            style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px;box-sizing:border-box">
-          <div id="new-person-phone-suggestions" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:10;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-top:2px;max-height:240px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.15)"></div>
-        </div>
-        <div style="position:relative;width:160px">
-          <input id="new-person-name" type="text" placeholder="Display name (optional)" autocomplete="off"
-            onfocus="onNewPersonFieldFocus('new-person-name')"
-            oninput="onNewPersonFieldFocus('new-person-name')"
-            onblur="hideNewPersonSuggestionsSoon()"
-            style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px;box-sizing:border-box">
-          <div id="new-person-name-suggestions" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:10;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-top:2px;max-height:240px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.15)"></div>
-        </div>
-        <input id="new-person-jid" type="text" placeholder="Group JID (optional)" style="width:200px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
-        <select id="new-person-household" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
-          <option value="">No household</option>
-          ${_householdsForPeople.map(h => `<option value="${escAttr(h.id)}">${escHtml(h.name)}</option>`).join('')}
-        </select>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:8px 0">
-          <input type="checkbox" id="new-person-admin"> Admin
-        </label>
-        <button class="btn btn-primary" onclick="addPerson()">Add</button>
-        <button class="btn" onclick="clearNewPersonForm()">Clear</button>
-      </div>
-      <p id="new-person-hint" style="font-size:11px;color:var(--muted);margin:0 0 12px">
-        Click the phone or name field to see people already seen in a registered group who aren't in this list yet.
-      </p>
-    </details>
     <div id="person-modal-wrap"></div>`);
 }
 
-function openPersonEdit(personJson) {
-  const p = JSON.parse(personJson);
-  const groups = p.accounting_groups || [];
-  const primaryJid = p.primary_accounting_group_jid || '';
+// Add Person and Edit Person share one modal (same field set, same layout) —
+// the only differences are: (1) phone is an editable, autocomplete-backed
+// input when adding vs. a fixed read-only heading when editing (it's the
+// identity key, never changed after creation), and (2) the "which household
+// is this person in" select is pre-selected to their current household when
+// editing. See personModalHtml()'s mode parameter.
+function currentHouseholdIdForPhone(phone) {
+  const h = _householdsForPeople.find(hh => hh.members.some(m => m.phone === phone));
+  return h ? h.id : '';
+}
 
-  const acctGroupSection = groups.length > 0 ? `
+function personModalHtml(mode, p) {
+  const isEdit = mode === 'edit';
+  const groups = (isEdit && p.accounting_groups) || [];
+  const primaryJid = (isEdit && p.primary_accounting_group_jid) || '';
+  const currentHouseholdId = isEdit ? currentHouseholdIdForPhone(p.phone) : '';
+  const fieldStyle = 'width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px;box-sizing:border-box';
+
+  const acctGroupSection = isEdit && groups.length > 0 ? `
     <div class="form-group">
       <label>Primary Accounting Group</label>
-      <select id="edit-primary-acct-group" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+      <select id="pf-primary-acct-group" style="${fieldStyle}">
         ${groups.map(g => `<option value="${escAttr(g.group_jid)}" ${g.group_jid === primaryJid ? 'selected' : ''}>${escHtml(g.group_jid)}${g.is_primary ? ' ★' : ''}</option>`).join('')}
       </select>
       <p style="font-size:11px;color:var(--muted);margin:4px 0 0">Bot-initiated accounting messages land here. ★ = current primary.</p>
     </div>` : '';
 
-  document.getElementById('person-modal-wrap').innerHTML = `
+  const phoneField = isEdit
+    ? `<p class="subtitle">${escHtml(p.phone)}</p>`
+    : `<div class="form-group" style="position:relative">
+        <label>Phone number</label>
+        <input id="pf-phone" type="text" placeholder="e.g. 972501234567" autocomplete="off"
+          onfocus="onPersonFieldFocus('pf-phone')"
+          oninput="onPersonFieldFocus('pf-phone')"
+          onblur="hidePersonSuggestionsSoon()"
+          style="${fieldStyle}">
+        <div id="pf-phone-suggestions" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:10;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-top:2px;max-height:220px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.15)"></div>
+      </div>`;
+
+  const nameField = isEdit
+    ? `<div class="form-group">
+        <label>Display Name</label>
+        <input id="pf-name" type="text" value="${escAttr(p.display_name || '')}" style="${fieldStyle}">
+      </div>`
+    : `<div class="form-group" style="position:relative">
+        <label>Display Name</label>
+        <input id="pf-name" type="text" placeholder="optional" autocomplete="off"
+          onfocus="onPersonFieldFocus('pf-name')"
+          oninput="onPersonFieldFocus('pf-name')"
+          onblur="hidePersonSuggestionsSoon()"
+          style="${fieldStyle}">
+        <div id="pf-name-suggestions" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:10;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-top:2px;max-height:220px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.15)"></div>
+      </div>`;
+
+  return `
     <div class="modal-overlay" onclick="if(event.target===this)closePersonModal()">
       <div class="modal">
-        <h3>Edit Person</h3>
-        <p class="subtitle">${escHtml(p.phone)}</p>
-        <div class="form-group">
-          <label>Display Name</label>
-          <input id="edit-display-name" type="text" value="${escAttr(p.display_name || '')}">
-        </div>
+        <h3>${isEdit ? 'Edit Person' : 'Add Person'}</h3>
+        ${phoneField}
+        ${nameField}
         <div class="form-group">
           <label>Email</label>
-          <input id="edit-email" type="email" value="${escAttr(p.email || '')}">
+          <input id="pf-email" type="email" value="${isEdit ? escAttr(p.email || '') : ''}" style="${fieldStyle}">
+        </div>
+        <div class="form-group">
+          <label>Group JID</label>
+          <input id="pf-jid" type="text" placeholder="optional" value="${isEdit ? escAttr(p.group_jid || '') : ''}" style="${fieldStyle}">
+        </div>
+        <div class="form-group">
+          <label>Household</label>
+          <select id="pf-household" style="${fieldStyle}">
+            <option value="">No household</option>
+            ${_householdsForPeople.map(h => `<option value="${escAttr(h.id)}" ${h.id === currentHouseholdId ? 'selected' : ''}>${escHtml(h.name)}</option>`).join('')}
+          </select>
         </div>
         <div class="form-group">
           <label>Admin</label>
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-            <input type="checkbox" id="edit-is-admin" ${p.is_admin ? 'checked' : ''}>
+            <input type="checkbox" id="pf-admin" ${isEdit && p.is_admin ? 'checked' : ''}>
             <span>System admin</span>
           </label>
         </div>
         <div class="form-group">
           <label>Admin Label</label>
-          <input id="edit-admin-label" type="text" value="${escAttr(p.admin_label || '')}" placeholder="e.g. owner, family">
+          <input id="pf-admin-label" type="text" value="${isEdit ? escAttr(p.admin_label || '') : ''}" placeholder="e.g. owner, family" style="${fieldStyle}">
         </div>
         ${acctGroupSection}
+        ${!isEdit ? `<p id="pf-hint" style="font-size:11px;color:var(--muted);margin:0 0 12px">
+          Click the phone or name field to see people already seen in a registered group who aren't in this list yet.
+        </p>` : ''}
         <div class="modal-footer">
-          <button class="btn" onclick="closePersonModal()">Cancel</button>
-          <button class="btn btn-primary" onclick="savePersonEdit('${escAttr(p.phone)}')">Save</button>
+          ${!isEdit ? `<button class="btn" style="background:transparent;color:var(--muted)" onclick="clearPersonForm()">Clear</button>` : ''}
+          <button class="btn" style="background:transparent;color:var(--muted)" onclick="closePersonModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="savePersonModal('${mode}')">${isEdit ? 'Save' : 'Add person'}</button>
         </div>
       </div>
     </div>`;
+}
+
+function openAddPerson() {
+  document.getElementById('person-modal-wrap').innerHTML = personModalHtml('add', null);
+  document.getElementById('pf-phone').focus();
+}
+
+let _editingPersonPhone = null;
+
+function openPersonEdit(personJson) {
+  const p = JSON.parse(personJson);
+  _editingPersonPhone = p.phone;
+  document.getElementById('person-modal-wrap').innerHTML = personModalHtml('edit', p);
 }
 
 function closePersonModal() {
@@ -474,23 +508,100 @@ function closePersonModal() {
   if (wrap) wrap.innerHTML = '';
 }
 
-async function savePersonEdit(phone) {
-  const display_name = document.getElementById('edit-display-name').value.trim();
-  const email = document.getElementById('edit-email').value.trim();
-  const is_admin = document.getElementById('edit-is-admin').checked;
-  const admin_label = document.getElementById('edit-admin-label').value.trim();
-  const primarySel = document.getElementById('edit-primary-acct-group');
-  const primary_accounting_group_jid = primarySel ? primarySel.value : undefined;
-  await apiFetch('/people/' + encodeURIComponent(phone), {
-    method: 'PATCH',
-    body: JSON.stringify({
-      display_name: display_name || null,
-      email: email || null,
-      is_admin,
-      admin_label: admin_label || null,
-      ...(primary_accounting_group_jid !== undefined ? { primary_accounting_group_jid } : {}),
-    }),
-  });
+async function savePersonModal(mode) {
+  const isEdit = mode === 'edit';
+  const displayName = document.getElementById('pf-name').value.trim();
+  const email = document.getElementById('pf-email').value.trim();
+  const jid = document.getElementById('pf-jid').value.trim();
+  const isAdmin = document.getElementById('pf-admin').checked;
+  const adminLabel = document.getElementById('pf-admin-label').value.trim();
+  const householdId = document.getElementById('pf-household').value;
+
+  if (isEdit) {
+    const phone = _editingPersonPhone;
+    const primarySel = document.getElementById('pf-primary-acct-group');
+    const primary_accounting_group_jid = primarySel ? primarySel.value : undefined;
+
+    const res = await apiFetch('/people/' + encodeURIComponent(phone), {
+      method: 'PATCH',
+      body: JSON.stringify({
+        display_name: displayName || null,
+        email: email || null,
+        is_admin: isAdmin,
+        admin_label: adminLabel || null,
+        private_group_jid: jid,
+        ...(primary_accounting_group_jid !== undefined ? { primary_accounting_group_jid } : {}),
+      }),
+    });
+    if (!res || !res.ok) {
+      const body = await res?.json().catch(() => ({}));
+      alert('Failed to save person: ' + (body?.detail || 'Unknown error'));
+      return;
+    }
+
+    const oldHouseholdId = currentHouseholdIdForPhone(phone);
+    if (householdId !== oldHouseholdId) {
+      if (oldHouseholdId) {
+        await apiFetch('/households/' + encodeURIComponent(oldHouseholdId) + '/members/' + encodeURIComponent(phone), { method: 'DELETE' });
+      }
+      if (householdId) {
+        const hhRes = await apiFetch('/households/' + encodeURIComponent(householdId) + '/members', {
+          method: 'POST',
+          body: JSON.stringify({ phone, display_name: displayName || null, private_group_jid: jid || null }),
+        });
+        if (!hhRes || !hhRes.ok) {
+          const body = await hhRes?.json().catch(() => ({}));
+          alert('Person was saved, but updating their household failed: ' + (body?.detail || 'Unknown error'));
+        }
+      }
+    }
+  } else {
+    const phone = document.getElementById('pf-phone').value.trim();
+    if (!phone) { alert('Phone number is required.'); return; }
+    if (!jid && !isAdmin) {
+      alert('Please provide a Group JID or check "Admin" — a person must have at least one.');
+      return;
+    }
+
+    const res = await apiFetch('/people', {
+      method: 'POST',
+      body: JSON.stringify({
+        phone,
+        display_name: displayName || null,
+        group_jid: jid || null,
+        is_admin: isAdmin,
+        admin_label: adminLabel || null,
+      }),
+    });
+    if (!res || !res.ok) {
+      const body = await res?.json().catch(() => ({}));
+      alert('Failed to add person: ' + (body?.detail || 'Unknown error'));
+      return;
+    }
+
+    if (email) {
+      const emailRes = await apiFetch('/people/' + encodeURIComponent(phone), {
+        method: 'PATCH',
+        body: JSON.stringify({ email }),
+      });
+      if (!emailRes || !emailRes.ok) {
+        const body = await emailRes?.json().catch(() => ({}));
+        alert('Person was added, but setting their email failed: ' + (body?.detail || 'Unknown error'));
+      }
+    }
+
+    if (householdId) {
+      const hhRes = await apiFetch('/households/' + encodeURIComponent(householdId) + '/members', {
+        method: 'POST',
+        body: JSON.stringify({ phone, display_name: displayName || null, private_group_jid: jid || null }),
+      });
+      if (!hhRes || !hhRes.ok) {
+        const body = await hhRes?.json().catch(() => ({}));
+        alert('Person was added, but adding them to the household failed: ' + (body?.detail || 'Unknown error'));
+      }
+    }
+  }
+
   closePersonModal();
   renderPeople(document.getElementById('app'));
 }
@@ -543,7 +654,7 @@ async function togglePersonAdmin(phone, isAdmin) {
 // group JID (both reliable) but never auto-fills phone with a value that
 // might silently be a LID.
 //
-// _newPersonHideTimer tracks the one pending hideNewPersonSuggestionsSoon
+// _personHideTimer tracks the one pending hidePersonSuggestionsSoon
 // timeout, if any. Without this, clicking a field, clicking away, then
 // clicking back in fast (each blur/focus cycle stacks another independent
 // setTimeout) left an earlier blur's hide firing ~150ms AFTER the dropdown
@@ -551,11 +662,11 @@ async function togglePersonAdmin(phone, isAdmin) {
 // vanish on its own a moment later. Every focus/input now cancels any
 // pending hide; and switching between the two fields hides the OTHER
 // field's box immediately (not on a delay), so it doesn't linger open.
-let _newPersonHideTimer = null;
+let _personHideTimer = null;
 
-function onNewPersonFieldFocus(sourceInputId) {
-  if (_newPersonHideTimer) { clearTimeout(_newPersonHideTimer); _newPersonHideTimer = null; }
-  const otherId = sourceInputId === 'new-person-phone' ? 'new-person-name-suggestions' : 'new-person-phone-suggestions';
+function onPersonFieldFocus(sourceInputId) {
+  if (_personHideTimer) { clearTimeout(_personHideTimer); _personHideTimer = null; }
+  const otherId = sourceInputId === 'pf-phone' ? 'pf-name-suggestions' : 'pf-phone-suggestions';
   const otherBox = document.getElementById(otherId);
   if (otherBox) { otherBox.style.display = 'none'; }
 
@@ -580,94 +691,55 @@ function onNewPersonFieldFocus(sourceInputId) {
   box.style.display = 'block';
 }
 
-function hideNewPersonSuggestionsSoon() {
-  if (_newPersonHideTimer) { clearTimeout(_newPersonHideTimer); }
-  _newPersonHideTimer = setTimeout(() => {
-    for (const id of ['new-person-phone-suggestions', 'new-person-name-suggestions']) {
+function hidePersonSuggestionsSoon() {
+  if (_personHideTimer) { clearTimeout(_personHideTimer); }
+  _personHideTimer = setTimeout(() => {
+    for (const id of ['pf-phone-suggestions', 'pf-name-suggestions']) {
       const box = document.getElementById(id);
       if (box) { box.style.display = 'none'; }
     }
-    _newPersonHideTimer = null;
+    _personHideTimer = null;
   }, 150);
 }
 
 function selectUnregisteredParticipant(phone) {
-  if (_newPersonHideTimer) { clearTimeout(_newPersonHideTimer); _newPersonHideTimer = null; }
+  if (_personHideTimer) { clearTimeout(_personHideTimer); _personHideTimer = null; }
   const person = _unregisteredParticipants.find(p => p.phone === phone);
   if (!person) return;
-  document.getElementById('new-person-name').value = person.name || '';
-  document.getElementById('new-person-jid').value = person.group_jid || '';
-  const phoneInput = document.getElementById('new-person-phone');
+  document.getElementById('pf-name').value = person.name || '';
+  document.getElementById('pf-jid').value = person.group_jid || '';
+  const phoneInput = document.getElementById('pf-phone');
   phoneInput.value = '';
-  const hint = document.getElementById('new-person-hint');
+  const hint = document.getElementById('pf-hint');
   if (hint) {
     hint.textContent = '⚠️ WhatsApp doesn’t expose real phone numbers for group members — please type ' +
       (person.name || 'their') + ' actual phone number below.';
     hint.style.color = 'var(--danger, #dc2626)';
   }
-  for (const id of ['new-person-phone-suggestions', 'new-person-name-suggestions']) {
+  for (const id of ['pf-phone-suggestions', 'pf-name-suggestions']) {
     const box = document.getElementById(id);
     if (box) { box.style.display = 'none'; box.innerHTML = ''; }
   }
   phoneInput.focus();
 }
 
-function clearNewPersonForm() {
-  document.getElementById('new-person-phone').value = '';
-  document.getElementById('new-person-name').value = '';
-  document.getElementById('new-person-jid').value = '';
-  document.getElementById('new-person-admin').checked = false;
-  document.getElementById('new-person-household').value = '';
-  const hint = document.getElementById('new-person-hint');
+function clearPersonForm() {
+  document.getElementById('pf-phone').value = '';
+  document.getElementById('pf-name').value = '';
+  document.getElementById('pf-email').value = '';
+  document.getElementById('pf-jid').value = '';
+  document.getElementById('pf-admin').checked = false;
+  document.getElementById('pf-admin-label').value = '';
+  document.getElementById('pf-household').value = '';
+  const hint = document.getElementById('pf-hint');
   if (hint) {
     hint.textContent = 'Click the phone or name field to see people already seen in a registered group who aren’t in this list yet.';
     hint.style.color = 'var(--muted)';
   }
-  for (const id of ['new-person-phone-suggestions', 'new-person-name-suggestions']) {
+  for (const id of ['pf-phone-suggestions', 'pf-name-suggestions']) {
     const box = document.getElementById(id);
     if (box) { box.style.display = 'none'; box.innerHTML = ''; }
   }
-}
-
-async function addPerson() {
-  const phone = document.getElementById('new-person-phone').value.trim();
-  if (!phone) { alert('Phone number is required.'); return; }
-  const jid = document.getElementById('new-person-jid').value.trim();
-  const isAdmin = document.getElementById('new-person-admin').checked;
-  if (!jid && !isAdmin) {
-    alert('Please provide a Group JID or check "Admin" — a person must have at least one.');
-    return;
-  }
-  const displayName = document.getElementById('new-person-name').value.trim() || null;
-  const householdId = document.getElementById('new-person-household').value;
-
-  const res = await apiFetch('/people', {
-    method: 'POST',
-    body: JSON.stringify({
-      phone,
-      display_name: displayName,
-      group_jid: jid || null,
-      is_admin: isAdmin,
-    }),
-  });
-  if (!res || !res.ok) {
-    const body = await res?.json().catch(() => ({}));
-    alert('Failed to add person: ' + (body?.detail || 'Unknown error'));
-    return;
-  }
-
-  if (householdId) {
-    const hhRes = await apiFetch('/households/' + encodeURIComponent(householdId) + '/members', {
-      method: 'POST',
-      body: JSON.stringify({ phone, display_name: displayName, private_group_jid: jid || null }),
-    });
-    if (!hhRes || !hhRes.ok) {
-      const body = await hhRes?.json().catch(() => ({}));
-      alert('Person was added, but adding them to the household failed: ' + (body?.detail || 'Unknown error'));
-    }
-  }
-
-  renderPeople(document.getElementById('app'));
 }
 
 async function deletePerson(phone) {
