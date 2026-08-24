@@ -127,6 +127,7 @@ async function renderGroups(app) {
           <td>
             <span style="font-weight:500">${escHtml(g.group_name)}</span>
             <br><span style="font-size:11px;color:var(--muted)">${escHtml(g.group_jid)}</span>
+            ${g.notes ? `<br><span style="font-size:11px;color:var(--muted);font-style:italic">📝 ${escHtml(g.notes.length > 60 ? g.notes.slice(0, 60) + '…' : g.notes)}</span>` : ''}
           </td>
           <td><span class="badge">${escHtml(g.blueprint_name)}</span></td>
           <td style="font-size:13px;color:var(--muted);white-space:nowrap">
@@ -155,6 +156,14 @@ async function renderGroups(app) {
                      ).join('')}
                    </div>`
                 : '<span style="font-size:12px;color:var(--muted)">No members recorded yet.</span>'}
+              <div style="margin-top:12px" onclick="event.stopPropagation()">
+                <div style="font-size:12px;color:var(--muted);margin-bottom:6px">Notes</div>
+                <textarea id="group-notes-${i}" rows="2" placeholder="What is this group for? (admin reference only — not seen by the bot)"
+                  style="width:100%;max-width:420px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;font-family:inherit;resize:vertical">${escHtml(g.notes || '')}</textarea>
+                <div style="margin-top:6px">
+                  <button class="btn" style="padding:4px 10px;font-size:12px" onclick="saveGroupNotes('${escAttr(g.group_jid)}', ${i})">Save notes</button>
+                </div>
+              </div>
             </div>
           </td>
         </tr>`).join('')
@@ -184,6 +193,20 @@ async function deleteGroup(jid) {
   if (!res || !res.ok) {
     const body = await res?.json().catch(() => ({}));
     alert('Failed to remove group: ' + (body?.detail || 'Unknown error'));
+    return;
+  }
+  renderGroups(document.getElementById('app'));
+}
+
+async function saveGroupNotes(groupJid, i) {
+  const notes = document.getElementById('group-notes-' + i).value.trim();
+  const res = await apiFetch('/groups/' + encodeURIComponent(groupJid), {
+    method: 'PATCH',
+    body: JSON.stringify({ notes: notes || null }),
+  });
+  if (!res || !res.ok) {
+    const body = await res?.json().catch(() => ({}));
+    alert('Failed to save notes: ' + (body?.detail || 'Unknown error'));
     return;
   }
   renderGroups(document.getElementById('app'));
@@ -1139,4 +1162,10 @@ async function renderLogs(app) {
 function escHtml(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-function escAttr(s) { return escHtml(s); }
+// escHtml alone is insufficient here: several onclick="fn('${escAttr(x)}')"
+// call sites (e.g. removeAllowlistEntry) interpolate into a SINGLE-quoted JS
+// string, and escHtml never escapes "'" — a value containing one (e.g. an
+// attacker-set profile email, since set_report_email is reachable by any
+// non-admin group member) breaks out of the string and executes as JS in
+// the admin's authenticated session (security review finding).
+function escAttr(s) { return escHtml(s).replace(/'/g, '&#39;'); }
