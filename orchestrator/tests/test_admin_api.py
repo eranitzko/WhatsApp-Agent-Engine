@@ -103,6 +103,95 @@ async def test_register_group(db):
 
 
 @pytest.mark.asyncio
+async def test_register_group_syncs_existing_participant_to_user_account(db):
+    """Regression: someone opens a new private WhatsApp group with the bot
+    (passively tracked as a GroupParticipant the moment they send any
+    message, regardless of registration status), the admin registers the
+    group via the Groups tab's "+ Register Group" — the person was expected
+    to then show up in People automatically, matching what
+    approve_registration already does for the Pending-Registrations path,
+    but register_group never created a UserAccount for them at all."""
+    from app.db.models import UserAccount, GroupParticipant
+    _seed(db)
+    db.add(GroupParticipant(group_jid="333@g.us", phone="972500009999", status="active"))
+    db.commit()
+    db.close()
+
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        resp = client.post("/admin/api/groups",
+                           json={"group_jid": "333@g.us", "blueprint_id": "fa"})
+        assert resp.status_code == 200
+
+    verify = Session()
+    acct = verify.query(UserAccount).filter_by(phone="972500009999", group_jid="333@g.us").first()
+    assert acct is not None
+    assert acct.role == "owner"  # sole participant -> personal group owner
+    verify.close()
+
+
+@pytest.mark.asyncio
+async def test_list_groups_includes_notes(db):
+    _seed(db)
+    row = db.query(GroupRegistry).filter_by(group_jid="111@g.us").first()
+    row.notes = "Kids' allowance tracking"
+    db.commit()
+    db.close()
+
+    Session = _get_session_factory(db)
+    from app.admin import api as admin_api
+
+    async def _empty_bridge_groups():
+        return {}
+
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)), \
+         patch.object(admin_api, "_fetch_bridge_groups", _empty_bridge_groups):
+        app = _make_app(db)
+        client = TestClient(app)
+        resp = client.get("/admin/api/groups")
+        assert resp.status_code == 200
+        assert resp.json()[0]["notes"] == "Kids' allowance tracking"
+
+
+@pytest.mark.asyncio
+async def test_update_group_notes(db):
+    _seed(db)
+    db.close()
+
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        resp = client.patch("/admin/api/groups/111%40g.us",
+                            json={"notes": "Test group for the kids"})
+        assert resp.status_code == 200
+
+    verify = Session()
+    row = verify.query(GroupRegistry).filter_by(group_jid="111@g.us").first()
+    assert row.notes == "Test group for the kids"
+    verify.close()
+
+
+@pytest.mark.asyncio
+async def test_update_group_notes_not_found_returns_404(db):
+    _seed(db)
+    db.close()
+
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        resp = client.patch("/admin/api/groups/nope%40g.us",
+                            json={"notes": "whatever"})
+        assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_delete_group(db):
     _seed(db)
     db.close()

@@ -148,8 +148,44 @@ async def list_groups():
                 "status": r.status,
                 "member_count": len(members),
                 "members": members,
+                "notes": r.notes,
             })
         return result
+
+
+def _sync_participants_to_accounts(db, group_jid: str, group_type: str) -> None:
+    """Create a UserAccount for every already-known active participant of a
+    group, so they show up in People without waiting for their next message.
+
+    A participant is passively tracked (GroupParticipant) the moment they
+    send any message, independent of the group's registration status — so
+    by the time an admin registers or approves a group, its members are
+    often already known. Used by both register_group (manual "+ Register
+    Group") and approve_registration (Pending Registrations), which must
+    behave the same way here.
+    """
+    from app.db.models import HouseholdMember
+
+    participants = db.query(GroupParticipant).filter_by(
+        group_jid=group_jid, status="active"
+    ).all()
+    phones = [p.phone for p in participants]
+    role = "owner" if len(phones) == 1 else "member"
+    for phone in phones:
+        existing = db.query(UserAccount).filter_by(phone=phone, group_jid=group_jid).first()
+        if not existing:
+            db.add(UserAccount(phone=phone, group_jid=group_jid, role=role))
+        if group_type == "personal":
+            # Auto-link HouseholdMember.private_group_jid (household-enrolled users)
+            member = db.query(HouseholdMember).filter_by(phone=phone).first()
+            if member and member.private_group_jid is None:
+                member.private_group_jid = group_jid
+            # Always upsert UserProfile.private_group_jid (covers everyone)
+            profile = db.query(UserProfile).filter_by(phone=phone).first()
+            if profile is None:
+                db.add(UserProfile(phone=phone, private_group_jid=group_jid))
+            elif profile.private_group_jid is None:
+                profile.private_group_jid = group_jid
 
 
 @router.post("/groups", dependencies=[Depends(require_auth)])
@@ -162,9 +198,27 @@ def register_group(body: RegisterGroupRequest):
         bp = db.get(Blueprint, body.blueprint_id)
         if not bp:
             raise HTTPException(status_code=404, detail="Blueprint not found")
-        db.add(GroupRegistry(group_jid=body.group_jid, blueprint_id=body.blueprint_id))
+        row = GroupRegistry(group_jid=body.group_jid, blueprint_id=body.blueprint_id)
+        db.add(row)
+        db.flush()
+        _sync_participants_to_accounts(db, body.group_jid, row.group_type or "personal")
         db.commit()
     _main.router.invalidate(body.group_jid)
+    return {"ok": True}
+
+
+class UpdateGroupNotesRequest(BaseModel):
+    notes: str | None = None
+
+
+@router.patch("/groups/{group_jid:path}", dependencies=[Depends(require_auth)])
+def update_group_notes(group_jid: str, body: UpdateGroupNotesRequest):
+    with SessionLocal() as db:
+        row = db.get(GroupRegistry, group_jid)
+        if not row:
+            raise HTTPException(status_code=404, detail="Group not found")
+        row.notes = body.notes or None
+        db.commit()
     return {"ok": True}
 
 
@@ -573,32 +627,12 @@ class ApproveRegistrationRequest(BaseModel):
 @router.post("/people/pending/{group_jid}/approve")
 async def approve_registration(group_jid: str, body: ApproveRegistrationRequest, _=Depends(require_auth)):
     from app import bridge_client as _bc
-    from app.db.models import HouseholdMember
     with SessionLocal() as db:
         grp = db.query(GroupRegistry).filter_by(group_jid=group_jid).first()
         if not grp:
             raise HTTPException(status_code=404, detail="Group not found")
         grp.group_type = body.group_type
-        participants = db.query(GroupParticipant).filter_by(
-            group_jid=group_jid, status="active"
-        ).all()
-        phones = [p.phone for p in participants]
-        role = "owner" if len(phones) == 1 else "member"
-        for phone in phones:
-            existing = db.query(UserAccount).filter_by(phone=phone, group_jid=group_jid).first()
-            if not existing:
-                db.add(UserAccount(phone=phone, group_jid=group_jid, role=role))
-            if body.group_type == "personal":
-                # Auto-link HouseholdMember.private_group_jid (household-enrolled users)
-                member = db.query(HouseholdMember).filter_by(phone=phone).first()
-                if member and member.private_group_jid is None:
-                    member.private_group_jid = group_jid
-                # Always upsert UserProfile.private_group_jid (covers everyone)
-                profile = db.query(UserProfile).filter_by(phone=phone).first()
-                if profile is None:
-                    db.add(UserProfile(phone=phone, private_group_jid=group_jid))
-                elif profile.private_group_jid is None:
-                    profile.private_group_jid = group_jid
+        _sync_participants_to_accounts(db, group_jid, body.group_type)
         db.commit()
     try:
         await _bc.send_message(group_jid, "Your account is ready. You can start recording transactions here.")
