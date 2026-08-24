@@ -319,15 +319,19 @@ async function submitRegisterGroup() {
 
 // ── People ───────────────────────────────────────────────────────────────────
 
+let _unregisteredParticipants = [];
+
 async function renderPeople(app) {
   app.innerHTML = layout('people', '<p style="color:var(--muted)">Loading...</p>');
-  const [peopleRes, pendingRes] = await Promise.all([
+  const [peopleRes, pendingRes, unregRes] = await Promise.all([
     apiFetch('/people'),
     apiFetch('/people/pending'),
+    apiFetch('/people/unregistered-participants'),
   ]);
   if (!peopleRes) return;
   const people = await peopleRes.json();
   const pending = pendingRes ? await pendingRes.json() : [];
+  _unregisteredParticipants = unregRes ? await unregRes.json() : [];
 
   const peopleRows = people.length
     ? people.map(p => `
@@ -380,15 +384,32 @@ async function renderPeople(app) {
     </table></div>
     <details style="margin-top:20px">
       <summary style="cursor:pointer;font-size:13px;color:var(--accent)">+ Add person</summary>
-      <div style="padding:16px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
-        <input id="new-person-phone" type="text" placeholder="Phone e.g. 972501234567" style="width:180px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
-        <input id="new-person-name" type="text" placeholder="Display name (optional)" style="width:160px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+      <div style="padding:16px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start">
+        <div style="position:relative;width:180px">
+          <input id="new-person-phone" type="text" placeholder="Phone e.g. 972501234567" autocomplete="off"
+            onfocus="onNewPersonFieldFocus('new-person-phone')"
+            oninput="onNewPersonFieldFocus('new-person-phone')"
+            onblur="hideNewPersonSuggestionsSoon()"
+            style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px;box-sizing:border-box">
+          <div id="new-person-phone-suggestions" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:10;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-top:2px;max-height:240px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.15)"></div>
+        </div>
+        <div style="position:relative;width:160px">
+          <input id="new-person-name" type="text" placeholder="Display name (optional)" autocomplete="off"
+            onfocus="onNewPersonFieldFocus('new-person-name')"
+            oninput="onNewPersonFieldFocus('new-person-name')"
+            onblur="hideNewPersonSuggestionsSoon()"
+            style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px;box-sizing:border-box">
+          <div id="new-person-name-suggestions" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:10;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-top:2px;max-height:240px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.15)"></div>
+        </div>
         <input id="new-person-jid" type="text" placeholder="Group JID (optional)" style="width:200px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:8px 0">
           <input type="checkbox" id="new-person-admin"> Admin
         </label>
         <button class="btn btn-primary" onclick="addPerson()">Add</button>
       </div>
+      <p style="font-size:11px;color:var(--muted);margin:0 0 12px">
+        Click the phone or name field to see people already seen in a registered group who aren't in this list yet.
+      </p>
     </details>
     <div id="person-modal-wrap"></div>`);
 }
@@ -497,16 +518,66 @@ async function togglePersonAdmin(phone, isAdmin) {
   });
 }
 
+// Shared "add person" suggestions — surfaces people already seen in a
+// registered group (GroupParticipant) who never made it into People,
+// e.g. anyone who joined before register_group's people-sync fix. Fires
+// on focus too (not just typing) so clicking either field shows the full
+// list immediately, per how this was asked for.
+function onNewPersonFieldFocus(sourceInputId) {
+  const isPhoneField = sourceInputId === 'new-person-phone';
+  const input = document.getElementById(sourceInputId);
+  const box = document.getElementById(sourceInputId + '-suggestions');
+  const q = input.value.trim().toLowerCase();
+
+  const matches = _unregisteredParticipants.filter(p =>
+    !q ||
+    (p.phone && p.phone.toLowerCase().includes(q)) ||
+    (p.name && p.name.toLowerCase().includes(q))
+  ).slice(0, 8);
+
+  if (!matches.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  box.innerHTML = matches.map(p => `
+    <div style="padding:8px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)"
+      onmousedown="event.preventDefault();selectUnregisteredParticipant('${escAttr(p.phone)}')">
+      <strong>${escHtml(p.name || p.phone)}</strong>
+      ${p.name ? `<span style="color:var(--muted)"> — ${escHtml(p.phone)}</span>` : ''}
+      <div style="font-size:11px;color:var(--muted)">${escHtml(p.group_jid)}</div>
+    </div>`).join('');
+  box.style.display = 'block';
+}
+
+function hideNewPersonSuggestionsSoon() {
+  setTimeout(() => {
+    for (const id of ['new-person-phone-suggestions', 'new-person-name-suggestions']) {
+      const box = document.getElementById(id);
+      if (box) { box.style.display = 'none'; }
+    }
+  }, 150);
+}
+
+function selectUnregisteredParticipant(phone) {
+  const person = _unregisteredParticipants.find(p => p.phone === phone);
+  if (!person) return;
+  document.getElementById('new-person-phone').value = person.phone;
+  document.getElementById('new-person-name').value = person.name || '';
+  document.getElementById('new-person-jid').value = person.group_jid || '';
+  for (const id of ['new-person-phone-suggestions', 'new-person-name-suggestions']) {
+    const box = document.getElementById(id);
+    if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+  }
+}
+
 async function addPerson() {
   const phone = document.getElementById('new-person-phone').value.trim();
-  if (!phone) return;
+  if (!phone) { alert('Phone number is required.'); return; }
   const jid = document.getElementById('new-person-jid').value.trim();
   const isAdmin = document.getElementById('new-person-admin').checked;
   if (!jid && !isAdmin) {
     alert('Please provide a Group JID or check "Admin" — a person must have at least one.');
     return;
   }
-  await apiFetch('/people', {
+  const res = await apiFetch('/people', {
     method: 'POST',
     body: JSON.stringify({
       phone,
@@ -515,6 +586,11 @@ async function addPerson() {
       is_admin: isAdmin,
     }),
   });
+  if (!res || !res.ok) {
+    const body = await res?.json().catch(() => ({}));
+    alert('Failed to add person: ' + (body?.detail || 'Unknown error'));
+    return;
+  }
   renderPeople(document.getElementById('app'));
 }
 

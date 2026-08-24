@@ -192,6 +192,41 @@ async def test_update_group_notes_not_found_returns_404(db):
 
 
 @pytest.mark.asyncio
+async def test_list_unregistered_participants(db):
+    """People who joined a registered group before register_group's
+    people-sync fix (or approve_registration missed them for any reason)
+    have a GroupParticipant row but no UserAccount/AdminNumbers entry —
+    this endpoint backs the People-tab "Add person" dropdown that lets an
+    admin quickly pick them without knowing their phone number by heart."""
+    from app.db.models import GroupParticipant, UserAccount
+    _seed(db)
+    # Already in People -> must NOT appear
+    db.add(GroupParticipant(group_jid="111@g.us", phone="972500001111", push_name="Already Known", status="active"))
+    db.add(UserAccount(phone="972500001111", group_jid="111@g.us", role="owner"))
+    # Not in People yet -> must appear
+    db.add(GroupParticipant(group_jid="111@g.us", phone="972500002222", push_name="Not Yet Added", status="active"))
+    # In a group that was never registered -> must NOT appear
+    db.add(GroupParticipant(group_jid="unregistered@g.us", phone="972500003333", push_name="Unregistered Group", status="active"))
+    # Left the group (status != active) -> must NOT appear
+    db.add(GroupParticipant(group_jid="111@g.us", phone="972500004444", push_name="Left Already", status="removed"))
+    db.commit()
+    db.close()
+
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        resp = client.get("/admin/api/people/unregistered-participants")
+        assert resp.status_code == 200
+        data = resp.json()
+        phones = {row["phone"] for row in data}
+        assert phones == {"972500002222"}
+        assert data[0]["name"] == "Not Yet Added"
+        assert data[0]["group_jid"] == "111@g.us"
+
+
+@pytest.mark.asyncio
 async def test_delete_group(db):
     _seed(db)
     db.close()

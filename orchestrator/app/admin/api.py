@@ -459,6 +459,33 @@ def remove_tool_from_blueprints(tool_name: str):
 
 # -- People ------------------------------------------------------------------
 
+@router.get("/people/unregistered-participants", dependencies=[Depends(require_auth)])
+def list_unregistered_participants():
+    """Active participants of a registered group who never made it into
+    People — the People-tab "Add person" dropdown's data source. Covers
+    anyone who joined before register_group's people-sync fix, or slipped
+    through for any other reason."""
+    with SessionLocal() as db:
+        known_phones = {r.phone_number for r in db.query(AdminNumbers).all()}
+        known_phones |= {a.phone for a in db.query(UserAccount).all()}
+        registered_jids = {g.group_jid for g in db.query(GroupRegistry).all()}
+
+        seen: set[str] = set()
+        result = []
+        for p in db.query(GroupParticipant).filter_by(status="active").all():
+            if p.group_jid not in registered_jids:
+                continue
+            if p.phone in known_phones or p.phone in seen:
+                continue
+            seen.add(p.phone)
+            result.append({
+                "phone": p.phone,
+                "name": p.admin_name or p.push_name,
+                "group_jid": p.group_jid,
+            })
+        return result
+
+
 @router.get("/people")
 def list_people(_=Depends(require_auth)):
     """Unified list: everyone from admin_numbers + user_accounts."""
