@@ -214,8 +214,13 @@ async def test_list_unregistered_participants(db):
 
     Session = _get_session_factory(db)
     app = _make_app(db)
+    from app.admin import api as admin_api
 
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+    async def _mock_bridge_groups():
+        return {"111@g.us": {"name": "Family Group", "participants": []}}
+
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)), \
+         patch.object(admin_api, "_fetch_bridge_groups", _mock_bridge_groups):
         client = TestClient(app)
         resp = client.get("/admin/api/people/unregistered-participants")
         assert resp.status_code == 200
@@ -224,6 +229,34 @@ async def test_list_unregistered_participants(db):
         assert phones == {"972500002222"}
         assert data[0]["name"] == "Not Yet Added"
         assert data[0]["group_jid"] == "111@g.us"
+        assert data[0]["group_name"] == "Family Group"
+
+
+@pytest.mark.asyncio
+async def test_list_unregistered_participants_group_name_falls_back_to_jid(db):
+    """When the bridge doesn't know about the group (e.g. it's not a real
+    live WhatsApp group, or the bridge is unreachable), group_name must
+    fall back to the raw JID — same convention as list_groups."""
+    from app.db.models import GroupParticipant
+    _seed(db)
+    db.add(GroupParticipant(group_jid="111@g.us", phone="972500005555", push_name="No Bridge Name", status="active"))
+    db.commit()
+    db.close()
+
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    from app.admin import api as admin_api
+
+    async def _empty_bridge_groups():
+        return {}
+
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)), \
+         patch.object(admin_api, "_fetch_bridge_groups", _empty_bridge_groups):
+        client = TestClient(app)
+        resp = client.get("/admin/api/people/unregistered-participants")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data[0]["group_name"] == "111@g.us"
 
 
 @pytest.mark.asyncio

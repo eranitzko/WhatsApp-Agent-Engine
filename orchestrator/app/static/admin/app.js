@@ -568,7 +568,7 @@ function onNewPersonFieldFocus(sourceInputId) {
     <div style="padding:8px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)"
       onmousedown="event.preventDefault();selectUnregisteredParticipant('${escAttr(p.phone)}')">
       <strong>${escHtml(p.name || '(no name known)')}</strong>
-      <div style="font-size:11px;color:var(--muted)">seen in ${escHtml(p.group_jid)} · internal ID ${escHtml(p.phone)}</div>
+      <div style="font-size:11px;color:var(--muted)">seen in ${escHtml(p.group_name || p.group_jid)} · internal ID ${escHtml(p.phone)}</div>
     </div>`).join('');
   box.style.display = 'block';
 }

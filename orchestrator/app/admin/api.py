@@ -460,11 +460,13 @@ def remove_tool_from_blueprints(tool_name: str):
 # -- People ------------------------------------------------------------------
 
 @router.get("/people/unregistered-participants", dependencies=[Depends(require_auth)])
-def list_unregistered_participants():
+async def list_unregistered_participants():
     """Active participants of a registered group who never made it into
     People — the People-tab "Add person" dropdown's data source. Covers
     anyone who joined before register_group's people-sync fix, or slipped
     through for any other reason."""
+    bridge_map = await _fetch_bridge_groups()
+
     with SessionLocal() as db:
         known_phones = {r.phone_number for r in db.query(AdminNumbers).all()}
         known_phones |= {a.phone for a in db.query(UserAccount).all()}
@@ -482,6 +484,7 @@ def list_unregistered_participants():
                 "phone": p.phone,
                 "name": p.admin_name or p.push_name,
                 "group_jid": p.group_jid,
+                "group_name": bridge_map.get(p.group_jid, {}).get("name", p.group_jid),
             })
         return result
 
