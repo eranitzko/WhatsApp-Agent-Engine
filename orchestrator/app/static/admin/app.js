@@ -523,7 +523,18 @@ async function togglePersonAdmin(phone, isAdmin) {
 // e.g. anyone who joined before register_group's people-sync fix. Fires
 // on focus too (not just typing) so clicking either field shows the full
 // list immediately, per how this was asked for.
+//
+// _newPersonHideTimer tracks the one pending hideNewPersonSuggestionsSoon
+// timeout, if any. Without this, clicking a field, clicking away, then
+// clicking back in fast (each blur/focus cycle stacks another independent
+// setTimeout) left an earlier blur's hide firing ~150ms AFTER the dropdown
+// had already been legitimately reopened — the box would flash open then
+// vanish on its own a moment later. Every focus/input now cancels any
+// pending hide, and every blur replaces (not stacks) the pending one.
+let _newPersonHideTimer = null;
+
 function onNewPersonFieldFocus(sourceInputId) {
+  if (_newPersonHideTimer) { clearTimeout(_newPersonHideTimer); _newPersonHideTimer = null; }
   const isPhoneField = sourceInputId === 'new-person-phone';
   const input = document.getElementById(sourceInputId);
   const box = document.getElementById(sourceInputId + '-suggestions');
@@ -548,15 +559,18 @@ function onNewPersonFieldFocus(sourceInputId) {
 }
 
 function hideNewPersonSuggestionsSoon() {
-  setTimeout(() => {
+  if (_newPersonHideTimer) { clearTimeout(_newPersonHideTimer); }
+  _newPersonHideTimer = setTimeout(() => {
     for (const id of ['new-person-phone-suggestions', 'new-person-name-suggestions']) {
       const box = document.getElementById(id);
       if (box) { box.style.display = 'none'; }
     }
+    _newPersonHideTimer = null;
   }, 150);
 }
 
 function selectUnregisteredParticipant(phone) {
+  if (_newPersonHideTimer) { clearTimeout(_newPersonHideTimer); _newPersonHideTimer = null; }
   const person = _unregisteredParticipants.find(p => p.phone === phone);
   if (!person) return;
   document.getElementById('new-person-phone').value = person.phone;
@@ -688,7 +702,16 @@ async function renderHouseholds(app) {
 // household member by phone, by their registered name, or by a nickname
 // close to it, and shouldn't have to know which field "does the search."
 // sourceInputId defaults to the phone/search field for its own oninput.
+//
+// _memberHideTimers (keyed by householdId, since several household cards
+// can be open at once) tracks each one's pending hideMemberSuggestionsSoon
+// timeout. Same fix as the People-tab search: without cancelling on the
+// next input/selection, an earlier blur's hide could fire after the
+// dropdown had already legitimately reopened, flashing it shut again.
+const _memberHideTimers = {};
+
 function onMemberSearchInput(householdId, sourceInputId) {
+  if (_memberHideTimers[householdId]) { clearTimeout(_memberHideTimers[householdId]); _memberHideTimers[householdId] = null; }
   sourceInputId = sourceInputId || ('new-member-search-' + householdId);
   const isNameField = sourceInputId.startsWith('new-member-name-');
   _pickedMemberGroupJid[householdId] = null;
@@ -716,15 +739,18 @@ function onMemberSearchInput(householdId, sourceInputId) {
 function hideMemberSuggestionsSoon(householdId) {
   // Delayed so a suggestion's own mousedown (which already preventDefault()s
   // to keep focus) has time to fire its click before this hides the list.
-  setTimeout(() => {
+  if (_memberHideTimers[householdId]) { clearTimeout(_memberHideTimers[householdId]); }
+  _memberHideTimers[householdId] = setTimeout(() => {
     const box1 = document.getElementById('new-member-suggestions-' + householdId);
     const box2 = document.getElementById('new-member-name-suggestions-' + householdId);
     if (box1) { box1.style.display = 'none'; }
     if (box2) { box2.style.display = 'none'; }
+    _memberHideTimers[householdId] = null;
   }, 150);
 }
 
 function selectMemberSuggestion(householdId, phone) {
+  if (_memberHideTimers[householdId]) { clearTimeout(_memberHideTimers[householdId]); _memberHideTimers[householdId] = null; }
   const person = _peopleForHouseholds.find(p => p.phone === phone);
   if (!person) return;
   document.getElementById('new-member-search-' + householdId).value = person.phone;
