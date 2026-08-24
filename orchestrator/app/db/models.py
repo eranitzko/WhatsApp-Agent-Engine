@@ -122,6 +122,7 @@ class GroupRegistry(Base):
     bound_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     custom_instructions = Column(Text, nullable=True)
     group_type = Column(String, nullable=True, default="personal")  # personal|shared|sys_admin|unregistered
+    notes = Column(Text, nullable=True)  # admin-facing label/notes; not fed to the agent
 
 
 class GroupParticipant(Base):
