@@ -192,6 +192,52 @@ async def test_update_group_notes_not_found_returns_404(db):
 
 
 @pytest.mark.asyncio
+async def test_update_group_type(db):
+    """A registered group's type can be corrected after the fact — e.g. a
+    group registered as 'personal' (one reporter) turns out to have a second
+    person messaging into it and needs to become 'shared' so
+    _sync_participants_to_accounts stops auto-linking private_group_jid for
+    every participant (which only makes sense for a true 1:1 group)."""
+    _seed(db)
+    db.close()
+
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        resp = client.patch("/admin/api/groups/111%40g.us",
+                            json={"group_type": "shared"})
+        assert resp.status_code == 200
+
+    verify = Session()
+    row = verify.query(GroupRegistry).filter_by(group_jid="111@g.us").first()
+    assert row.group_type == "shared"
+    verify.close()
+
+
+@pytest.mark.asyncio
+async def test_update_group_type_alone_does_not_clear_notes(db):
+    _seed(db)
+    db.close()
+
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        client.patch("/admin/api/groups/111%40g.us", json={"notes": "Kids' group"})
+        resp = client.patch("/admin/api/groups/111%40g.us", json={"group_type": "shared"})
+        assert resp.status_code == 200
+
+    verify = Session()
+    row = verify.query(GroupRegistry).filter_by(group_jid="111@g.us").first()
+    assert row.notes == "Kids' group"
+    assert row.group_type == "shared"
+    verify.close()
+
+
+@pytest.mark.asyncio
 async def test_list_unregistered_participants(db):
     """People who joined a registered group before register_group's
     people-sync fix (or approve_registration missed them for any reason)
@@ -630,6 +676,43 @@ def test_approve_registration_autolinks_household_member(db):
     linked = verify.query(HouseholdMember).filter_by(phone="972501112223").first()
     assert linked is not None
     assert linked.private_group_jid == "newgrp@g.us"
+    verify.close()
+
+
+def test_patch_person_sets_known_lid(db):
+    _seed(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        resp = client.patch(
+            "/admin/api/people/972500000099",
+            json={"known_lid": "175715853041683"},
+        )
+        assert resp.status_code == 200
+
+    from app.db.models import UserProfile
+    verify = Session()
+    profile = verify.query(UserProfile).filter_by(phone="972500000099").first()
+    assert profile is not None
+    assert profile.known_lid == "175715853041683"
+    verify.close()
+
+
+def test_patch_person_clears_known_lid(db):
+    _seed(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        client.patch("/admin/api/people/972500000099", json={"known_lid": "12345"})
+        resp = client.patch("/admin/api/people/972500000099", json={"known_lid": ""})
+        assert resp.status_code == 200
+
+    from app.db.models import UserProfile
+    verify = Session()
+    profile = verify.query(UserProfile).filter_by(phone="972500000099").first()
+    assert profile.known_lid is None
     verify.close()
 
 

@@ -209,6 +209,12 @@ def register_group(body: RegisterGroupRequest):
 
 class UpdateGroupNotesRequest(BaseModel):
     notes: str | None = None
+    group_type: str | None = None  # personal | shared | sys_admin — corrects a
+                                    # group's type after registration (e.g. a
+                                    # 'personal' group turns out to have more
+                                    # than one real reporter and needs to be
+                                    # 'shared' so per-participant auto-linking
+                                    # of private_group_jid stops applying to it)
 
 
 @router.patch("/groups/{group_jid:path}", dependencies=[Depends(require_auth)])
@@ -217,7 +223,10 @@ def update_group_notes(group_jid: str, body: UpdateGroupNotesRequest):
         row = db.get(GroupRegistry, group_jid)
         if not row:
             raise HTTPException(status_code=404, detail="Group not found")
-        row.notes = body.notes or None
+        if "notes" in body.model_fields_set:
+            row.notes = body.notes or None
+        if body.group_type is not None:
+            row.group_type = body.group_type
         db.commit()
     return {"ok": True}
 
@@ -693,6 +702,8 @@ class UpdatePersonFullRequest(BaseModel):
     admin_label: str | None = None
     primary_accounting_group_jid: str | None = None  # "" clears it
     private_group_jid: str | None = None             # "" clears it; manual backfill for existing members
+    known_lid: str | None = None                     # "" clears it; links a WhatsApp LID to this phone
+                                                       # for resolve_inbound's LID-safe lookup in shared groups
 
 
 @router.patch("/people/{phone}")
@@ -766,6 +777,13 @@ def patch_person(phone: str, body: UpdatePersonFullRequest, _=Depends(require_au
                     member.primary_accounting_group_jid = body.primary_accounting_group_jid or None
                 if body.private_group_jid is not None:
                     member.private_group_jid = body.private_group_jid or None
+
+        if body.known_lid is not None:
+            profile = db.query(UserProfile).filter_by(phone=phone).first()
+            if profile is None:
+                profile = UserProfile(phone=phone)
+                db.add(profile)
+            profile.known_lid = body.known_lid or None
 
         db.commit()
         return {"ok": True}
