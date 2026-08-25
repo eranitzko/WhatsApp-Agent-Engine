@@ -29,6 +29,126 @@ def _make_app(db, *, override_auth=True):
     return app
 
 
+# -- /admin/api/people --------------------------------------------------------
+
+def test_add_person_with_raw_participant_id_creates_group_participant(db):
+    """The 'Unknown member' quick-add flow (Groups tab -> click an unresolved
+    bridge participant -> supply their real phone) must actually resolve that
+    display, not just create a UserAccount the Groups tab never looks at.
+    list_groups() names a participant by matching GroupParticipant.phone
+    against the bridge's raw reported id (a LID for most senders) — so
+    add_person needs to write a GroupParticipant row keyed by that exact raw
+    id, not just register the person's real phone."""
+    _seed(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        resp = client.post("/admin/api/people", json={
+            "phone": "972501234567",
+            "display_name": "Bar Itzkovitch",
+            "group_jid": "111@g.us",
+            "raw_participant_id": "234973567156224",
+        })
+        assert resp.status_code == 200
+
+    from app.db.models import GroupParticipant, UserProfile
+    verify = Session()
+    gp = verify.get(GroupParticipant, ("111@g.us", "234973567156224"))
+    assert gp is not None
+    assert gp.admin_name == "Bar Itzkovitch"
+    assert gp.status == "active"
+    profile = verify.query(UserProfile).filter_by(phone="972501234567").first()
+    assert profile.known_lid == "234973567156224"
+    verify.close()
+
+
+def test_add_person_raw_participant_id_same_as_phone_skips_known_lid(db):
+    """If the bridge already reports the person's real phone (no LID
+    obfuscation for that sender), raw_participant_id will equal phone —
+    don't record a pointless self-referential known_lid mapping."""
+    _seed(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        resp = client.post("/admin/api/people", json={
+            "phone": "972501234568",
+            "group_jid": "111@g.us",
+            "raw_participant_id": "972501234568",
+        })
+        assert resp.status_code == 200
+
+    from app.db.models import UserProfile
+    verify = Session()
+    profile = verify.query(UserProfile).filter_by(phone="972501234568").first()
+    assert profile is None or profile.known_lid is None
+    verify.close()
+
+
+def test_add_person_without_raw_participant_id_unchanged(db):
+    """Regression: the normal People-tab 'Add person' flow (no raw_participant_id)
+    must behave exactly as before — no GroupParticipant/known_lid side effects."""
+    _seed(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        resp = client.post("/admin/api/people", json={
+            "phone": "972501234569",
+            "display_name": "Someone",
+            "group_jid": "111@g.us",
+        })
+        assert resp.status_code == 200
+
+    from app.db.models import GroupParticipant
+    verify = Session()
+    count = verify.query(GroupParticipant).filter_by(group_jid="111@g.us").count()
+    assert count == 0
+    verify.close()
+
+
+def test_add_person_second_owner_for_same_group_downgrades_to_member(db):
+    """Regression: adding a second person to the same group_jid (e.g. fixing
+    two 'Unknown member' tiles in one shared group) must not create two
+    role='owner' UserAccount rows — resolve_group_owner/get_personal_group_jid
+    pick between them non-deterministically if it does."""
+    _seed(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        client.post("/admin/api/people", json={"phone": "972501111111", "group_jid": "111@g.us"})
+        client.post("/admin/api/people", json={"phone": "972501111112", "group_jid": "111@g.us"})
+
+    from app.db.models import UserAccount
+    verify = Session()
+    accounts = verify.query(UserAccount).filter_by(group_jid="111@g.us").order_by(UserAccount.phone).all()
+    roles = {a.phone: a.role for a in accounts}
+    assert roles["972501111111"] == "owner"
+    assert roles["972501111112"] == "member"
+    verify.close()
+
+
+def test_add_person_known_lid_conflict_returns_clean_error(db):
+    """Assigning a known_lid already claimed by a different phone must not
+    surface as an unhandled IntegrityError/500."""
+    _seed(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app, raise_server_exceptions=False)
+        r1 = client.post("/admin/api/people", json={
+            "phone": "972502222221", "group_jid": "111@g.us", "raw_participant_id": "555000111",
+        })
+        assert r1.status_code == 200
+        r2 = client.post("/admin/api/people", json={
+            "phone": "972502222222", "group_jid": "111@g.us", "raw_participant_id": "555000111",
+        })
+        assert r2.status_code == 400
+        assert "already" in r2.json()["detail"].lower()
+
+
 # -- /admin/api/groups -------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -54,6 +174,41 @@ async def test_list_groups(db):
         assert data[0]["group_jid"] == "111@g.us"
         assert data[0]["group_name"] == "Test Group"
         assert data[0]["blueprint_name"] == "Family Accounting"
+
+
+@pytest.mark.asyncio
+async def test_list_groups_resolves_member_via_known_lid(db):
+    """A bridge participant with no GroupParticipant row for THIS exact raw
+    id must still resolve to a name if UserProfile.known_lid already links
+    that raw id to a real, named person — not just show 'Unknown member'
+    (name: None) purely because they've never messaged in this specific
+    group under this exact LID."""
+    _seed(db)
+    db.close()
+
+    from app.db.models import UserProfile
+    Session = _get_session_factory(db)
+    seed_db = Session()
+    seed_db.add(UserProfile(phone="972501234567", display_name="Bar Itzkovitch", known_lid="234973567156224"))
+    seed_db.commit()
+    seed_db.close()
+
+    from app.admin import api as admin_api
+
+    async def _mock_bridge_groups():
+        return {"111@g.us": {"name": "Test Group", "participants": [
+            {"jid": "234973567156224@lid", "isAdmin": False},
+        ]}}
+
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)), \
+         patch.object(admin_api, "_fetch_bridge_groups", _mock_bridge_groups):
+        app = _make_app(db)
+        client = TestClient(app)
+        resp = client.get("/admin/api/groups")
+        assert resp.status_code == 200
+        data = resp.json()
+        member = data[0]["members"][0]
+        assert member["name"] == "Bar Itzkovitch"
 
 
 @pytest.mark.asyncio
@@ -818,6 +973,19 @@ def test_patch_person_clears_known_lid(db):
     profile = verify.query(UserProfile).filter_by(phone="972500000099").first()
     assert profile.known_lid is None
     verify.close()
+
+
+def test_patch_person_known_lid_conflict_returns_clean_error(db):
+    _seed(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app, raise_server_exceptions=False)
+        r1 = client.patch("/admin/api/people/972500000097", json={"known_lid": "666000111"})
+        assert r1.status_code == 200
+        r2 = client.patch("/admin/api/people/972500000098", json={"known_lid": "666000111"})
+        assert r2.status_code == 400
+        assert "already" in r2.json()["detail"].lower()
 
 
 # -- internal helper ---------------------------------------------------------

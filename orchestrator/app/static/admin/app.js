@@ -149,7 +149,7 @@ async function renderGroups(app) {
                             ${m.phone ? `<span style="color:var(--muted);margin-left:6px;font-size:11px">${escHtml(m.phone)}</span>` : ''}
                           </div>`
                        : `<div style="background:var(--bg);border:1px dashed var(--border);border-radius:6px;padding:4px 10px;font-size:12px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:5px"
-                              onclick="event.stopPropagation();openAddPersonFromGroup('${escAttr(g.group_jid)}')"
+                              onclick="event.stopPropagation();openAddPersonFromGroup('${escAttr(g.group_jid)}','${escAttr(m.phone)}')"
                               title="Click to add this person">
                             <span style="color:var(--accent);font-size:14px;line-height:1">+</span>Unknown member
                           </div>`
@@ -212,7 +212,7 @@ async function saveGroupNotes(groupJid, i) {
   renderGroups(document.getElementById('app'));
 }
 
-function openAddPersonFromGroup(groupJid) {
+function openAddPersonFromGroup(groupJid, rawParticipantId) {
   document.getElementById('modal-container').innerHTML = `
     <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
       <div class="modal">
@@ -235,14 +235,14 @@ function openAddPersonFromGroup(groupJid) {
         </div>
         <div class="modal-footer">
           <button class="btn" style="background:transparent;color:var(--muted)" onclick="closeModal()">Cancel</button>
-          <button class="btn btn-primary" onclick="submitAddPersonFromGroup('${escAttr(groupJid)}')">Add person</button>
+          <button class="btn btn-primary" onclick="submitAddPersonFromGroup('${escAttr(groupJid)}','${escAttr(rawParticipantId || '')}')">Add person</button>
         </div>
       </div>
     </div>`;
   document.getElementById('ap-phone').focus();
 }
 
-async function submitAddPersonFromGroup(groupJid) {
+async function submitAddPersonFromGroup(groupJid, rawParticipantId) {
   const phone = document.getElementById('ap-phone').value.trim();
   if (!phone) { alert('Phone number is required.'); return; }
   const name  = document.getElementById('ap-name').value.trim();
@@ -254,6 +254,7 @@ async function submitAddPersonFromGroup(groupJid) {
       display_name: name || null,
       group_jid: groupJid,
       is_admin: isAdmin,
+      raw_participant_id: rawParticipantId || null,
     }),
   });
   if (!res || !res.ok) {

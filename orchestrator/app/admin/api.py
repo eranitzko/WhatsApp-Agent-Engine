@@ -101,6 +101,16 @@ async def list_groups():
                 key = an.label.strip().split()[0].lower()
                 admin_label_to_phone[key] = an.phone_number
 
+        # known_lid → real-person fallback: a participant can be a fully
+        # registered person (real phone, display name) with no
+        # GroupParticipant row at all for THIS raw id — they've simply never
+        # sent a message the bot processed in this specific group under this
+        # specific LID. Without this, they'd show as "Unknown member" despite
+        # already being a known person elsewhere in the system.
+        lid_to_profile: dict[str, UserProfile] = {
+            p.known_lid: p for p in db.query(UserProfile).filter(UserProfile.known_lid.isnot(None)).all()
+        }
+
         result = []
         for r in rows:
             bridge_info = bridge_map.get(r.group_jid, {})
@@ -125,6 +135,10 @@ async def list_groups():
                         # Try to resolve the actual phone from AdminNumbers
                         first = (name or "").split()[0].lower()
                         display_phone = admin_label_to_phone.get(first) or phone
+                    elif phone in lid_to_profile:
+                        profile = lid_to_profile[phone]
+                        name = profile.display_name
+                        display_phone = profile.phone
                     else:
                         name = None
                         display_phone = phone
@@ -579,6 +593,15 @@ class AddPersonRequest(BaseModel):
     role: str = "owner"
     is_admin: bool = False
     admin_label: str | None = None
+    # The bridge's raw reported id for this person in group_jid — a WhatsApp
+    # LID for most senders, sometimes their real phone. Set when this call
+    # originates from the Groups tab's "Unknown member" quick-add (an admin
+    # manually resolving a bridge participant list_groups() couldn't name).
+    # Without this, add_person only ever creates a UserAccount, which
+    # list_groups() never looks at — the "Unknown member" tile would keep
+    # showing unresolved even after being "fixed" through the exact form
+    # meant to fix it.
+    raw_participant_id: str | None = None
 
 
 @router.post("/people")
@@ -596,12 +619,58 @@ def add_person(body: AddPersonRequest, _=Depends(require_auth)):
         if body.group_jid:
             existing = db.query(UserAccount).filter_by(phone=body.phone, group_jid=body.group_jid).first()
             if not existing:
-                db.add(UserAccount(phone=body.phone, group_jid=body.group_jid, role=body.role))
+                role = body.role
+                # "owner" is the default for every caller of this endpoint
+                # (the People-tab Add form and the Groups-tab "Unknown
+                # member" quick-add both rely on it, neither sends role
+                # explicitly) — but a group can only sensibly have one
+                # owner. Downgrade to "member" if this group already has
+                # one, matching _sync_participants_to_accounts' convention,
+                # so adding a second/third person to a shared group doesn't
+                # silently create duplicate owner rows that
+                # resolve_group_owner/get_personal_group_jid then pick
+                # between non-deterministically.
+                if role == "owner" and db.query(UserAccount).filter_by(
+                    group_jid=body.group_jid, role="owner"
+                ).first():
+                    role = "member"
+                db.add(UserAccount(phone=body.phone, group_jid=body.group_jid, role=role))
 
         # Admin
         if body.is_admin:
             if not db.query(AdminNumbers).filter_by(phone_number=body.phone).first():
                 db.add(AdminNumbers(phone_number=body.phone, label=body.admin_label))
+
+        # Resolve the bridge-reported raw id (usually a LID) this person was
+        # picked from — links it to their real phone both for list_groups()'s
+        # display and for LID-safe accounting resolution (resolve_inbound).
+        if body.raw_participant_id and body.group_jid:
+            gp = db.get(GroupParticipant, (body.group_jid, body.raw_participant_id))
+            if gp is None:
+                db.add(GroupParticipant(
+                    group_jid=body.group_jid,
+                    phone=body.raw_participant_id,
+                    admin_name=body.display_name,
+                    status="active",
+                ))
+            elif body.display_name:
+                gp.admin_name = body.display_name
+
+            if body.raw_participant_id != body.phone:
+                conflict = db.query(UserProfile).filter(
+                    UserProfile.known_lid == body.raw_participant_id,
+                    UserProfile.phone != body.phone,
+                ).first()
+                if conflict:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{body.raw_participant_id} is already linked to {conflict.phone}.",
+                    )
+                profile = db.query(UserProfile).filter_by(phone=body.phone).first()
+                if profile is None:
+                    profile = UserProfile(phone=body.phone)
+                    db.add(profile)
+                profile.known_lid = body.raw_participant_id
 
         db.commit()
         return {"ok": True}
@@ -798,6 +867,16 @@ def patch_person(phone: str, body: UpdatePersonFullRequest, _=Depends(require_au
                     member.private_group_jid = body.private_group_jid or None
 
         if body.known_lid is not None:
+            if body.known_lid:
+                conflict = db.query(UserProfile).filter(
+                    UserProfile.known_lid == body.known_lid,
+                    UserProfile.phone != phone,
+                ).first()
+                if conflict:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{body.known_lid} is already linked to {conflict.phone}.",
+                    )
             profile = db.query(UserProfile).filter_by(phone=phone).first()
             if profile is None:
                 profile = UserProfile(phone=phone)
