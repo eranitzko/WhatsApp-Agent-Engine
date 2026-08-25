@@ -354,7 +354,7 @@ async function renderPeople(app) {
   const pendingSection = pending.length ? `
     <h3 style="margin:28px 0 12px;font-size:15px">⏳ Pending Registrations</h3>
     <div class="table-wrap"><table class="table">
-      <thead><tr><th>Group JID</th><th>Members</th><th>Type</th><th></th></tr></thead>
+      <thead><tr><th>Group JID</th><th>Members</th><th>Type</th><th>Shared ledger</th><th></th></tr></thead>
       <tbody>
         ${pending.map(g => `
           <tr>
@@ -366,6 +366,10 @@ async function renderPeople(app) {
                 <option value="shared" ${g.candidate_type === 'shared' ? 'selected' : ''}>Shared</option>
                 <option value="sys_admin">Sys Admin</option>
               </select>
+            </td>
+            <td>
+              <input type="checkbox" id="shared-ledger-${escAttr(g.group_jid)}" checked
+                title="Members of this group pool as one ledger for debt settlement (only applies when Type is Shared)">
             </td>
             <td>
               <div style="white-space:nowrap">
@@ -608,10 +612,16 @@ async function savePersonModal(mode) {
 
 async function approveRegistration(groupJid) {
   const type = document.getElementById('type-' + groupJid)?.value || 'personal';
-  await apiFetch('/people/pending/' + encodeURIComponent(groupJid) + '/approve', {
+  const sharedLedger = document.getElementById('shared-ledger-' + groupJid)?.checked ?? true;
+  const res = await apiFetch('/people/pending/' + encodeURIComponent(groupJid) + '/approve', {
     method: 'POST',
-    body: JSON.stringify({ group_type: type }),
+    body: JSON.stringify({ group_type: type, shared_ledger: sharedLedger }),
   });
+  if (!res || !res.ok) {
+    const body = await res?.json().catch(() => ({}));
+    alert('Failed to approve: ' + (body?.detail || 'Unknown error'));
+    return;
+  }
   renderPeople(document.getElementById('app'));
 }
 
@@ -782,20 +792,19 @@ async function renderHouseholds(app) {
             <button class="btn btn-danger" style="padding:4px 8px;font-size:11px" onclick="deleteHousehold('${escAttr(h.id)}','${escAttr(h.name)}')">Delete household</button>
           </div>
           <table class="table">
-            <thead><tr><th>Phone</th><th>Display Name</th><th>Linked</th><th>Ledger</th><th></th></tr></thead>
+            <thead><tr><th>Phone</th><th>Display Name</th><th>Linked</th><th></th></tr></thead>
             <tbody>
               ${h.members.length ? h.members.map(m => `
                 <tr>
                   <td>${escHtml(m.phone)}</td>
                   <td>${escHtml(m.display_name || '—')}</td>
                   <td>${m.linked ? '✅' : '—'}</td>
-                  <td>${m.ledger_mode === 'joint' ? '<span class="badge" style="background:#eff6ff;color:var(--accent)">Joint</span>' : 'Independent'}</td>
                   <td style="white-space:nowrap">
                     <button class="btn" style="padding:4px 8px;font-size:11px;border:1px solid var(--border)"
                       onclick="openMemberEdit(${escAttr(JSON.stringify(JSON.stringify({ household_id: h.id, ...m })))})">Edit</button>
                     <button class="btn btn-danger" style="padding:4px 8px;font-size:11px;margin-left:3px" onclick="removeHouseholdMember('${escAttr(h.id)}','${escAttr(m.phone)}')">✕</button>
                   </td>
-                </tr>`).join('') : '<tr><td colspan="5" class="empty">No members yet.</td></tr>'}
+                </tr>`).join('') : '<tr><td colspan="4" class="empty">No members yet.</td></tr>'}
             </tbody>
           </table>
           <details style="padding:12px 14px">
@@ -985,13 +994,6 @@ function openMemberEdit(memberJson) {
           <label>Display Name</label>
           <input id="edit-member-name" type="text" value="${escAttr(m.display_name || '')}">
         </div>
-        <div class="form-group">
-          <label>Ledger</label>
-          <select id="edit-member-ledger-mode" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
-            <option value="independent" ${m.ledger_mode !== 'joint' ? 'selected' : ''}>Independent — their own separate balance</option>
-            <option value="joint" ${m.ledger_mode === 'joint' ? 'selected' : ''}>Joint account — pooled with other joint members of this household</option>
-          </select>
-        </div>
         <div class="modal-footer">
           <button class="btn" onclick="closeMemberModal()">Cancel</button>
           <button class="btn btn-primary" onclick="saveMemberEdit('${escAttr(m.household_id)}','${escAttr(m.phone)}')">Save</button>
@@ -1007,7 +1009,6 @@ function closeMemberModal() {
 
 async function saveMemberEdit(householdId, phone) {
   const display_name = document.getElementById('edit-member-name').value.trim();
-  const ledger_mode = document.getElementById('edit-member-ledger-mode').value;
   // private_group_jid is deliberately not editable here — it's an internal
   // linkage set automatically when a person registers, not something an
   // admin should hand-edit. Omitting it from the body leaves it untouched.
@@ -1015,7 +1016,6 @@ async function saveMemberEdit(householdId, phone) {
     method: 'PATCH',
     body: JSON.stringify({
       display_name: display_name || null,
-      ledger_mode,
     }),
   });
   if (!res || !res.ok) {

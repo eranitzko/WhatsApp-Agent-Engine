@@ -237,6 +237,50 @@ async def test_update_group_type_alone_does_not_clear_notes(db):
     verify.close()
 
 
+def test_update_group_sets_shared_ledger(db):
+    seed_blueprint(db, id="family_accounting", display_name="FA")
+    seed_group(db, "222@g.us", blueprint_id="family_accounting", group_type="shared")
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        resp = client.patch("/admin/api/groups/222%40g.us", json={"shared_ledger": False})
+        assert resp.status_code == 200
+
+    verify = Session()
+    row = verify.get(GroupRegistry, "222@g.us")
+    assert row.shared_ledger is False
+    verify.close()
+
+
+def test_update_group_rejects_shared_ledger_conflict(db):
+    from app.db.models import GroupParticipant
+
+    seed_blueprint(db, id="family_accounting", display_name="FA")
+    seed_group(db, "existing_shared2@g.us", blueprint_id="family_accounting", group_type="shared", shared_ledger=True)
+    db.add(GroupParticipant(group_jid="existing_shared2@g.us", phone="972501110003", status="active"))
+    seed_group(db, "personal_grp2@g.us", blueprint_id="family_accounting", group_type="personal", shared_ledger=False)
+    db.add(GroupParticipant(group_jid="personal_grp2@g.us", phone="972501110003", status="active"))
+    db.commit()
+
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.patch(
+            "/admin/api/groups/personal_grp2%40g.us",
+            json={"group_type": "shared", "shared_ledger": True},
+        )
+        assert resp.status_code == 400
+        assert "existing_shared2@g.us" in resp.json()["detail"]
+
+    verify = Session()
+    row = verify.get(GroupRegistry, "personal_grp2@g.us")
+    assert row.group_type == "personal"  # rejected — unchanged
+    verify.close()
+
+
 @pytest.mark.asyncio
 async def test_list_unregistered_participants(db):
     """People who joined a registered group before register_group's
@@ -600,36 +644,6 @@ def test_update_household_member_display_name(db):
         assert patch_resp.json()["display_name"] == "New"
 
 
-def test_update_household_member_sets_ledger_mode(db):
-    _seed_household_prereqs(db)
-    Session = _get_session_factory(db)
-    app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
-        client = TestClient(app)
-        hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
-        client.post(f"/admin/api/households/{hid}/members", json={"phone": "972500022222"})
-        patch_resp = client.patch(
-            f"/admin/api/households/{hid}/members/972500022222",
-            json={"ledger_mode": "joint"},
-        )
-        assert patch_resp.status_code == 200
-        assert patch_resp.json()["ledger_mode"] == "joint"
-
-
-def test_list_households_includes_ledger_mode(db):
-    _seed_household_prereqs(db)
-    Session = _get_session_factory(db)
-    app = _make_app(db)
-    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
-        client = TestClient(app)
-        hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
-        client.post(f"/admin/api/households/{hid}/members", json={"phone": "972500033333"})
-        client.patch(f"/admin/api/households/{hid}/members/972500033333", json={"ledger_mode": "joint"})
-        households = client.get("/admin/api/households").json()
-        member = households[0]["members"][0]
-        assert member["ledger_mode"] == "joint"
-
-
 def test_update_household_member_links_private_group_jid(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)
@@ -706,6 +720,66 @@ def test_approve_registration_autolinks_household_member(db):
     linked = verify.query(HouseholdMember).filter_by(phone="972501112223").first()
     assert linked is not None
     assert linked.private_group_jid == "newgrp@g.us"
+    verify.close()
+
+
+def test_approve_registration_shared_sets_shared_ledger_default_on(db):
+    from app.db.models import GroupParticipant
+    seed_blueprint(db, id="fa", display_name="FA")
+    seed_group(db, "sharedgrp@g.us", blueprint_id="fa", group_type="unregistered", status="active")
+    db.add(GroupParticipant(group_jid="sharedgrp@g.us", phone="972501110001", status="active"))
+    db.commit()
+
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    from unittest.mock import AsyncMock
+    import app.bridge_client as _bc_mod
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)), \
+         patch.object(_bc_mod, "send_message", new=AsyncMock()):
+        client = TestClient(app)
+        resp = client.post(
+            "/admin/api/people/pending/sharedgrp%40g.us/approve",
+            json={"group_type": "shared"},
+        )
+        assert resp.status_code == 200
+
+    verify = Session()
+    row = verify.get(GroupRegistry, "sharedgrp@g.us")
+    assert row.group_type == "shared"
+    assert row.shared_ledger is True
+    verify.close()
+
+
+def test_approve_registration_shared_rejects_conflicting_member(db):
+    """A participant already pooled in another shared-ledger group can't be
+    approved into a second one."""
+    from app.db.models import GroupParticipant
+
+    seed_blueprint(db, id="family_accounting", display_name="FA")
+    seed_group(db, "existing_shared@g.us", blueprint_id="family_accounting", group_type="shared", shared_ledger=True)
+    db.add(GroupParticipant(group_jid="existing_shared@g.us", phone="972501110002", status="active"))
+
+    seed_group(db, "newpending@g.us", blueprint_id="family_accounting", group_type="unregistered", status="active")
+    db.add(GroupParticipant(group_jid="newpending@g.us", phone="972501110002", status="active"))
+    db.commit()
+
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    from unittest.mock import AsyncMock
+    import app.bridge_client as _bc_mod
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)), \
+         patch.object(_bc_mod, "send_message", new=AsyncMock()):
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post(
+            "/admin/api/people/pending/newpending%40g.us/approve",
+            json={"group_type": "shared"},
+        )
+        assert resp.status_code == 400
+        assert "existing_shared@g.us" in resp.json()["detail"]
+
+    verify = Session()
+    row = verify.get(GroupRegistry, "newpending@g.us")
+    assert row.group_type == "unregistered"  # rejected — unchanged
     verify.close()
 
 

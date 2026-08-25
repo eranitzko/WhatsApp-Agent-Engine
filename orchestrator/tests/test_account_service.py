@@ -571,34 +571,77 @@ def _seed_debt(db, household_id, group_jid, from_phone, to_phone, amount, settle
     return entry
 
 
-def test_get_joint_pool_independent_member_returns_only_self(db):
-    """Default ledger_mode is 'independent' — no pooling with anyone,
-    including other household members."""
-    h, m = _seed_household(db, "9725701", "solo_grp@g.us")
-    db.add(HouseholdMember(household_id=h.id, phone="9725702", private_group_jid="other_grp@g.us"))
+def _seed_shared_group(db, group_jid: str, members: list[tuple[str, str | None]], shared_ledger: bool = True):
+    """Register group_jid as a shared family_accounting group and add active
+    GroupParticipant rows for `members` — each (raw_id, known_lid_for) pair,
+    where raw_id is what shows up as GroupParticipant.phone (may be a LID)
+    and known_lid_for, if given, is the CANONICAL phone that raw_id should
+    resolve to via UserProfile.known_lid (mirrors real WhatsApp LID senders).
+    """
+    from app.db.models import GroupParticipant, UserProfile
+    _seed_blueprint(db)
+    seed_group(db, group_jid, blueprint_id="family_accounting", group_type="shared", shared_ledger=shared_ledger)
+    for raw_id, canonical in members:
+        db.add(GroupParticipant(group_jid=group_jid, phone=raw_id, status="active"))
+        if canonical:
+            existing = db.query(UserProfile).filter_by(phone=canonical).first()
+            if existing:
+                existing.known_lid = raw_id
+            else:
+                db.add(UserProfile(phone=canonical, known_lid=raw_id))
+    db.commit()
+
+
+def test_get_joint_pool_no_shared_group_returns_only_self(db):
+    svc = AccountService()
+    assert svc.get_joint_pool(db, "9725999") == {"9725999"}
+
+
+def test_get_joint_pool_shared_group_members_pool_together(db):
+    """Two active participants of the same shared, shared_ledger=True group
+    pool together for settlement — resolved through their WhatsApp LIDs to
+    their canonical phones, matching how they actually show up as senders."""
+    _seed_shared_group(db, "parents_shared@g.us", [
+        ("eran_lid", "9725801"),
+        ("sivan_lid", "9725802"),
+    ])
+
+    svc = AccountService()
+    assert svc.get_joint_pool(db, "9725801") == {"9725801", "9725802"}
+    assert svc.get_joint_pool(db, "9725802") == {"9725801", "9725802"}
+
+
+def test_get_joint_pool_personal_group_does_not_pool(db):
+    """A 'personal' (non-shared) group never pools its lone participant with
+    anyone, even if shared_ledger happens to be true on it."""
+    _seed_shared_group(db, "solo@g.us", [("solo_lid", "9725701")])
+    from app.db.models import GroupRegistry
+    db.query(GroupRegistry).filter_by(group_jid="solo@g.us").update({"group_type": "personal"})
     db.commit()
 
     svc = AccountService()
     assert svc.get_joint_pool(db, "9725701") == {"9725701"}
 
 
-def test_get_joint_pool_joint_members_pool_together(db):
-    """Two 'joint' members of the same household pool with each other, but
-    not with an 'independent' third member of the same household."""
-    h, m = _seed_household(db, "9725801", "parent1_grp@g.us")
-    m.ledger_mode = "joint"
-    db.add(HouseholdMember(household_id=h.id, phone="9725802", private_group_jid="parent2_grp@g.us", ledger_mode="joint"))
-    db.add(HouseholdMember(household_id=h.id, phone="9725803", private_group_jid="kid_grp@g.us", ledger_mode="independent"))
+def test_get_joint_pool_shared_ledger_false_does_not_pool(db):
+    _seed_shared_group(db, "no_pool@g.us", [
+        ("a_lid", "9725901"), ("b_lid", "9725902"),
+    ], shared_ledger=False)
+
+    svc = AccountService()
+    assert svc.get_joint_pool(db, "9725901") == {"9725901"}
+
+
+def test_get_joint_pool_removed_participant_excluded(db):
+    _seed_shared_group(db, "removed_test@g.us", [
+        ("a_lid", "9725111"), ("b_lid", "9725112"),
+    ])
+    from app.db.models import GroupParticipant
+    db.query(GroupParticipant).filter_by(group_jid="removed_test@g.us", phone="b_lid").update({"status": "removed"})
     db.commit()
 
     svc = AccountService()
-    assert svc.get_joint_pool(db, "9725801") == {"9725801", "9725802"}
-    assert svc.get_joint_pool(db, "9725803") == {"9725803"}
-
-
-def test_get_joint_pool_phone_with_no_household_returns_only_self(db):
-    svc = AccountService()
-    assert svc.get_joint_pool(db, "9725999") == {"9725999"}
+    assert svc.get_joint_pool(db, "9725111") == {"9725111"}
 
 
 @pytest.mark.asyncio
@@ -683,25 +726,64 @@ async def test_apply_payment_fifo_no_leftover_unaffected(db):
     assert debt_eran_owes_sivan.amount_settled_ils == Decimal("0")  # untouched
 
 
+def test_find_shared_ledger_conflict_none_when_clear(db):
+    _seed_shared_group(db, "clean@g.us", [("a_lid", "9725201"), ("b_lid", "9725202")])
+    svc = AccountService()
+    assert svc.find_shared_ledger_conflict(db, "clean@g.us") is None
+
+
+def test_find_shared_ledger_conflict_detects_overlap(db):
+    """A phone already active in one shared-ledger group can't also become
+    active in a second one — the check must catch this via the LID mapping,
+    not just a literal phone-string match."""
+    _seed_shared_group(db, "existing_pool@g.us", [("dad_lid", "9725301"), ("mom_lid", "9725302")])
+    # New group where dad (by his canonical phone this time, not his LID)
+    # would also become an active participant.
+    _seed_shared_group(db, "new_pool@g.us", [("9725301", None), ("kid_lid", "9725303")])
+
+    svc = AccountService()
+    conflict = svc.find_shared_ledger_conflict(db, "new_pool@g.us")
+    assert conflict is not None
+    assert "existing_pool@g.us" in conflict
+
+
+def test_find_shared_ledger_conflict_ignores_removed_participants(db):
+    _seed_shared_group(db, "old_pool@g.us", [("dad_lid", "9725401")])
+    from app.db.models import GroupParticipant
+    db.query(GroupParticipant).filter_by(group_jid="old_pool@g.us", phone="dad_lid").update({"status": "removed"})
+    db.commit()
+    _seed_shared_group(db, "new_pool2@g.us", [("9725401", None)])
+
+    svc = AccountService()
+    assert svc.find_shared_ledger_conflict(db, "new_pool2@g.us") is None
+
+
 @pytest.mark.asyncio
-async def test_apply_payment_fifo_settles_debt_owed_to_other_joint_pool_member(db):
-    """The 'paid mom back' bug: a debt is owed to one joint-pool member (dad),
-    but the payment names the OTHER joint-pool member (mom) as payee. Since
-    they run a pooled joint account, the payment must settle the real debt
-    to dad — not silently miss it and record a phantom reverse-direction
-    credit to mom instead."""
-    h, dad = _seed_household(db, "9725901", "dad_grp@g.us")
-    dad.ledger_mode = "joint"
-    mom = HouseholdMember(household_id=h.id, phone="9725902", private_group_jid="mom_grp@g.us", ledger_mode="joint")
-    db.add(mom)
+async def test_apply_payment_fifo_settles_debt_owed_to_other_shared_ledger_member(db):
+    """The 'paid mom back' bug, reproduced against the real-world shape: dad
+    and mom are both active participants of ONE shared family group (their
+    "אקסל ילדים"-equivalent) — but the debt was recorded in a THIRD group
+    (the kid's own personal group) naming dad as creditor, and the payment
+    below is reported naming mom instead (as the kid's own group, where they
+    actually sent the payment message, has no idea mom and dad are linked —
+    only the shared group they're co-participants of does). The payment must
+    still settle the real debt to dad, not silently miss it and record a
+    phantom reverse-direction credit to mom."""
+    _seed_shared_group(db, "parents_shared@g.us", [
+        ("dad_lid", "9725901"),
+        ("mom_lid", "9725902"),
+    ])
+    h, _ = _seed_household(db, "9725901", "dad_grp@g.us")
+    db.add(HouseholdMember(household_id=h.id, phone="9725902", private_group_jid="mom_grp@g.us"))
     db.commit()
 
-    # Kid owes DAD 500 — but the payment below is reported to MOM.
-    debt_to_dad = _seed_debt(db, h.id, "dad_grp@g.us", "9725903", "9725901", "500", desc="shoes")
+    # Kid owes DAD 500, recorded from the kid's OWN group — but the payment
+    # below is reported to MOM, from that same kid group (not the shared one).
+    debt_to_dad = _seed_debt(db, h.id, "kid_own_grp@g.us", "9725903", "9725901", "500", desc="shoes")
 
     svc = AccountService()
     await svc._apply_payment_fifo(
-        db, "mom_grp@g.us", payer_phone="9725903", payee_phone="9725902",
+        db, "kid_own_grp@g.us", payer_phone="9725903", payee_phone="9725902",
         amount_ils=Decimal("500"), payment_date=date.today(), household_id=h.id,
     )
 

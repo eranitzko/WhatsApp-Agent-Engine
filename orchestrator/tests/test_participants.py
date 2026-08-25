@@ -168,23 +168,17 @@ async def test_sync_bootstraps_participants(db):
 # ── Task 5: build_participant_block ───────────────────────────────────────────
 
 def test_build_participant_block_basic(db):
-    """The 'shared household' note is now driven by HouseholdMember.ledger_mode
-    ('joint'), not the deprecated GroupParticipant.is_household flag."""
-    from app.db.models import Household, HouseholdMember
-
-    seed_blueprint(db, id="fa", display_name="FA")
-    _seed_group_shared(db, "123@g.us", blueprint_id="fa")
+    """The 'shared household' note is now driven by GroupRegistry.shared_ledger
+    on a shared family_accounting group, not the deprecated per-group
+    GroupParticipant.is_household flag."""
+    _seed_group_shared(db, "123@g.us", blueprint_id="family_accounting",
+                        group_type="shared", shared_ledger=True)
     db.add(GroupParticipant(group_jid="123@g.us", phone="972501111111",
                              push_name="Eran", status="active"))
     db.add(GroupParticipant(group_jid="123@g.us", phone="972502222222",
                              push_name="Sivan", status="active"))
     db.add(GroupParticipant(group_jid="123@g.us", phone="972503333333",
                              push_name="Eden", status="active"))
-    h = Household(name="Test Family")
-    db.add(h)
-    db.flush()
-    db.add(HouseholdMember(household_id=h.id, phone="972501111111", ledger_mode="joint"))
-    db.add(HouseholdMember(household_id=h.id, phone="972502222222", ledger_mode="joint"))
     db.commit()
 
     block = build_participant_block(db, "123@g.us")
@@ -195,26 +189,34 @@ def test_build_participant_block_basic(db):
     assert "household" in block.lower() or "parents" in block.lower()
 
 
-def test_build_participant_block_independent_members_no_shared_note(db):
-    """Regression: two co-participants who are NOT both 'joint' must not
-    trigger the shared-household note, even if they're in the same
-    household (e.g. two independent siblings)."""
-    from app.db.models import Household, HouseholdMember
-
-    seed_blueprint(db, id="fa", display_name="FA")
-    _seed_group_shared(db, "789@g.us", blueprint_id="fa")
+def test_build_participant_block_personal_group_no_shared_note(db):
+    """Regression: a 'personal' (non-shared) group must not trigger the
+    shared-household note even with multiple active participants."""
+    seed_blueprint(db, id="fa2", display_name="FA2")
+    _seed_group_shared(db, "789@g.us", blueprint_id="fa2", group_type="personal")
     db.add(GroupParticipant(group_jid="789@g.us", phone="972501111111",
                              push_name="Roni", status="active"))
     db.add(GroupParticipant(group_jid="789@g.us", phone="972502222222",
                              push_name="Eden", status="active"))
-    h = Household(name="Test Family")
-    db.add(h)
-    db.flush()
-    db.add(HouseholdMember(household_id=h.id, phone="972501111111", ledger_mode="independent"))
-    db.add(HouseholdMember(household_id=h.id, phone="972502222222", ledger_mode="independent"))
     db.commit()
 
     block = build_participant_block(db, "789@g.us")
+    assert block is not None
+    assert "share a single account" not in block
+
+
+def test_build_participant_block_shared_ledger_false_no_shared_note(db):
+    """Regression: a 'shared' group with shared_ledger explicitly off must
+    not trigger the shared-household note."""
+    _seed_group_shared(db, "999@g.us", blueprint_id="family_accounting",
+                        group_type="shared", shared_ledger=False)
+    db.add(GroupParticipant(group_jid="999@g.us", phone="972501111111",
+                             push_name="Roni", status="active"))
+    db.add(GroupParticipant(group_jid="999@g.us", phone="972502222222",
+                             push_name="Eden", status="active"))
+    db.commit()
+
+    block = build_participant_block(db, "999@g.us")
     assert block is not None
     assert "share a single account" not in block
 
@@ -359,39 +361,35 @@ async def test_rename_participant_rejects_non_admin(db):
 from app.tools.accounting_tools import _joint_pool_phones_from_db, _phone_to_name_from_db
 
 
-def _seed_joint_household(db):
-    from app.db.models import Household, HouseholdMember
-    h = Household(name="Test Family")
-    db.add(h)
-    db.flush()
-    db.add(HouseholdMember(household_id=h.id, phone="972501111111", ledger_mode="joint"))
-    db.add(HouseholdMember(household_id=h.id, phone="972502222222", ledger_mode="joint"))
-    db.commit()
-    return h.id
-
-
 def test_joint_pool_phones_from_db(db):
-    household_id = _seed_joint_household(db)
-    phones = _joint_pool_phones_from_db(db, household_id)
+    _seed_group_shared(db, "shared_grp@g.us", blueprint_id="family_accounting",
+                        group_type="shared", shared_ledger=True)
+    db.add(GroupParticipant(group_jid="shared_grp@g.us", phone="972501111111", status="active"))
+    db.add(GroupParticipant(group_jid="shared_grp@g.us", phone="972502222222", status="active"))
+    db.commit()
+
+    phones = _joint_pool_phones_from_db(db, "shared_grp@g.us")
     assert phones == {"972501111111", "972502222222"}
 
 
-def test_joint_pool_phones_from_db_no_household_returns_empty_set(db):
-    assert _joint_pool_phones_from_db(db, None) == set()
+def test_joint_pool_phones_from_db_personal_group_returns_empty_set(db):
+    seed_blueprint(db, id="fa3", display_name="FA3")
+    _seed_group_shared(db, "personal_grp@g.us", blueprint_id="fa3", group_type="personal")
+    assert _joint_pool_phones_from_db(db, "personal_grp@g.us") == set()
 
 
 def test_phone_to_name_from_db_household_maps_to_parents(db):
-    seed_blueprint(db, id="fa", display_name="FA")
-    _seed_group_shared(db, "123@g.us", blueprint_id="fa")
+    _seed_group_shared(db, "123@g.us", blueprint_id="family_accounting",
+                        group_type="shared", shared_ledger=True)
     db.add(GroupParticipant(group_jid="123@g.us", phone="972501111111",
                              admin_name="Eran", status="active"))
     db.add(GroupParticipant(group_jid="123@g.us", phone="972503333333",
                              push_name="Eden", status="active"))
-    household_id = _seed_joint_household(db)
+    db.commit()
 
-    names = _phone_to_name_from_db(db, "123@g.us", household_id)
+    names = _phone_to_name_from_db(db, "123@g.us")
     assert names["972501111111"] == "Parents"
-    assert names["972503333333"] == "Eden"
+    assert names["972503333333"] == "Parents"
 
 
 def test_phone_to_name_from_db_admin_name_priority(db):

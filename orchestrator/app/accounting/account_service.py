@@ -73,21 +73,100 @@ class AccountService:
         """Return the set of phones this phone is fungible with for debt
         settlement purposes — always includes itself.
 
-        A phone pools with every other HouseholdMember in the same household
-        whose ledger_mode is 'joint'. Everyone else (no household, or
-        ledger_mode 'independent') pools with only themselves. This is
-        deliberately narrower than household_id-based reporting scope: two
-        siblings sharing a household stay financially separate unless both
-        are explicitly marked 'joint' (e.g. two parents running one pooled
-        account) — pooling is opt-in, not implied by shared visibility.
+        Two phones pool together when they're both ACTIVE participants of the
+        SAME group registered as family_accounting + group_type='shared' +
+        shared_ledger=True — a concrete, admin-controlled fact about a real
+        WhatsApp group, not an implicit household-wide assumption (a
+        household can contain people who are NOT financially pooled, e.g.
+        independent adult children). At most one such group should ever
+        apply per phone (enforced at registration/approval/edit time via
+        find_shared_ledger_conflict below) — if more than one somehow does,
+        every member across all of them pools together rather than picking
+        one arbitrarily.
+
+        GroupParticipant.phone is not reliably a real phone number — WhatsApp
+        sends LIDs for many senders — so both directions are resolved via
+        UserProfile.known_lid before matching.
         """
-        member = db.query(HouseholdMember).filter_by(phone=phone).first()
-        if not member or member.ledger_mode != "joint":
+        from app.db.models import GroupParticipant, GroupRegistry, UserProfile
+
+        profile = db.query(UserProfile).filter_by(phone=phone).first()
+        raw_ids = {phone}
+        if profile and profile.known_lid:
+            raw_ids.add(profile.known_lid)
+
+        shared_group_jids = {
+            jid for (jid,) in
+            db.query(GroupRegistry.group_jid)
+            .join(GroupParticipant, GroupParticipant.group_jid == GroupRegistry.group_jid)
+            .filter(
+                GroupRegistry.blueprint_id == "family_accounting",
+                GroupRegistry.group_type == "shared",
+                GroupRegistry.shared_ledger.is_(True),
+                GroupParticipant.phone.in_(raw_ids),
+                GroupParticipant.status == "active",
+            )
+            .all()
+        }
+        if not shared_group_jids:
             return {phone}
-        pool_members = db.query(HouseholdMember).filter_by(
-            household_id=member.household_id, ledger_mode="joint",
+
+        lid_to_canonical = {
+            p.known_lid: p.phone for p in
+            db.query(UserProfile).filter(UserProfile.known_lid.isnot(None)).all()
+        }
+        pool_participants = db.query(GroupParticipant).filter(
+            GroupParticipant.group_jid.in_(shared_group_jids),
+            GroupParticipant.status == "active",
         ).all()
-        return {m.phone for m in pool_members} | {phone}
+        return {phone} | {lid_to_canonical.get(p.phone, p.phone) for p in pool_participants}
+
+    def find_shared_ledger_conflict(self, db: Session, group_jid: str) -> str | None:
+        """If marking `group_jid` as a shared-ledger group would give any of
+        its active participants membership in MORE than one shared-ledger
+        group at once, return a human-readable error describing the
+        conflict. Returns None when it's safe to enable. Call this before
+        persisting group_type='shared' + shared_ledger=True.
+        """
+        from app.db.models import GroupParticipant, GroupRegistry, UserProfile
+
+        participants = db.query(GroupParticipant).filter_by(group_jid=group_jid, status="active").all()
+        if not participants:
+            return None
+
+        lid_to_canonical = {
+            p.known_lid: p.phone for p in
+            db.query(UserProfile).filter(UserProfile.known_lid.isnot(None)).all()
+        }
+        canonical_to_lid = {v: k for k, v in lid_to_canonical.items()}
+
+        raw_ids = {p.phone for p in participants}
+        # Each participant's raw id might be a LID (needs its canonical
+        # phone added) or already the canonical phone (needs its LID added)
+        # — a conflicting group could reference the person by either form.
+        raw_ids |= {lid_to_canonical[r] for r in raw_ids if r in lid_to_canonical}
+        raw_ids |= {canonical_to_lid[r] for r in raw_ids if r in canonical_to_lid}
+
+        conflict = (
+            db.query(GroupRegistry)
+            .join(GroupParticipant, GroupParticipant.group_jid == GroupRegistry.group_jid)
+            .filter(
+                GroupRegistry.group_jid != group_jid,
+                GroupRegistry.blueprint_id == "family_accounting",
+                GroupRegistry.group_type == "shared",
+                GroupRegistry.shared_ledger.is_(True),
+                GroupParticipant.phone.in_(raw_ids),
+                GroupParticipant.status == "active",
+            )
+            .first()
+        )
+        if conflict:
+            return (
+                f"Cannot enable a shared ledger for this group: at least one active "
+                f"participant already shares a ledger with group {conflict.group_jid}. "
+                f"A person can only be part of one shared ledger at a time."
+            )
+        return None
 
     def balance_update_message(
         self, db: Session, group_jid: str, phone: str, other_phone: str, household_id: str | None,

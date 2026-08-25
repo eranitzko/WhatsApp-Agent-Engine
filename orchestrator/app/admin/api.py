@@ -149,6 +149,8 @@ async def list_groups():
                 "member_count": len(members),
                 "members": members,
                 "notes": r.notes,
+                "group_type": r.group_type,
+                "shared_ledger": r.shared_ledger,
             })
         return result
 
@@ -215,18 +217,28 @@ class UpdateGroupNotesRequest(BaseModel):
                                     # than one real reporter and needs to be
                                     # 'shared' so per-participant auto-linking
                                     # of private_group_jid stops applying to it)
+    shared_ledger: bool | None = None  # only meaningful when group_type == "shared"
 
 
 @router.patch("/groups/{group_jid:path}", dependencies=[Depends(require_auth)])
 def update_group_notes(group_jid: str, body: UpdateGroupNotesRequest):
+    from app.accounting.account_service import AccountService
     with SessionLocal() as db:
         row = db.get(GroupRegistry, group_jid)
         if not row:
             raise HTTPException(status_code=404, detail="Group not found")
         if "notes" in body.model_fields_set:
             row.notes = body.notes or None
+        new_type = body.group_type if body.group_type is not None else row.group_type
+        new_shared_ledger = body.shared_ledger if body.shared_ledger is not None else row.shared_ledger
+        if new_type == "shared" and new_shared_ledger:
+            conflict = AccountService().find_shared_ledger_conflict(db, group_jid)
+            if conflict:
+                raise HTTPException(status_code=400, detail=conflict)
         if body.group_type is not None:
             row.group_type = body.group_type
+        if body.shared_ledger is not None:
+            row.shared_ledger = body.shared_ledger
         db.commit()
     return {"ok": True}
 
@@ -661,16 +673,23 @@ def list_pending(_=Depends(require_auth)):
 
 class ApproveRegistrationRequest(BaseModel):
     group_type: str = "personal"  # personal | shared
+    shared_ledger: bool = True  # only meaningful when group_type == "shared"
 
 
 @router.post("/people/pending/{group_jid}/approve")
 async def approve_registration(group_jid: str, body: ApproveRegistrationRequest, _=Depends(require_auth)):
     from app import bridge_client as _bc
+    from app.accounting.account_service import AccountService
     with SessionLocal() as db:
         grp = db.query(GroupRegistry).filter_by(group_jid=group_jid).first()
         if not grp:
             raise HTTPException(status_code=404, detail="Group not found")
+        if body.group_type == "shared" and body.shared_ledger:
+            conflict = AccountService().find_shared_ledger_conflict(db, group_jid)
+            if conflict:
+                raise HTTPException(status_code=400, detail=conflict)
         grp.group_type = body.group_type
+        grp.shared_ledger = body.shared_ledger
         _sync_participants_to_accounts(db, group_jid, body.group_type)
         db.commit()
     try:
@@ -921,7 +940,6 @@ class AddMemberRequest(BaseModel):
 class UpdateMemberRequest(BaseModel):
     display_name: str | None = None
     private_group_jid: str | None = None
-    ledger_mode: str | None = None  # "independent" | "joint"
 
 
 @router.get("/households", dependencies=[Depends(require_auth)])
@@ -942,7 +960,6 @@ def list_households():
                         "display_name": m.display_name,
                         "private_group_jid": m.private_group_jid,
                         "linked": m.private_group_jid is not None,
-                        "ledger_mode": m.ledger_mode,
                     }
                     for m in members
                 ],
@@ -1029,16 +1046,11 @@ def update_household_member(household_id: str, phone: str, body: UpdateMemberReq
             member.display_name = body.display_name or None
         if body.private_group_jid is not None:
             member.private_group_jid = body.private_group_jid or None
-        if body.ledger_mode is not None:
-            if body.ledger_mode not in ("independent", "joint"):
-                raise HTTPException(status_code=400, detail="ledger_mode must be 'independent' or 'joint'")
-            member.ledger_mode = body.ledger_mode
         db.commit()
         return {
             "phone": member.phone,
             "display_name": member.display_name,
             "private_group_jid": member.private_group_jid,
-            "ledger_mode": member.ledger_mode,
         }
 
 

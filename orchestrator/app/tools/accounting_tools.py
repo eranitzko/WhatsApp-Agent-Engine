@@ -36,22 +36,24 @@ def set_account_service(service: "AccountService | None") -> None:
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
-def _joint_pool_phones_from_db(db, household_id: str | None) -> set[str]:
-    """Every phone running a pooled 'joint' ledger in this household (see
-    HouseholdMember.ledger_mode) — the household-wide, cross-group
-    replacement for the deprecated per-group GroupParticipant.is_household
-    flag. Returns an empty set when there's no household to look up."""
-    if not household_id:
+def _joint_pool_phones_from_db(db, group_jid: str) -> set[str]:
+    """Every active participant's (raw, possibly-LID) phone in this group,
+    if it's registered as a shared, shared_ledger=True family_accounting
+    group — the group-scoped replacement for the deprecated per-group
+    GroupParticipant.is_household flag (and the household-wide ledger_mode
+    that briefly replaced it). Returns an empty set otherwise."""
+    from app.db.models import GroupParticipant, GroupRegistry
+    reg = db.get(GroupRegistry, group_jid)
+    if not reg or reg.blueprint_id != "family_accounting" or reg.group_type != "shared" or not reg.shared_ledger:
         return set()
-    from app.db.models import HouseholdMember
-    rows = db.query(HouseholdMember).filter_by(household_id=household_id, ledger_mode="joint").all()
+    rows = db.query(GroupParticipant).filter_by(group_jid=group_jid, status="active").all()
     return {r.phone for r in rows}
 
 
-def _phone_to_name_from_db(db, group_jid: str, household_id: str | None = None) -> dict[str, str]:
+def _phone_to_name_from_db(db, group_jid: str) -> dict[str, str]:
     from app.db.models import GroupParticipant
     rows = db.query(GroupParticipant).filter_by(group_jid=group_jid).all()
-    joint_pool = _joint_pool_phones_from_db(db, household_id)
+    joint_pool = _joint_pool_phones_from_db(db, group_jid)
     result = {}
     for r in rows:
         name = r.admin_name or r.push_name or r.phone
@@ -631,8 +633,8 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
             owed = sum(_net_owed(db, group_jid, cp, from_phone, household_id) for cp in to_phones)
             return owes - owed
 
-        household = _joint_pool_phones_from_db(db, household_id)
-        names = _phone_to_name_from_db(db, group_jid, household_id)
+        household = _joint_pool_phones_from_db(db, group_jid)
+        names = _phone_to_name_from_db(db, group_jid)
 
         def label(phone: str) -> str:
             return names.get(phone, phone)
@@ -787,7 +789,7 @@ async def _exec_get_history(params: dict, **ctx) -> str:
         if to_date:
             q = q.filter(LedgerEntry.transaction_date <= date.fromisoformat(to_date))
         rows = q.order_by(LedgerEntry.transaction_date).all()
-        names = _phone_to_name_from_db(db, group_jid, household_id)
+        names = _phone_to_name_from_db(db, group_jid)
 
     if not rows:
         return "No transactions found."

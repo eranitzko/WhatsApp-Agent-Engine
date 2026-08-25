@@ -123,6 +123,13 @@ class GroupRegistry(Base):
     custom_instructions = Column(Text, nullable=True)
     group_type = Column(String, nullable=True, default="personal")  # personal|shared|sys_admin|unregistered
     notes = Column(Text, nullable=True)  # admin-facing label/notes; not fed to the agent
+    # Only meaningful when group_type == "shared": whether this group's active
+    # participants pool as one ledger for debt SETTLEMENT (see
+    # AccountService.get_joint_pool) — a payment named to one member can then
+    # settle a debt actually owed to another member of the same group. A
+    # phone may belong to at most one shared_ledger group at a time (enforced
+    # at registration/approval/edit time, not just at settlement time).
+    shared_ledger = Column(Boolean, nullable=False, default=True)
 
 
 class GroupParticipant(Base):
@@ -318,13 +325,6 @@ class HouseholdMember(Base):
     private_group_jid          = Column(String, ForeignKey("group_registry.group_jid"), nullable=True)
     primary_accounting_group_jid = Column(String, ForeignKey("group_registry.group_jid"), nullable=True)
     display_name               = Column(String, nullable=True)
-    # "independent" (default): this person's debts/payments are their own,
-    # never merged with anyone else's. "joint": fungible for settlement with
-    # every other "joint" member of the SAME household — a payment named to
-    # one joint member can settle an open debt owed to another (see
-    # AccountService.get_joint_pool / accounting_fifo.fetch_open_debt_legs).
-    ledger_mode                = Column(String, nullable=False, default="independent",
-                                        server_default="independent")
     created_at                 = Column(DateTime(timezone=True), nullable=False,
                                         default=lambda: datetime.now(timezone.utc))
 

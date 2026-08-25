@@ -81,19 +81,16 @@ def build_participant_block(db: Session, group_jid: str) -> str | None:
     else:
         block = "Family members in this group: (none recorded)"
 
-    from app.db.models import HouseholdMember
+    from app.db.models import GroupRegistry
 
-    joint_phones = {
-        m.phone for m in
-        db.query(HouseholdMember).filter(
-            HouseholdMember.phone.in_({r.phone for r in rows}),
-            HouseholdMember.ledger_mode == "joint",
-        ).all()
-    }
+    reg = db.get(GroupRegistry, group_jid)
+    is_shared_ledger_group = bool(
+        reg and reg.blueprint_id == "family_accounting" and reg.group_type == "shared" and reg.shared_ledger
+    )
     active_household = [
         (r.admin_name or r.push_name or r.phone)
         for r in rows
-        if r.phone in joint_phones and r.status == "active"
+        if is_shared_ledger_group and r.status == "active"
     ]
     if len(active_household) >= 2:
         names_str = " and ".join(active_household)
