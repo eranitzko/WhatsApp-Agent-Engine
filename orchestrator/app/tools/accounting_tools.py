@@ -36,20 +36,26 @@ def set_account_service(service: "AccountService | None") -> None:
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
-def _household_phones_from_db(db, group_jid: str) -> set[str]:
-    from app.db.models import GroupParticipant
-    rows = db.query(GroupParticipant).filter_by(group_jid=group_jid, is_household=True).all()
+def _joint_pool_phones_from_db(db, household_id: str | None) -> set[str]:
+    """Every phone running a pooled 'joint' ledger in this household (see
+    HouseholdMember.ledger_mode) — the household-wide, cross-group
+    replacement for the deprecated per-group GroupParticipant.is_household
+    flag. Returns an empty set when there's no household to look up."""
+    if not household_id:
+        return set()
+    from app.db.models import HouseholdMember
+    rows = db.query(HouseholdMember).filter_by(household_id=household_id, ledger_mode="joint").all()
     return {r.phone for r in rows}
 
 
-def _phone_to_name_from_db(db, group_jid: str) -> dict[str, str]:
+def _phone_to_name_from_db(db, group_jid: str, household_id: str | None = None) -> dict[str, str]:
     from app.db.models import GroupParticipant
     rows = db.query(GroupParticipant).filter_by(group_jid=group_jid).all()
-    household = {r.phone for r in rows if r.is_household}
+    joint_pool = _joint_pool_phones_from_db(db, household_id)
     result = {}
     for r in rows:
         name = r.admin_name or r.push_name or r.phone
-        result[r.phone] = "Parents" if r.phone in household else name
+        result[r.phone] = "Parents" if r.phone in joint_pool else name
     return result
 
 
@@ -300,23 +306,6 @@ _SCHEMAS: dict[str, dict] = {
                 "name": {"type": "string", "description": "New display name, or empty string to clear override"},
             },
             "required": ["phone", "name"],
-        },
-    },
-    "set_household": {
-        "name": "set_household",
-        "category": "accounting",
-        "access": "admin",
-        "description": (
-            "Use when an admin wants to mark or unmark a participant as part of the shared household account (shown as 'Parents'). Admin only. "
-            "Returns: confirmation of the updated household status."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "phone": {"type": "string", "description": "The participant's phone number (digits only)"},
-                "is_household": {"type": "boolean", "description": "True to add to household, False to remove"},
-            },
-            "required": ["phone", "is_household"],
         },
     },
     "list_participants": {
@@ -642,8 +631,8 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
             owed = sum(_net_owed(db, group_jid, cp, from_phone, household_id) for cp in to_phones)
             return owes - owed
 
-        household = _household_phones_from_db(db, group_jid)
-        names = _phone_to_name_from_db(db, group_jid)
+        household = _joint_pool_phones_from_db(db, household_id)
+        names = _phone_to_name_from_db(db, group_jid, household_id)
 
         def label(phone: str) -> str:
             return names.get(phone, phone)
@@ -798,7 +787,7 @@ async def _exec_get_history(params: dict, **ctx) -> str:
         if to_date:
             q = q.filter(LedgerEntry.transaction_date <= date.fromisoformat(to_date))
         rows = q.order_by(LedgerEntry.transaction_date).all()
-        names = _phone_to_name_from_db(db, group_jid)
+        names = _phone_to_name_from_db(db, group_jid, household_id)
 
     if not rows:
         return "No transactions found."
@@ -989,30 +978,6 @@ async def _exec_rename_participant(params: dict, **ctx) -> str:
             db.close()
 
 
-async def _exec_set_household(params: dict, **ctx) -> str:
-    if not ctx.get("is_admin"):
-        return "Only admins can change household membership."
-    group_jid = ctx.get("group_jid", "")
-    phone = params["phone"]
-    is_household = params["is_household"]
-
-    db = ctx.get("db")
-    close_db = db is None
-    if db is None:
-        db = SessionLocal()
-    try:
-        from app.db.models import GroupParticipant
-        row = db.get(GroupParticipant, (group_jid, phone))
-        if row is None:
-            return f"Participant {phone} not found in this group."
-        row.is_household = is_household
-        db.commit()
-        name = row.admin_name or row.push_name or phone
-        action = "added to" if is_household else "removed from"
-        return f"{name} {action} the shared household account."
-    finally:
-        if close_db:
-            db.close()
 
 
 async def _exec_list_participants(params: dict, **ctx) -> str:
@@ -1446,7 +1411,6 @@ def get_accounting_tools() -> dict[str, dict]:
             ("cancel_reminder",      _exec_cancel_reminder),
             ("set_report_email",     _exec_save_email),
             ("rename_participant",   _exec_rename_participant),
-            ("set_household",        _exec_set_household),
             ("list_participants",    _exec_list_participants),
             ("correct_transaction",   _exec_correct_transaction),
             ("commit_correction",     _exec_apply_correction),

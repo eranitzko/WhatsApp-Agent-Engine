@@ -17,7 +17,9 @@ from app.reports.formatting import format_date as _fmt_date
 from app.tools.accounting_fifo import net_pair
 
 
-def _phone_to_name_from_db(db, group_jid: str, phones: set[str] | None = None) -> dict[str, str]:
+def _phone_to_name_from_db(
+    db, group_jid: str, phones: set[str] | None = None, household_id: str | None = None,
+) -> dict[str, str]:
     """Best display name per phone.
 
     Priority: HouseholdMember.display_name / UserProfile.display_name (set via
@@ -26,18 +28,25 @@ def _phone_to_name_from_db(db, group_jid: str, phones: set[str] | None = None) -
 
     `phones` should include every phone appearing in the report (e.g. from
     ledger entries) so names resolve even for people not registered as a
-    GroupParticipant of this group.  GroupParticipant.is_household participants
-    keep the collective "Parents" label regardless of any individual display
-    name — that grouping is intentional, not a missing name.
+    GroupParticipant of this group. Members running a pooled 'joint' ledger
+    (HouseholdMember.ledger_mode, scoped by household_id — the household-wide
+    replacement for the deprecated per-group GroupParticipant.is_household
+    flag) keep the collective "Parents" label regardless of any individual
+    display name — that grouping is intentional, not a missing name.
     """
     from app.db.models import GroupParticipant, HouseholdMember, UserProfile
 
     rows = db.query(GroupParticipant).filter_by(group_jid=group_jid).all()
-    household = {r.phone for r in rows if r.is_household}
+    joint_pool: set[str] = set()
+    if household_id:
+        joint_pool = {
+            m.phone for m in
+            db.query(HouseholdMember).filter_by(household_id=household_id, ledger_mode="joint").all()
+        }
     result: dict[str, str] = {}
     for r in rows:
         name = r.admin_name or r.push_name or r.phone
-        result[r.phone] = "Parents" if r.phone in household else name
+        result[r.phone] = "Parents" if r.phone in joint_pool else name
 
     all_phones = set(result.keys()) | (phones or set())
     if all_phones:
@@ -81,7 +90,7 @@ def generate_ledger_xlsx(
             )
         entries = q.order_by(LedgerEntry.transaction_date).all()
         phones = {e.from_phone for e in entries} | {e.to_phone for e in entries}
-        names = _phone_to_name_from_db(db, group_jid, phones)
+        names = _phone_to_name_from_db(db, group_jid, phones, _household_id)
 
     if not include_settled:
         entries = [e for e in entries if e.remaining_ils > Decimal("0")]
@@ -297,7 +306,7 @@ def generate_ledger_pdf(
         entries = query.order_by(_LE.transaction_date).all()
 
         phones = {e.from_phone for e in entries} | {e.to_phone for e in entries}
-        names = _phone_to_name_from_db(db, group_jid, phones)
+        names = _phone_to_name_from_db(db, group_jid, phones, _household_id2)
 
     sections = []
 

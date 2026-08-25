@@ -108,17 +108,28 @@ def net_pair(a: str, b: str, net: Decimal) -> tuple[str, str, Decimal] | None:
     return None
 
 
-def fetch_open_debt_legs(db, group_jid: str, from_phone: str, to_phone: str, household_id: str | None = None) -> list[DebtLeg]:
+def fetch_open_debt_legs(
+    db, group_jid: str, from_phone: str | set[str], to_phone: str | set[str],
+    household_id: str | None = None,
+) -> list[DebtLeg]:
     """Query open (partially/fully unsettled) LedgerEntry rows for a directed
     (from_phone, to_phone) pair, ordered oldest-first, as DebtLeg objects
     ready for apply_payment(). Requires DB access, unlike the rest of this
     module — kept here anyway since it's the natural counterpart to
     apply_payment, and this exact query+construction pattern was previously
-    duplicated between account_service.py and agent_runner.py."""
+    duplicated between account_service.py and agent_runner.py.
+
+    from_phone/to_phone each accept either a single phone or a set of phones
+    (e.g. AccountService.get_joint_pool's result) — passing a pool matches a
+    debt owed by/to ANY member of it, so a payment named to one joint-account
+    member can settle a debt actually owed to another member of the same
+    pool. A single string behaves exactly as before (matches only itself)."""
     from app.db.models import LedgerEntry
+    from_phones = {from_phone} if isinstance(from_phone, str) else set(from_phone)
+    to_phones = {to_phone} if isinstance(to_phone, str) else set(to_phone)
     q = db.query(LedgerEntry).filter(
-        LedgerEntry.from_phone == from_phone,
-        LedgerEntry.to_phone == to_phone,
+        LedgerEntry.from_phone.in_(from_phones),
+        LedgerEntry.to_phone.in_(to_phones),
         LedgerEntry.amount_ils > LedgerEntry.amount_settled_ils,
     )
     if household_id:

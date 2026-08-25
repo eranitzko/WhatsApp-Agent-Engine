@@ -921,6 +921,7 @@ class AddMemberRequest(BaseModel):
 class UpdateMemberRequest(BaseModel):
     display_name: str | None = None
     private_group_jid: str | None = None
+    ledger_mode: str | None = None  # "independent" | "joint"
 
 
 @router.get("/households", dependencies=[Depends(require_auth)])
@@ -941,6 +942,7 @@ def list_households():
                         "display_name": m.display_name,
                         "private_group_jid": m.private_group_jid,
                         "linked": m.private_group_jid is not None,
+                        "ledger_mode": m.ledger_mode,
                     }
                     for m in members
                 ],
@@ -1027,11 +1029,16 @@ def update_household_member(household_id: str, phone: str, body: UpdateMemberReq
             member.display_name = body.display_name or None
         if body.private_group_jid is not None:
             member.private_group_jid = body.private_group_jid or None
+        if body.ledger_mode is not None:
+            if body.ledger_mode not in ("independent", "joint"):
+                raise HTTPException(status_code=400, detail="ledger_mode must be 'independent' or 'joint'")
+            member.ledger_mode = body.ledger_mode
         db.commit()
         return {
             "phone": member.phone,
             "display_name": member.display_name,
             "private_group_jid": member.private_group_jid,
+            "ledger_mode": member.ledger_mode,
         }
 
 

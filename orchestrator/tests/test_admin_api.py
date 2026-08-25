@@ -600,6 +600,36 @@ def test_update_household_member_display_name(db):
         assert patch_resp.json()["display_name"] == "New"
 
 
+def test_update_household_member_sets_ledger_mode(db):
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
+        client.post(f"/admin/api/households/{hid}/members", json={"phone": "972500022222"})
+        patch_resp = client.patch(
+            f"/admin/api/households/{hid}/members/972500022222",
+            json={"ledger_mode": "joint"},
+        )
+        assert patch_resp.status_code == 200
+        assert patch_resp.json()["ledger_mode"] == "joint"
+
+
+def test_list_households_includes_ledger_mode(db):
+    _seed_household_prereqs(db)
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        hid = client.post("/admin/api/households", json={"name": "F"}).json()["id"]
+        client.post(f"/admin/api/households/{hid}/members", json={"phone": "972500033333"})
+        client.patch(f"/admin/api/households/{hid}/members/972500033333", json={"ledger_mode": "joint"})
+        households = client.get("/admin/api/households").json()
+        member = households[0]["members"][0]
+        assert member["ledger_mode"] == "joint"
+
+
 def test_update_household_member_links_private_group_jid(db):
     _seed_household_prereqs(db)
     Session = _get_session_factory(db)

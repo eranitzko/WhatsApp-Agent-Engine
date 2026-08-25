@@ -318,6 +318,13 @@ class HouseholdMember(Base):
     private_group_jid          = Column(String, ForeignKey("group_registry.group_jid"), nullable=True)
     primary_accounting_group_jid = Column(String, ForeignKey("group_registry.group_jid"), nullable=True)
     display_name               = Column(String, nullable=True)
+    # "independent" (default): this person's debts/payments are their own,
+    # never merged with anyone else's. "joint": fungible for settlement with
+    # every other "joint" member of the SAME household — a payment named to
+    # one joint member can settle an open debt owed to another (see
+    # AccountService.get_joint_pool / accounting_fifo.fetch_open_debt_legs).
+    ledger_mode                = Column(String, nullable=False, default="independent",
+                                        server_default="independent")
     created_at                 = Column(DateTime(timezone=True), nullable=False,
                                         default=lambda: datetime.now(timezone.utc))
 

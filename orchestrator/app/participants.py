@@ -81,10 +81,19 @@ def build_participant_block(db: Session, group_jid: str) -> str | None:
     else:
         block = "Family members in this group: (none recorded)"
 
+    from app.db.models import HouseholdMember
+
+    joint_phones = {
+        m.phone for m in
+        db.query(HouseholdMember).filter(
+            HouseholdMember.phone.in_({r.phone for r in rows}),
+            HouseholdMember.ledger_mode == "joint",
+        ).all()
+    }
     active_household = [
         (r.admin_name or r.push_name or r.phone)
         for r in rows
-        if r.is_household and r.status == "active"
+        if r.phone in joint_phones and r.status == "active"
     ]
     if len(active_household) >= 2:
         names_str = " and ".join(active_household)

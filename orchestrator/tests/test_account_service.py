@@ -571,6 +571,36 @@ def _seed_debt(db, household_id, group_jid, from_phone, to_phone, amount, settle
     return entry
 
 
+def test_get_joint_pool_independent_member_returns_only_self(db):
+    """Default ledger_mode is 'independent' — no pooling with anyone,
+    including other household members."""
+    h, m = _seed_household(db, "9725701", "solo_grp@g.us")
+    db.add(HouseholdMember(household_id=h.id, phone="9725702", private_group_jid="other_grp@g.us"))
+    db.commit()
+
+    svc = AccountService()
+    assert svc.get_joint_pool(db, "9725701") == {"9725701"}
+
+
+def test_get_joint_pool_joint_members_pool_together(db):
+    """Two 'joint' members of the same household pool with each other, but
+    not with an 'independent' third member of the same household."""
+    h, m = _seed_household(db, "9725801", "parent1_grp@g.us")
+    m.ledger_mode = "joint"
+    db.add(HouseholdMember(household_id=h.id, phone="9725802", private_group_jid="parent2_grp@g.us", ledger_mode="joint"))
+    db.add(HouseholdMember(household_id=h.id, phone="9725803", private_group_jid="kid_grp@g.us", ledger_mode="independent"))
+    db.commit()
+
+    svc = AccountService()
+    assert svc.get_joint_pool(db, "9725801") == {"9725801", "9725802"}
+    assert svc.get_joint_pool(db, "9725803") == {"9725803"}
+
+
+def test_get_joint_pool_phone_with_no_household_returns_only_self(db):
+    svc = AccountService()
+    assert svc.get_joint_pool(db, "9725999") == {"9725999"}
+
+
 @pytest.mark.asyncio
 async def test_apply_payment_fifo_leftover_nets_against_reverse_direction_debt(db):
     """Regression for the bug found via production verification: a payment
@@ -651,6 +681,40 @@ async def test_apply_payment_fifo_no_leftover_unaffected(db):
     db.refresh(debt_eran_owes_sivan)
     assert debt_sivan_owes_eran.amount_settled_ils == Decimal("120")
     assert debt_eran_owes_sivan.amount_settled_ils == Decimal("0")  # untouched
+
+
+@pytest.mark.asyncio
+async def test_apply_payment_fifo_settles_debt_owed_to_other_joint_pool_member(db):
+    """The 'paid mom back' bug: a debt is owed to one joint-pool member (dad),
+    but the payment names the OTHER joint-pool member (mom) as payee. Since
+    they run a pooled joint account, the payment must settle the real debt
+    to dad — not silently miss it and record a phantom reverse-direction
+    credit to mom instead."""
+    h, dad = _seed_household(db, "9725901", "dad_grp@g.us")
+    dad.ledger_mode = "joint"
+    mom = HouseholdMember(household_id=h.id, phone="9725902", private_group_jid="mom_grp@g.us", ledger_mode="joint")
+    db.add(mom)
+    db.commit()
+
+    # Kid owes DAD 500 — but the payment below is reported to MOM.
+    debt_to_dad = _seed_debt(db, h.id, "dad_grp@g.us", "9725903", "9725901", "500", desc="shoes")
+
+    svc = AccountService()
+    await svc._apply_payment_fifo(
+        db, "mom_grp@g.us", payer_phone="9725903", payee_phone="9725902",
+        amount_ils=Decimal("500"), payment_date=date.today(), household_id=h.id,
+    )
+
+    db.refresh(debt_to_dad)
+    assert debt_to_dad.amount_settled_ils == Decimal("500")
+
+    # No phantom "mom owes kid" credit entry should have been created.
+    phantom = (
+        db.query(LedgerEntry)
+        .filter_by(from_phone="9725902", to_phone="9725903", entry_type="debt")
+        .first()
+    )
+    assert phantom is None
 
 
 def test_balance_update_message_formats_debt_owed_and_settled(db):

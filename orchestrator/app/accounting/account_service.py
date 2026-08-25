@@ -69,6 +69,26 @@ class AccountService:
         member = db.query(HouseholdMember).filter_by(phone=phone).first()
         return member.household_id if member else None
 
+    def get_joint_pool(self, db: Session, phone: str) -> set[str]:
+        """Return the set of phones this phone is fungible with for debt
+        settlement purposes — always includes itself.
+
+        A phone pools with every other HouseholdMember in the same household
+        whose ledger_mode is 'joint'. Everyone else (no household, or
+        ledger_mode 'independent') pools with only themselves. This is
+        deliberately narrower than household_id-based reporting scope: two
+        siblings sharing a household stay financially separate unless both
+        are explicitly marked 'joint' (e.g. two parents running one pooled
+        account) — pooling is opt-in, not implied by shared visibility.
+        """
+        member = db.query(HouseholdMember).filter_by(phone=phone).first()
+        if not member or member.ledger_mode != "joint":
+            return {phone}
+        pool_members = db.query(HouseholdMember).filter_by(
+            household_id=member.household_id, ledger_mode="joint",
+        ).all()
+        return {m.phone for m in pool_members} | {phone}
+
     def balance_update_message(
         self, db: Session, group_jid: str, phone: str, other_phone: str, household_id: str | None,
     ) -> str:
@@ -569,8 +589,8 @@ class AccountService:
         self,
         db: Session,
         group_jid: str,
-        from_phone: str,
-        to_phone: str,
+        from_phone: str | set[str],
+        to_phone: str | set[str],
         household_id: str | None,
     ) -> list[DebtLeg]:
         from app.tools.accounting_fifo import fetch_open_debt_legs
@@ -601,7 +621,16 @@ class AccountService:
         now = datetime.now(timezone.utc)
         all_settlements: list[tuple[str, Decimal]] = []
 
-        same_dir_legs = self._open_debt_legs(db, group_jid, payer_phone, payee_phone, household_id)
+        # Expand both sides to their joint-account pool (see get_joint_pool)
+        # before searching for open debts — a payment named to one joint
+        # member (e.g. "paid mom back") must be able to settle a debt
+        # actually owed to another joint member of the same pool (dad).
+        # For an "independent" person this is a no-op: get_joint_pool
+        # returns just {phone}, matching the pre-existing exact-pair behavior.
+        payer_pool = self.get_joint_pool(db, payer_phone)
+        payee_pool = self.get_joint_pool(db, payee_phone)
+
+        same_dir_legs = self._open_debt_legs(db, group_jid, payer_pool, payee_pool, household_id)
         result = apply_payment(amount_ils, same_dir_legs)
         for leg_id, new_settled in result.updated_legs:
             row = db.get(LedgerEntry, leg_id)
@@ -611,7 +640,7 @@ class AccountService:
         remaining = result.leftover
 
         if remaining > Decimal("0"):
-            reverse_legs = self._open_debt_legs(db, group_jid, payee_phone, payer_phone, household_id)
+            reverse_legs = self._open_debt_legs(db, group_jid, payee_pool, payer_pool, household_id)
             result2 = apply_payment(remaining, reverse_legs)
             for leg_id, new_settled in result2.updated_legs:
                 row = db.get(LedgerEntry, leg_id)
