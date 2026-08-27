@@ -186,12 +186,23 @@ def _sync_participants_to_accounts(db, group_jid: str, group_type: str) -> None:
         group_jid=group_jid, status="active"
     ).all()
     phones = [p.phone for p in participants]
-    role = "owner" if len(phones) == 1 else "member"
+    is_sole_participant = len(phones) == 1
+    role = "owner" if is_sole_participant else "member"
     for phone in phones:
         existing = db.query(UserAccount).filter_by(phone=phone, group_jid=group_jid).first()
         if not existing:
             db.add(UserAccount(phone=phone, group_jid=group_jid, role=role))
-        if group_type == "personal":
+        # private_group_jid means "the stable 1:1 group for this person" —
+        # resolve_inbound trusts it unconditionally and checks it BEFORE the
+        # LID-safe known_lid lookup, so linking it to a group with more than
+        # one active participant hijacks every message anyone sends there to
+        # whichever phone got linked first. group_type == "personal" alone
+        # isn't a reliable enough signal for that: an admin can simply forget
+        # to reclassify a group to "shared" once a second person starts
+        # posting in it (confirmed in production — a 6-participant group was
+        # still labeled "personal", silently misrouting the real admin's
+        # messages to an unrelated household member). Require both.
+        if group_type == "personal" and is_sole_participant:
             # Auto-link HouseholdMember.private_group_jid (household-enrolled users)
             member = db.query(HouseholdMember).filter_by(phone=phone).first()
             if member and member.private_group_jid is None:

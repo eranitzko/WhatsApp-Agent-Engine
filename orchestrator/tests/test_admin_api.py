@@ -878,6 +878,52 @@ def test_approve_registration_autolinks_household_member(db):
     verify.close()
 
 
+def test_approve_registration_personal_with_multiple_participants_does_not_autolink(db):
+    """Regression: a group registered/approved as group_type='personal' but
+    that actually has MORE THAN ONE active participant must never auto-link
+    private_group_jid for any of them. _sync_participants_to_accounts already
+    computes len(phones) for the owner/member role split one line above the
+    auto-link block — this reuses that same fact rather than blindly trusting
+    group_type, since an admin can simply forget to reclassify a group from
+    'personal' to 'shared' once a second person starts posting in it (the
+    documented remediation in test_update_group_type). Confirmed in production:
+    a 6-participant invoice_curator group was still labeled 'personal', and
+    one participant's HouseholdMember row had private_group_jid silently
+    pointed at that shared group — which made resolve_inbound's household_member
+    lookup (checked before the LID-safe known_lid lookup) hijack every message
+    in that group to the wrong phone, including the real admin's."""
+    from app.db.models import UserAccount, GroupParticipant
+    seed_blueprint(db, id="fa", display_name="FA")
+    seed_group(db, "sharedbutlabeledpersonal@g.us", blueprint_id="fa",
+               group_type="unregistered", status="active")
+    db.add(GroupParticipant(group_jid="sharedbutlabeledpersonal@g.us", phone="972501112223", status="active"))
+    db.add(GroupParticipant(group_jid="sharedbutlabeledpersonal@g.us", phone="972501112224", status="active"))
+    h = Household(name="Family")
+    db.add(h)
+    db.flush()
+    m = HouseholdMember(household_id=h.id, phone="972501112223", private_group_jid=None)
+    db.add(m)
+    db.commit()
+
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    from unittest.mock import AsyncMock
+    import app.bridge_client as _bc_mod
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)), \
+         patch.object(_bc_mod, "send_message", new=AsyncMock()):
+        client = TestClient(app)
+        resp = client.post(
+            "/admin/api/people/pending/sharedbutlabeledpersonal%40g.us/approve",
+            json={"group_type": "personal"},
+        )
+        assert resp.status_code == 200
+
+    verify = Session()
+    linked = verify.query(HouseholdMember).filter_by(phone="972501112223").first()
+    assert linked.private_group_jid is None
+    verify.close()
+
+
 def test_approve_registration_shared_sets_shared_ledger_default_on(db):
     from app.db.models import GroupParticipant
     seed_blueprint(db, id="fa", display_name="FA")
