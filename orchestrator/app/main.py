@@ -20,7 +20,7 @@ from app.command_handler import CommandHandler
 from app.agent.context import ContextStore
 from app.agent.confirmation import confirmation_store
 from app.agent.multi_confirmation import multi_confirmation_store
-from app.db.models import GroupParticipant, SplitTransaction, AdminNumbers
+from app.db.models import GroupParticipant, SplitTransaction, AdminNumbers, GroupConfig
 from app.accounting.account_service import AccountService
 from app.accounting.group_registration import GroupRegistrationHandler
 from app.participants import build_participant_block
@@ -481,6 +481,8 @@ async def _process(payload: WebhookPayload) -> None:
             db.query(AdminNumbers).filter_by(phone_number=_acl_phone).first() is not None
         )
 
+        language_directive = _build_language_directive(db, entry.blueprint_id, payload.jid)
+
         reply = await agent_runner.run(
             blueprint=blueprint,
             group_jid=payload.jid,
@@ -493,6 +495,7 @@ async def _process(payload: WebhookPayload) -> None:
             custom_instructions=entry.custom_instructions,
             participant_block=participant_block,
             resolved_phone=_inbound_phone,
+            language_directive=language_directive,
         )
         await _send(payload.jid, reply)
     except Exception as exc:
@@ -508,6 +511,30 @@ async def _process(payload: WebhookPayload) -> None:
     finally:
         db.close()
         group_lock.release()
+
+
+def _build_language_directive(db, blueprint_id: str, group_jid: str) -> str | None:
+    """invoice_curator's system prompt says "respond in the group's
+    configured language" but was never actually TOLD that value anywhere in
+    its context — the model had no way to comply and was effectively just
+    guessing/mirroring the incoming message's own language instead. Surface
+    the real GroupConfig value explicitly so it can actually follow its own
+    instruction, while still allowing an explicit one-off override.
+
+    Only invoice_curator has this per-group setting today (family_accounting's
+    prompt just mirrors the sender's own language, which needs no lookup).
+    """
+    if blueprint_id != "invoice_curator":
+        return None
+    cfg = db.get(GroupConfig, group_jid)
+    lang = cfg.feedback_language if cfg else "en"
+    lang_name = "Hebrew" if lang == "he" else "English"
+    return (
+        f"This group's configured reply language is {lang_name} ({lang}). "
+        "Respond in this language by default. If the user's current message "
+        "explicitly asks for a different language just for this reply, honor "
+        "that instead, and mention update_config can make it permanent."
+    )
 
 
 def _pipeline_result_to_message(result: dict) -> str:

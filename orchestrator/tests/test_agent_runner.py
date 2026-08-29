@@ -164,6 +164,48 @@ async def test_admin_gets_no_unavailable_tools_notice(registry_with_admin_tool, 
 
 
 @pytest.mark.asyncio
+async def test_language_directive_appears_in_system_blocks_when_given(registry, context, confirmation_store):
+    """Regression: invoice_curator's prompt says 'respond in the group's
+    configured language' but nothing ever told the model what that value
+    actually was — it had no way to comply and was effectively just
+    mirroring the incoming message's language instead. main.py now computes
+    a directive from the real GroupConfig value and passes it through."""
+    client = AsyncMock()
+    client.messages.create = AsyncMock(return_value=make_end_turn_response("Sure."))
+    runner = AgentRunner(client, registry)
+    await runner.run(
+        blueprint=BLUEPRINT,
+        group_jid="123@g.us",
+        sender="user@s.whatsapp.net",
+        is_admin=False,
+        message="hello",
+        context=context,
+        confirmation_store=confirmation_store,
+        language_directive="This group's configured reply language is Hebrew (he).",
+    )
+    system_blocks = client.messages.create.call_args.kwargs["system"]
+    assert any("configured reply language is Hebrew" in b["text"] for b in system_blocks)
+
+
+@pytest.mark.asyncio
+async def test_no_language_directive_block_when_not_given(registry, context, confirmation_store):
+    client = AsyncMock()
+    client.messages.create = AsyncMock(return_value=make_end_turn_response("Sure."))
+    runner = AgentRunner(client, registry)
+    await runner.run(
+        blueprint=BLUEPRINT,
+        group_jid="123@g.us",
+        sender="user@s.whatsapp.net",
+        is_admin=False,
+        message="hello",
+        context=context,
+        confirmation_store=confirmation_store,
+    )
+    system_blocks = client.messages.create.call_args.kwargs["system"]
+    assert not any("configured reply language" in b["text"] for b in system_blocks)
+
+
+@pytest.mark.asyncio
 async def test_run_persists_history(registry, context, confirmation_store):
     client = AsyncMock()
     client.messages.create = AsyncMock(return_value=make_end_turn_response("Done."))
