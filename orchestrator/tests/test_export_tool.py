@@ -447,7 +447,7 @@ def test_accounting_generator_build_pdf_returns_bytes():
 
 # ── export_report tool tests ──────────────────────────────────────────────────
 
-from app.db.models import Blueprint, GroupRegistry
+from app.db.models import Blueprint, GroupRegistry, ReportFormat
 
 
 def _seed_bp_group(db, blueprint_id: str, group_jid: str = "123@g.us"):
@@ -655,6 +655,113 @@ async def test_export_report_invoice_pdf_language_override_passed_through(db):
         )
 
     assert mock_gen.build_pdf.call_args.kwargs["language"] == "he"
+
+
+@pytest.mark.asyncio
+async def test_export_invoice_report_language_persists_as_new_default(db):
+    """An explicit language on a report request is no longer just a one-off —
+    it becomes the new default for future reports too, so an admin doesn't
+    have to separately call update_config to make it stick. The generator
+    itself stays side-effect-free (see
+    test_invoice_generator_build_pdf_language_override_ignores_group_config);
+    this persistence belongs at the orchestration layer instead."""
+    from app.db.models import GroupConfig
+    _seed_bp_group(db, "invoice_curator")
+    db.add(GroupConfig(group_id="123@g.us", feedback_language="en"))
+    db.commit()
+    from app.export.tool import _exec_export_report
+
+    mock_gen = MagicMock()
+    mock_gen.build_pdf.return_value = (b"pdf", "invoices_May_2026.pdf")
+
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)), \
+         patch("app.export.tool.InvoiceGenerator", return_value=mock_gen), \
+         patch("app.export.tool.deliver_files", AsyncMock()):
+        await _exec_export_report(
+            {"format": "pdf", "delivery": "group", "language": "he"},
+            group_jid="123@g.us", is_admin=True,
+        )
+
+    cfg = db.query(GroupConfig).filter_by(group_id="123@g.us").first()
+    assert cfg.feedback_language == "he"
+
+
+@pytest.mark.asyncio
+async def test_export_invoice_report_no_language_leaves_default_untouched(db):
+    from app.db.models import GroupConfig
+    _seed_bp_group(db, "invoice_curator")
+    db.add(GroupConfig(group_id="123@g.us", feedback_language="en"))
+    db.commit()
+    from app.export.tool import _exec_export_report
+
+    mock_gen = MagicMock()
+    mock_gen.build_pdf.return_value = (b"pdf", "invoices_May_2026.pdf")
+
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)), \
+         patch("app.export.tool.InvoiceGenerator", return_value=mock_gen), \
+         patch("app.export.tool.deliver_files", AsyncMock()):
+        await _exec_export_report(
+            {"format": "pdf", "delivery": "group"},
+            group_jid="123@g.us", is_admin=True,
+        )
+
+    cfg = db.query(GroupConfig).filter_by(group_id="123@g.us").first()
+    assert cfg.feedback_language == "en"
+
+
+@pytest.mark.asyncio
+async def test_export_accounting_report_language_persists_to_default_report_format(db):
+    """Same policy for family_accounting — an explicit language on a report
+    request becomes the new saved 'default' ReportFormat, without an
+    admin needing to separately call create_report_format."""
+    _seed_bp_group(db, "family_accounting")
+    from app.export.tool import _exec_export_report
+
+    mock_gen = MagicMock()
+    mock_gen.build_pdf.return_value = (b"pdf", "ledger.pdf")
+
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)), \
+         patch("app.export.tool.AccountingGenerator", return_value=mock_gen), \
+         patch("app.export.tool.deliver_files", AsyncMock()):
+        await _exec_export_report(
+            {"format": "pdf", "delivery": "group", "language": "he"},
+            group_jid="123@g.us", is_admin=True,
+        )
+
+    saved = db.query(ReportFormat).filter_by(group_jid="123@g.us", name="default").first()
+    assert saved is not None
+    assert saved.config()["language"] == "he"
+
+
+@pytest.mark.asyncio
+async def test_export_accounting_report_language_persist_preserves_other_saved_fields(db):
+    """Persisting the new language must merge into an existing 'default'
+    format, not clobber other fields an admin already customized via
+    create_report_format (grouping, sections, etc.)."""
+    import json
+    _seed_bp_group(db, "family_accounting")
+    db.add(ReportFormat(group_jid="123@g.us", name="default", config_json=json.dumps({
+        "language": "en", "grouping": "by_person", "sections": ["balances"],
+    })))
+    db.commit()
+    from app.export.tool import _exec_export_report
+
+    mock_gen = MagicMock()
+    mock_gen.build_pdf.return_value = (b"pdf", "ledger.pdf")
+
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)), \
+         patch("app.export.tool.AccountingGenerator", return_value=mock_gen), \
+         patch("app.export.tool.deliver_files", AsyncMock()):
+        await _exec_export_report(
+            {"format": "pdf", "delivery": "group", "language": "he"},
+            group_jid="123@g.us", is_admin=True,
+        )
+
+    saved = db.query(ReportFormat).filter_by(group_jid="123@g.us", name="default").first()
+    config = saved.config()
+    assert config["language"] == "he"
+    assert config["grouping"] == "by_person"
+    assert config["sections"] == ["balances"]
 
 
 def test_export_accounting_report_has_no_invoice_params():

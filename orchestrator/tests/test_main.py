@@ -1,32 +1,6 @@
 """Tests for app/main.py's pipeline-result-to-WhatsApp-message conversion."""
 
-from app.main import _pipeline_result_to_message, _build_language_directive
-
-
-def test_language_directive_none_for_non_invoice_curator_blueprint(db):
-    directive = _build_language_directive(db, "family_accounting", "123@g.us")
-    assert directive is None
-
-
-def test_language_directive_reflects_configured_hebrew(db):
-    """Regression: the invoice_curator prompt says 'respond in the group's
-    configured language' but the model was never told what that value
-    actually was anywhere in its context — it had no way to comply."""
-    from app.db.models import GroupConfig
-    db.add(GroupConfig(group_id="123@g.us", feedback_language="he"))
-    db.commit()
-
-    directive = _build_language_directive(db, "invoice_curator", "123@g.us")
-    assert "Hebrew" in directive
-    assert "(he)" in directive
-    # Must also allow an explicit one-off override, not just state the default.
-    assert "explicitly asks for a different language" in directive
-
-
-def test_language_directive_defaults_to_english_when_no_config_row(db):
-    directive = _build_language_directive(db, "invoice_curator", "no-config@g.us")
-    assert "English" in directive
-    assert "(en)" in directive
+from app.main import _pipeline_result_to_message
 
 
 def test_new_invoice_message_includes_extracted_fields():

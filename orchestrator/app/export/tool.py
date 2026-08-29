@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from app.db.session import SessionLocal
@@ -48,6 +49,34 @@ def _load_report_format(group_jid: str, db) -> dict:
     return row.config() if row else {}
 
 
+def _persist_language_default(blueprint_id: str, group_jid: str, language: str) -> None:
+    """An explicit language on a report request becomes the new default for
+    future reports too, instead of a one-off that has to be repeated every
+    time or separately saved via update_config/create_report_format. Merges
+    into whatever's already saved rather than overwriting it, so an admin's
+    other customizations (grouping, sections, header, ...) survive."""
+    from app.db.models import GroupConfig, ReportFormat
+    with SessionLocal() as db:
+        if blueprint_id == "invoice_curator":
+            cfg = db.get(GroupConfig, group_jid)
+            if cfg is None:
+                cfg = GroupConfig(group_id=group_jid)
+                db.add(cfg)
+            cfg.feedback_language = language
+        elif blueprint_id == "family_accounting":
+            existing = db.query(ReportFormat).filter_by(group_jid=group_jid, name="default").first()
+            if existing:
+                config = existing.config()
+                config["language"] = language
+                existing.config_json = json.dumps(config)
+            else:
+                db.add(ReportFormat(
+                    group_jid=group_jid, name="default",
+                    config_json=json.dumps({"language": language}),
+                ))
+        db.commit()
+
+
 async def _exec_export_report(params: dict, **ctx) -> str:
     from app.utils.phone import resolve_sender_phone
     group_jid: str = ctx.get("group_jid", "")
@@ -79,6 +108,14 @@ async def _exec_export_report(params: dict, **ctx) -> str:
     custom_subject = params.get("subject", "").strip()
     custom_body = params.get("body", "").strip()
     language = params.get("language", "").strip()
+
+    # Only an admin's request should change the group-wide default — a
+    # regular family_accounting member's one-off report request must not
+    # silently change what everyone else's future reports render in.
+    # export_invoice_report is already fully admin-only (checked above), so
+    # this only actually gates the family_accounting case.
+    if language and is_admin:
+        _persist_language_default(blueprint_id, group_jid, language)
 
     email = _resolve_email(params, sender_phone) if delivery in ("email", "both") else None
     if delivery in ("email", "both") and not email:
@@ -272,11 +309,9 @@ _SCHEMA_INVOICE = {
                 "type": "string",
                 "enum": ["en", "he"],
                 "description": (
-                    "One-off report language override. Optional — uses the group's saved "
-                    "feedback_language (see update_config) if omitted. To make a language "
-                    "change persist across future reports, use "
-                    "update_config(key='language', value=...) instead of repeating this "
-                    "on every call."
+                    "Report language. Optional — uses the group's saved feedback_language "
+                    "if omitted. Passing this becomes the new saved default for future "
+                    "reports too (admin only) — no separate update_config call needed."
                 ),
             },
             "subject": {
@@ -325,11 +360,10 @@ _SCHEMA_ACCOUNTING = {
                 "type": "string",
                 "enum": ["en", "he"],
                 "description": (
-                    "One-off report language override. Optional — uses the group's saved "
-                    "report format (see create_report_format) if omitted. To make a language "
-                    "change persist across future reports, save it with "
-                    "create_report_format(name='default', language=...) instead of repeating "
-                    "this on every call."
+                    "Report language. Optional — uses the group's saved report format if "
+                    "omitted. When the requester is an admin, passing this becomes the new "
+                    "saved 'default' format for future reports too — no separate "
+                    "create_report_format call needed."
                 ),
             },
             "subject": {

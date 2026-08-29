@@ -78,7 +78,6 @@ class AgentRunner:
         custom_instructions: str | None = None,
         participant_block: str | None = None,
         resolved_phone: str | None = None,
-        language_directive: str | None = None,
     ) -> str:
         start_ms = time.monotonic()
         allowed_tools = blueprint.tools_list()
@@ -171,8 +170,6 @@ class AgentRunner:
             "type": "text",
             "text": f"Today's date: {datetime.now(timezone.utc).date()}. Sender is_admin: {is_admin}. Sender phone: {sender_phone}.",
         })
-        if language_directive:
-            system.append({"type": "text", "text": language_directive})
         if not is_admin:
             # Named per-call, not just implied by a static blueprint-wide
             # instruction — a non-admin's reduced toolset was observed to
