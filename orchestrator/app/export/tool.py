@@ -109,12 +109,14 @@ async def _exec_export_report(params: dict, **ctx) -> str:
     custom_body = params.get("body", "").strip()
     language = params.get("language", "").strip()
 
-    # Only an admin's request should change the group-wide default — a
-    # regular family_accounting member's one-off report request must not
-    # silently change what everyone else's future reports render in.
-    # export_invoice_report is already fully admin-only (checked above), so
-    # this only actually gates the family_accounting case.
-    if language and is_admin:
+    # No is_admin gate here: is_admin is a GLOBAL flag (AdminNumbers table),
+    # not "owns this particular group" — a regular family_accounting member
+    # is not in that table even in their own private group, but
+    # export_accounting_report already lets them manage their own ledger
+    # regardless (filter_phone scopes the data below). The persisted
+    # ReportFormat is keyed to the caller's OWN group_jid, never someone
+    # else's, so there's no cross-person risk in letting anyone set it.
+    if language:
         _persist_language_default(blueprint_id, group_jid, language)
 
     email = _resolve_email(params, sender_phone) if delivery in ("email", "both") else None

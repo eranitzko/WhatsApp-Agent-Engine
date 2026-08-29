@@ -734,6 +734,33 @@ async def test_export_accounting_report_language_persists_to_default_report_form
 
 
 @pytest.mark.asyncio
+async def test_export_accounting_report_non_admin_language_also_persists(db):
+    """is_admin is a GLOBAL flag (AdminNumbers table), not "owns this
+    particular group" — a regular household member isn't in that table even
+    in their own private group, but export_accounting_report already lets
+    them manage their own ledger regardless. The persisted ReportFormat is
+    keyed to the caller's OWN group_jid, never someone else's, so a non-admin
+    setting their own report's language must also stick."""
+    _seed_bp_group(db, "family_accounting")
+    from app.export.tool import _exec_export_report
+
+    mock_gen = MagicMock()
+    mock_gen.build_pdf.return_value = (b"pdf", "ledger.pdf")
+
+    with patch("app.export.tool.SessionLocal", return_value=SessionCM(db)), \
+         patch("app.export.tool.AccountingGenerator", return_value=mock_gen), \
+         patch("app.export.tool.deliver_files", AsyncMock()):
+        await _exec_export_report(
+            {"format": "pdf", "delivery": "group", "language": "he"},
+            group_jid="123@g.us", is_admin=False, sender="972500000102@s.whatsapp.net",
+        )
+
+    saved = db.query(ReportFormat).filter_by(group_jid="123@g.us", name="default").first()
+    assert saved is not None
+    assert saved.config()["language"] == "he"
+
+
+@pytest.mark.asyncio
 async def test_export_accounting_report_language_persist_preserves_other_saved_fields(db):
     """Persisting the new language must merge into an existing 'default'
     format, not clobber other fields an admin already customized via
