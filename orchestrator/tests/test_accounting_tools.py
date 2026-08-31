@@ -123,6 +123,67 @@ async def test_get_balance_shows_debt(db):
 
 
 @pytest.mark.asyncio
+async def test_get_balance_combines_shared_ledger_pool_when_asked_from_a_different_group(db):
+    """Regression: a household member's 'list my balances' view must combine
+    a joint-ledger pool's separate debts into one 'Parents' line even when
+    asked from a THIRD group (e.g. the debtor's own personal group) — not
+    just when asked from the shared group itself. The previous
+    _joint_pool_phones_from_db(group_jid)-based bucketing only ever saw a
+    pool when group_jid WAS the shared group; get_joint_pool(partner) is
+    cross-group and must be used instead."""
+    import app.tools.accounting_tools as at_module
+    from app.accounting.account_service import AccountService
+    from app.db.models import GroupParticipant, GroupRegistry, UserProfile
+    from tests.conftest import seed_blueprint, seed_group
+
+    seed_blueprint(db, id="family_accounting", display_name="FA")
+
+    # The shared parents' group — Eran (dad) and Sivan (mom) pool together.
+    seed_group(db, "parents_shared@g.us", blueprint_id="family_accounting",
+               group_type="shared", shared_ledger=True)
+    db.add(GroupParticipant(group_jid="parents_shared@g.us", phone="eran_lid", status="active"))
+    db.add(GroupParticipant(group_jid="parents_shared@g.us", phone="sivan_lid", status="active"))
+    db.add(UserProfile(phone="972500000001", display_name="Eran", known_lid="eran_lid"))
+    db.add(UserProfile(phone="972500000002", display_name="Sivan", known_lid="sivan_lid"))
+
+    # Roni's OWN, unrelated personal group — this is where she's asking from.
+    seed_group(db, "roni_own@g.us", blueprint_id="family_accounting", group_type="personal")
+
+    db.add(LedgerEntry(
+        transaction_id="t1", group_jid="roni_own@g.us",
+        from_phone="972500000003", to_phone="972500000001",
+        amount_ils=Decimal("500"), amount_settled_ils=Decimal("0"),
+        description="shoes", transaction_date=date.today(),
+    ))
+    db.add(LedgerEntry(
+        transaction_id="t2", group_jid="roni_own@g.us",
+        from_phone="972500000003", to_phone="972500000002",
+        amount_ils=Decimal("350"), amount_settled_ils=Decimal("0"),
+        description="clothes", transaction_date=date.today(),
+    ))
+    db.commit()
+
+    at_module.set_account_service(AccountService())
+    try:
+        with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):
+            tools = get_accounting_tools()
+            result = await tools["get_balance"]["executor"](
+                {"phone_a": "972500000003"},
+                group_jid="roni_own@g.us",
+                sender="972500000003@s.whatsapp.net",
+                is_admin=True,
+                confirmation_store=None,
+            )
+    finally:
+        at_module.set_account_service(None)
+
+    assert "Parents" in result
+    assert "850.00" in result
+    # Must NOT list Eran and Sivan as two separate lines.
+    assert result.count("owe") == 1
+
+
+@pytest.mark.asyncio
 async def test_set_reminder_creates_scheduled_message(db):
     future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     with patch("app.tools.accounting_tools.SessionLocal", return_value=SessionCM(db)):

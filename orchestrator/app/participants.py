@@ -81,7 +81,7 @@ def build_participant_block(db: Session, group_jid: str) -> str | None:
     else:
         block = "Family members in this group: (none recorded)"
 
-    from app.db.models import GroupRegistry
+    from app.db.models import GroupRegistry, HouseholdMember
 
     reg = db.get(GroupRegistry, group_jid)
     is_shared_ledger_group = bool(
@@ -161,5 +161,49 @@ def build_participant_block(db: Session, group_jid: str) -> str | None:
         block += "\n\nKnown counterparties (other registered users):\n" + "\n".join(known_lines)
     elif not rows:
         return None  # truly nothing to show
+
+    # Sibling hint: household co-members who are NOT part of a shared-ledger
+    # pool are each other's siblings for name-resolution purposes (e.g. "my
+    # sister Roni", "אחי טל"). This isn't derivable from the group's own
+    # participant list alone — siblings each have SEPARATE personal groups —
+    # so without this hint the model has no signal for sibling references
+    # the way it does for parent references (the "Shared household" note
+    # above). Scoped to whichever household(s) this group's own participants
+    # belong to.
+    canonical_group_phones = {lid_to_canonical.get(r.phone, r.phone) for r in rows} | {r.phone for r in rows}
+    household_ids = {
+        m.household_id for m in
+        db.query(HouseholdMember).filter(HouseholdMember.phone.in_(canonical_group_phones)).all()
+    }
+    if household_ids:
+        pooled_phones = {
+            lid_to_canonical.get(gp.phone, gp.phone) for gp in
+            db.query(GroupParticipant)
+            .join(GroupRegistry, GroupRegistry.group_jid == GroupParticipant.group_jid)
+            .filter(
+                GroupRegistry.blueprint_id == "family_accounting",
+                GroupRegistry.group_type == "shared",
+                GroupRegistry.shared_ledger.is_(True),
+                GroupParticipant.status == "active",
+            )
+            .all()
+        }
+        sibling_names: list[str] = []
+        for hh_id in household_ids:
+            for m in db.query(HouseholdMember).filter_by(household_id=hh_id).all():
+                if m.phone in pooled_phones:
+                    continue
+                name = m.display_name or m.phone
+                if name not in sibling_names:
+                    sibling_names.append(name)
+        if len(sibling_names) >= 2:
+            block += (
+                f"\n\nSiblings in the household: {', '.join(sibling_names)}. "
+                f"When a message refers to a sibling by relationship "
+                f"('my brother', 'my sister', 'אחי', 'אחותי', etc.) instead "
+                f"of by name, resolve it against this list using context — "
+                f"the same way you already resolve 'mom'/'dad' for the "
+                f"shared account holders above."
+            )
 
     return block

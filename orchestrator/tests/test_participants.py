@@ -221,6 +221,72 @@ def test_build_participant_block_shared_ledger_false_no_shared_note(db):
     assert "share a single account" not in block
 
 
+def test_build_participant_block_lists_siblings(db):
+    """A group asking about someone (e.g. a kid's own personal group) must
+    surface who their non-pooled household co-members are, so references
+    like 'my sister Roni' / 'אחי טל' resolve as reliably as 'mom'/'dad' do
+    for the pooled parents — this info isn't derivable from the group's own
+    participant list alone, since siblings each have SEPARATE groups."""
+    from app.db.models import Household, HouseholdMember
+
+    seed_blueprint(db, id="family_accounting", display_name="FA")
+    _seed_group_shared(db, "roni_own@g.us", blueprint_id="family_accounting", group_type="personal")
+    db.add(GroupParticipant(group_jid="roni_own@g.us", phone="972501111111", push_name="Roni", status="active"))
+    db.commit()
+
+    h = Household(name="Test Family")
+    db.add(h)
+    db.flush()
+    db.add(HouseholdMember(household_id=h.id, phone="972501111111", display_name="Roni"))
+    db.add(HouseholdMember(household_id=h.id, phone="972502222222", display_name="Tal"))
+    db.add(HouseholdMember(household_id=h.id, phone="972503333333", display_name="Omer"))
+    db.commit()
+
+    block = build_participant_block(db, "roni_own@g.us")
+    assert block is not None
+    assert "Tal" in block
+    assert "Omer" in block
+    assert "sibling" in block.lower()
+
+
+def test_build_participant_block_siblings_exclude_shared_ledger_pool_members(db):
+    """Parents pooled in a shared-ledger group must NOT be listed as
+    'siblings' of the kids, even though they're in the same household."""
+    from app.db.models import Household, HouseholdMember, GroupRegistry
+
+    seed_blueprint(db, id="family_accounting", display_name="FA")
+    _seed_group_shared(db, "kid_own@g.us", blueprint_id="family_accounting", group_type="personal")
+    db.add(GroupParticipant(group_jid="kid_own@g.us", phone="972501111111", push_name="Tal", status="active"))
+
+    _seed_group_shared(db, "parents_shared_x@g.us", blueprint_id="family_accounting",
+                        group_type="shared", shared_ledger=True)
+    db.add(GroupParticipant(group_jid="parents_shared_x@g.us", phone="972504444444", push_name="Dad", status="active"))
+    db.add(GroupParticipant(group_jid="parents_shared_x@g.us", phone="972505555555", push_name="Mom", status="active"))
+    db.commit()
+
+    h = Household(name="Test Family")
+    db.add(h)
+    db.flush()
+    db.add(HouseholdMember(household_id=h.id, phone="972501111111", display_name="Tal"))
+    db.add(HouseholdMember(household_id=h.id, phone="972502222222", display_name="Omer"))
+    db.add(HouseholdMember(household_id=h.id, phone="972504444444", display_name="Dad"))
+    db.add(HouseholdMember(household_id=h.id, phone="972505555555", display_name="Mom"))
+    db.commit()
+
+    block = build_participant_block(db, "kid_own@g.us")
+    assert block is not None
+    assert "Omer" in block
+    # Dad/Mom run the pooled account — not "siblings". They may still
+    # legitimately appear elsewhere in the block (the shared-household
+    # note), so isolate just the sibling section before checking.
+    lower = block.lower()
+    idx = lower.find("sibling")
+    assert idx != -1
+    sibling_section = block[idx:]
+    assert "Dad" not in sibling_section
+    assert "Mom" not in sibling_section
+
+
 def test_build_participant_block_removed_included(db):
     seed_blueprint(db, id="fa", display_name="FA")
     _seed_group_shared(db, "456@g.us", blueprint_id="fa")

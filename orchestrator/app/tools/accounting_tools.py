@@ -633,18 +633,29 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
             owed = sum(_net_owed(db, group_jid, cp, from_phone, household_id) for cp in to_phones)
             return owes - owed
 
-        household = _joint_pool_phones_from_db(db, group_jid)
         names = _phone_to_name_from_db(db, group_jid)
 
         def label(phone: str) -> str:
             return names.get(phone, phone)
 
+        # Cross-group joint-ledger pool for each side, via AccountService
+        # (not the group-scoped _joint_pool_phones_from_db, which only ever
+        # sees a pool when group_jid IS the shared group itself).
+        # get_joint_pool resolves a person's pool
+        # regardless of which group is asking, so a partner who runs a
+        # pooled account elsewhere still combines correctly here.
+        def joint_pool(phone: str) -> set[str]:
+            return _account_service.get_joint_pool(db, phone) if _account_service else {phone}
+
+        pool_a = joint_pool(phone_a)
+
         if phone_b:
-            if phone_a in household and phone_b in household:
+            pool_b = joint_pool(phone_b)
+            if phone_b in pool_a:
                 return f"{label(phone_a)} and {label(phone_b)} share a household — no debt tracked between them."
-            counterparts_a = household if phone_b in household else {phone_b}
-            counterparts_b = household if phone_a in household else {phone_a}
-            net = net_vs_group(phone_a, counterparts_a) if phone_a not in household \
+            counterparts_a = pool_b if len(pool_b) > 1 else {phone_b}
+            counterparts_b = pool_a if len(pool_a) > 1 else {phone_a}
+            net = net_vs_group(phone_a, counterparts_a) if len(pool_a) == 1 \
                 else -net_vs_group(phone_b, counterparts_b)
             la, lb = label(phone_a), label(phone_b)
             result = net_pair(la, lb, net)
@@ -664,30 +675,35 @@ async def _exec_get_balance(params: dict, **ctx) -> str:
 
         all_partners = {r.from_phone if r.to_phone == phone_a else r.to_phone for r in rows}
         all_partners.discard(phone_a)
-        if phone_a in household:
-            all_partners -= household
-        household_partners = all_partners & household
-        individual_partners = sorted(all_partners - household)
+        all_partners -= pool_a  # no debt tracked between pool-mates
+
+        la = label(phone_a)
         lines = []
-        if household_partners and phone_a not in household:
-            la = label(phone_a)
-            result = net_pair(la, "Parents", net_vs_group(phone_a, household_partners))
-            if result is not None:
-                debtor, creditor, amount = result
-                # "Parents" is a plural label -> "Parents owe", but any other
-                # (individual) debtor takes the singular "owes" — preserve
-                # both original phrasings depending on which side nets debtor.
-                verb = "owes" if debtor == la else "owe"
-                lines.append(f"{debtor} {verb} {creditor}: {amount:.2f} ILS")
-        for partner in individual_partners:
-            a_owes = _net_owed(db, group_jid, phone_a, partner, household_id)
-            p_owes = _net_owed(db, group_jid, partner, phone_a, household_id)
-            la, lp = label(phone_a), label(partner)
-            result = net_pair(la, lp, a_owes - p_owes)
-            if result is not None:
-                debtor, creditor, amount = result
-                lines.append(f"{debtor} owes {creditor}: {amount:.2f} ILS")
-        return "\n".join(lines) if lines else f"No open balances for {label(phone_a)}."
+        seen: set[str] = set()
+        for partner in sorted(all_partners):
+            if partner in seen:
+                continue
+            partner_pool = (joint_pool(partner) & all_partners) - pool_a
+            seen |= partner_pool
+            if len(partner_pool) > 1:
+                result = net_pair(la, "Parents", net_vs_group(phone_a, partner_pool))
+                if result is not None:
+                    debtor, creditor, amount = result
+                    # "Parents" is a plural label -> "Parents owe", but any
+                    # other (individual) debtor takes the singular "owes" —
+                    # preserve both phrasings depending on which side nets
+                    # debtor.
+                    verb = "owes" if debtor == la else "owe"
+                    lines.append(f"{debtor} {verb} {creditor}: {amount:.2f} ILS")
+            else:
+                a_owes = _net_owed(db, group_jid, phone_a, partner, household_id)
+                p_owes = _net_owed(db, group_jid, partner, phone_a, household_id)
+                lp = label(partner)
+                result = net_pair(la, lp, a_owes - p_owes)
+                if result is not None:
+                    debtor, creditor, amount = result
+                    lines.append(f"{debtor} owes {creditor}: {amount:.2f} ILS")
+        return "\n".join(lines) if lines else f"No open balances for {la}."
 
 
 async def _exec_get_debt_summary(params: dict, **ctx) -> str:
