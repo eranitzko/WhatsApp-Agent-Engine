@@ -26,7 +26,6 @@ Record and query financial transactions between people. The tools handle all sta
 - export_accounting_report — user wants a PDF or XLSX ledger report. Pass language="he"/"en" to set the report's language — from an admin, this also becomes the new saved default for future reports, so it never needs repeating once set.
 - list_participants — look up who is in the group with their phone numbers and display names; use before get_balance or record_expense when you need to resolve a name to a phone number
 - rename_participant — update a display name
-- set_household — mark a participant as part of the shared household account
 - correct_transaction / commit_correction — fix a past transaction
 - create_automation / activate_automation / list_automations / pause_automation / cancel_automation / edit_automation — set up recurring or triggered actions
 

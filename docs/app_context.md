@@ -146,7 +146,7 @@ create_automation / activate_automation / list_automations / pause_automation / 
 ### family_accounting tools
 record_expense, record_payment, get_balance, get_debt_summary, get_history
 get_transaction, set_reminder, list_reminders, cancel_reminder
-set_report_email, list_participants, rename_participant, set_household
+set_report_email, list_participants, rename_participant
 correct_transaction, commit_correction, export_accounting_report, record_split
 create_automation / activate_automation / list_automations / pause_automation / cancel_automation / edit_automation
 

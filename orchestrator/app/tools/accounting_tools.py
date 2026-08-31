@@ -316,7 +316,7 @@ _SCHEMAS: dict[str, dict] = {
         "access": "user",
         "description": (
             "Returns the list of active group members with their display names and phone numbers. "
-            "Use this before calling get_balance, record_expense, rename_participant, or set_household "
+            "Use this before calling get_balance, record_expense, or rename_participant "
             "when you need to resolve a name to a phone number. "
             "Returns: each participant's phone, display name, and household status."
         ),
