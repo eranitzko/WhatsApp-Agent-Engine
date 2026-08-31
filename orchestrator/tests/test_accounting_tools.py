@@ -24,6 +24,15 @@ def test_get_accounting_tools_returns_expected_set():
     assert set(tools.keys()) == set(EXPECTED_TOOLS)
 
 
+def test_list_participants_description_does_not_reference_nonexistent_tool():
+    """set_household was never implemented as a chat tool — GroupParticipant
+    .is_household has no write path today — so the description must not
+    send the agent looking for a tool that doesn't exist in the registry."""
+    tools = get_accounting_tools()
+    description = tools["list_participants"]["schema"]["description"]
+    assert "set_household" not in description
+
+
 def test_each_tool_has_schema_and_executor():
     tools = get_accounting_tools()
     for name, entry in tools.items():
