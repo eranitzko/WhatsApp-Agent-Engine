@@ -9,12 +9,16 @@ from datetime import datetime, timezone, timedelta, date as _date
 from decimal import Decimal
 from sqlalchemy.orm import Session
 
+import anthropic
+
 from app import bridge_client
+from app.config import settings
 from app.db.models import (
     AdminNumbers, CrossGroupConfirmation, GroupRegistry, Household,
     HouseholdMember, LedgerEntry, LedgerSettlement, SplitTransaction,
     UserAccount, UserProfile,
 )
+from app.agent.intent import compose_localized_message
 from app.agent.reply_words import is_affirmative, is_negative
 from app.tools.accounting_fifo import DebtLeg, apply_payment, net_pair
 from app.tools.accounting_tools import _net_owed
@@ -29,6 +33,20 @@ _DEFAULT_CONFIRMATION_TIMEOUT_HOURS = 24
 
 
 class AccountService:
+    # ── AI client (optional) ──────────────────────────────────────────────────
+    # Unset by default so every existing caller/test (which constructs
+    # AccountService() with no args) keeps working with zero behavior change —
+    # localization and free-form reply classification are additive, and
+    # main.py's lifespan wires the real client in via set_client() at startup.
+    def __init__(self, client: "anthropic.AsyncAnthropic | None" = None, model: str | None = None):
+        self._client = client
+        self._model = model or settings.claude_model
+
+    def set_client(self, client: "anthropic.AsyncAnthropic", model: str | None = None) -> None:
+        self._client = client
+        if model:
+            self._model = model
+
     # ── User / group resolution ───────────────────────────────────────────────
 
     def resolve_user(self, db: Session, phone: str) -> UserAccount | None:
@@ -431,6 +449,7 @@ class AccountService:
         action_payload: dict,
         confirmation_message: str,
         split_transaction_id: str | None = None,
+        language_sample: str = "",
     ) -> tuple[CrossGroupConfirmation, bool]:
         """Create a CrossGroupConfirmation and attempt to deliver it to the target.
 
@@ -445,6 +464,16 @@ class AccountService:
         Raises ValueError if the target has no accounting group at all — that's
         a permanent setup problem, not a transient delivery failure, so there's
         nothing to save or retry.
+
+        `confirmation_message` is a hardcoded English template. When an AI
+        client is configured (set_client — production always does this) and
+        `language_sample` is given (e.g. the payer's own display name), the
+        message is rewritten in that language before being sent and stored —
+        otherwise this system-composed prompt stays English regardless of
+        the surrounding conversation's actual language, unlike everything the
+        agent itself says (see family_accounting's "respond in the language
+        of the user's message" instruction, which never applies to this
+        code path since it runs outside any agent turn).
         """
         target_jid = self.get_primary_accounting_group(db, target_phone)
         if not target_jid:
@@ -461,6 +490,14 @@ class AccountService:
         timeout_hours = self._confirmation_timeout_hours(db)
         expires_at = datetime.now(timezone.utc) + timedelta(hours=timeout_hours)
 
+        prompt_text = confirmation_message
+        if self._client is not None and language_sample:
+            prompt_text = await compose_localized_message(
+                self._client, self._model,
+                english_text=confirmation_message,
+                language_sample=language_sample,
+            )
+
         conf = CrossGroupConfirmation(
             split_transaction_id=split_transaction_id,
             initiator_phone=initiator_phone,
@@ -469,6 +506,7 @@ class AccountService:
             target_group_jid=target_jid,
             action_type=action_type,
             action_payload=json.dumps(action_payload),
+            prompt_text=prompt_text,
             status="pending",
             expires_at=expires_at,
             household_id=household_id,
@@ -478,7 +516,7 @@ class AccountService:
 
         delivered = True
         try:
-            await bridge_client.send_message(target_jid, confirmation_message)
+            await bridge_client.send_message(target_jid, prompt_text)
         except Exception:
             logger.exception(
                 "request_confirmation: failed to deliver to %s (%s) — keeping "
@@ -491,15 +529,15 @@ class AccountService:
         db.refresh(conf)
         return conf, delivered
 
-    def handle_confirmation_reply(
+    def _find_pending_confirmation(
         self,
         db: Session,
         group_jid: str,
         phone: str,
-        reply: str,
         household_id: str | None = None,
     ) -> "CrossGroupConfirmation | None":
-        """Update and return the resolved confirmation, or None if none found.
+        """Read-only lookup shared by handle_confirmation_reply (which then
+        mutates status) and describe_pending_confirmation (which doesn't).
 
         Match priority:
         1. (household_id, phone, status=pending) — LID-safe, used when household
@@ -507,9 +545,6 @@ class AccountService:
         2. (phone, group_jid, status=pending) — exact phone+group match.
         3. (group_jid, status=pending) group-only fallback — safe only when
            exactly one pending conf exists for this group.
-
-        Returns the CrossGroupConfirmation with updated status so callers can act
-        on it directly without a second DB query (which would fail on LID mismatch).
         """
         now = datetime.now(timezone.utc)
 
@@ -531,7 +566,7 @@ class AccountService:
                 # must present them sequentially.  Return first (oldest) for now.
                 conf = pending[0]
                 logger.info(
-                    "handle_confirmation_reply: %d pending confs for household=%s phone=%s, "
+                    "_find_pending_confirmation: %d pending confs for household=%s phone=%s, "
                     "resolving oldest first (%s)",
                     len(pending), household_id, phone, conf.id,
                 )
@@ -556,6 +591,43 @@ class AccountService:
             )
             if len(pending_for_group) == 1:
                 conf = pending_for_group[0]
+
+        return conf
+
+    def describe_pending_confirmation(
+        self,
+        db: Session,
+        group_jid: str,
+        phone: str,
+        household_id: str | None = None,
+    ) -> str | None:
+        """Read-only peek at what's pending for this phone/group, if anything.
+
+        Lets a free-form reply that didn't match reply_words' exact word list
+        be given context (via classify_confirmation_reply) or surfaced to the
+        agent, instead of being silently unresolvable the way it was before —
+        the only way to know something was pending used to be the exact-match
+        path itself, which is exactly what a natural reply like "לאשר" fails.
+        """
+        conf = self._find_pending_confirmation(db, group_jid, phone, household_id)
+        return conf.prompt_text if conf else None
+
+    def handle_confirmation_reply(
+        self,
+        db: Session,
+        group_jid: str,
+        phone: str,
+        reply: str,
+        household_id: str | None = None,
+    ) -> "CrossGroupConfirmation | None":
+        """Update and return the resolved confirmation, or None if none found
+        or the reply doesn't clearly resolve it (see _find_pending_confirmation
+        for match priority).
+
+        Returns the CrossGroupConfirmation with updated status so callers can act
+        on it directly without a second DB query (which would fail on LID mismatch).
+        """
+        conf = self._find_pending_confirmation(db, group_jid, phone, household_id)
 
         if conf is None:
             return None
@@ -652,6 +724,7 @@ class AccountService:
                     },
                     confirmation_message=confirm_msg,
                     split_transaction_id=split_transaction_id,
+                    language_sample=payer_name,
                 )
             except ValueError as exc:
                 return str(exc)
@@ -836,6 +909,7 @@ class AccountService:
                         "payment_date": str(payment_date),
                     },
                     confirmation_message=confirm_msg,
+                    language_sample=payer_name,
                 )
             except ValueError as exc:
                 return str(exc)
@@ -1014,6 +1088,7 @@ class AccountService:
                         },
                         confirmation_message=confirm_msg,
                         split_transaction_id=split.id,
+                        language_sample=payer_name,
                     )
                 except ValueError as exc:
                     # Target has no accounting group at all — nothing to save or retry.

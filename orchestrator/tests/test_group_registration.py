@@ -128,3 +128,29 @@ def test_is_pending_reply_recognizes_confirmation_word_used_elsewhere(db):
 
     assert handler.is_pending_reply(db, "admin_g@g.us", "אישור") is True
     assert handler.is_pending_reply(db, "admin_g@g.us", "ביטול") is True
+
+
+def test_get_pending_description_describes_pending_registration(db):
+    """Lets main.py's AI-classification fallback give a free-form reply (one
+    that doesn't exact-match is_pending_reply's word list) context to judge
+    against, instead of the admin's registration approval being silently
+    unresolvable the way an exact-match-only check leaves it."""
+    _seed(db)
+    handler = GroupRegistrationHandler()
+    handler._pending["eden_g@g.us"] = {
+        "human_phones": ["972501"],
+        "group_type": "personal",
+        "sys_admin_jids": ["admin_g@g.us"],
+        "created_at": datetime.now(timezone.utc),
+    }
+
+    desc = handler.get_pending_description("admin_g@g.us")
+    assert desc is not None
+    assert "eden_g@g.us" in desc
+    assert "972501" in desc
+    assert "personal" in desc
+
+
+def test_get_pending_description_returns_none_when_nothing_pending(db):
+    handler = GroupRegistrationHandler()
+    assert handler.get_pending_description("admin_g@g.us") is None

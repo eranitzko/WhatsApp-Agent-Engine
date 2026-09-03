@@ -33,6 +33,7 @@ from app.tools.automation_tools import get_automation_tools
 from app.export.tool import get_export_tools
 from app.utils.phone import resolve_sender_phone
 from app.agent.reply_words import is_affirmative, is_negative
+from app.agent.intent import classify_confirmation_reply
 from app.tools.send_email_tool import get_send_email_tools
 from app.automation.executor import AutomationExecutor
 from app.scheduler import start_scheduler, stop_scheduler, set_automation_executor
@@ -195,6 +196,8 @@ async def lifespan(_app: FastAPI):
     )
     _http_client = httpx.AsyncClient()
 
+    account_service.set_client(anthropic_client, settings.claude_model)
+
     tool_registry.register(get_invoice_tools())
     tool_registry.register(get_accounting_tools())
     set_account_service(account_service)
@@ -349,7 +352,7 @@ async def _process(payload: WebhookPayload) -> None:
 
         # Cross-group confirmation intercept — BEFORE router.resolve so an unregistered
         # counterpart group cannot silently drop a "yes" reply.
-        if is_affirmative(text) or is_negative(text):
+        if is_affirmative(text) or is_negative(text) or text.strip():
             _phone_for_lookup = resolve_sender_phone(
                 {"resolved_phone": _inbound_phone, "sender": payload.sender}
             )
@@ -357,6 +360,30 @@ async def _process(payload: WebhookPayload) -> None:
                 db, payload.jid, _phone_for_lookup, text,
                 household_id=_inbound_household_id,
             )
+            # Exact match (reply_words.py) failed — before falling through to the
+            # normal agent blind to any pending state, ask the model that's
+            # already running everything whether this free-form reply (e.g.
+            # "לאשר" — a completely natural Hebrew "approve" that simply isn't
+            # in the word list) confirms or rejects whatever's pending.
+            if conf is None:
+                pending_desc = account_service.describe_pending_confirmation(
+                    db, payload.jid, _phone_for_lookup, household_id=_inbound_household_id,
+                )
+                if pending_desc:
+                    decision = await classify_confirmation_reply(
+                        agent_runner.client, settings.claude_model,
+                        pending_description=pending_desc, reply_text=text,
+                    )
+                    if decision != "unclear":
+                        canonical = "yes" if decision == "confirm" else "no"
+                        conf = account_service.handle_confirmation_reply(
+                            db, payload.jid, _phone_for_lookup, canonical,
+                            household_id=_inbound_household_id,
+                        )
+                        logger.info(
+                            "free-form reply %r classified as %s for pending confirmation | group=%s",
+                            text, decision, payload.jid,
+                        )
             if conf is not None:
                 logger.info(
                     "yes/no %r claimed by CrossGroupConfirmation intercept | group=%s conf=%s status=%s",
@@ -413,12 +440,22 @@ async def _process(payload: WebhookPayload) -> None:
             return
 
         # Yes/no intercepts — only relevant for registered sys_admin groups
-        if is_affirmative(text) or is_negative(text):
+        if is_affirmative(text) or is_negative(text) or text.strip():
             group_type = account_service.get_group_type(db, payload.jid)
             if group_type == "sys_admin":
-                if group_registration_handler.is_pending_reply(db, payload.jid, text):
+                reply_text = text
+                if not (is_affirmative(text) or is_negative(text)):
+                    pending_desc = group_registration_handler.get_pending_description(payload.jid)
+                    if pending_desc:
+                        decision = await classify_confirmation_reply(
+                            agent_runner.client, settings.claude_model,
+                            pending_description=pending_desc, reply_text=text,
+                        )
+                        if decision != "unclear":
+                            reply_text = "yes" if decision == "confirm" else "no"
+                if group_registration_handler.is_pending_reply(db, payload.jid, reply_text):
                     handled = await group_registration_handler.handle_admin_reply(
-                        db, payload.jid, text
+                        db, payload.jid, reply_text
                     )
                     if handled:
                         return

@@ -271,6 +271,164 @@ async def test_confirmation_execute_blocks_action_not_in_blueprint(context):
 
 
 @pytest.mark.asyncio
+async def test_stage_action_free_form_confirm_via_ai_classification(registry, context):
+    """Regression: a natural non-exact-match reply (e.g. "לאשר", Hebrew for
+    "to approve") previously fell straight through to the normal agent loop
+    with the pending action still staged and unresolved — reply_words.py's
+    word list doesn't include it. It must now be classified and, if
+    unambiguous, executed exactly like an exact-match "yes" would be."""
+    from app.agent.confirmation import ConfirmationStore
+    real_store = ConfirmationStore()
+    real_store.set("321@g.us", "say_hello", {}, "say hello to everyone", staged_by="")
+
+    classify_block = MagicMock()
+    classify_block.type = "text"
+    classify_block.text = "CONFIRM"
+    classify_resp = MagicMock()
+    classify_resp.content = [classify_block]
+
+    followup_resp = make_end_turn_response("Done, said hello!")
+
+    client = AsyncMock()
+    client.messages.create = AsyncMock(side_effect=[classify_resp, followup_resp])
+    runner = AgentRunner(client, registry)
+
+    result = await runner.run(
+        blueprint=BLUEPRINT,
+        group_jid="321@g.us",
+        sender="user@s.whatsapp.net",
+        is_admin=False,
+        message="לאשר",
+        context=context,
+        confirmation_store=real_store,
+    )
+    assert result == "Done, said hello!"
+    assert real_store.get("321@g.us") is None  # cleared after execution
+
+
+@pytest.mark.asyncio
+async def test_stage_action_unclear_reply_leaves_action_staged(registry, context):
+    """A genuinely unrelated reply must not be misclassified as an approval —
+    the pending action stays staged (unchanged behavior) and the message
+    falls through to the normal agent loop."""
+    from app.agent.confirmation import ConfirmationStore
+    real_store = ConfirmationStore()
+    real_store.set("322@g.us", "say_hello", {}, "say hello to everyone", staged_by="")
+
+    classify_block = MagicMock()
+    classify_block.type = "text"
+    classify_block.text = "UNCLEAR"
+    classify_resp = MagicMock()
+    classify_resp.content = [classify_block]
+    normal_resp = make_end_turn_response("I don't understand your request.")
+
+    client = AsyncMock()
+    client.messages.create = AsyncMock(side_effect=[classify_resp, normal_resp])
+    runner = AgentRunner(client, registry)
+
+    result = await runner.run(
+        blueprint=BLUEPRINT,
+        group_jid="322@g.us",
+        sender="user@s.whatsapp.net",
+        is_admin=False,
+        message="what's the weather",
+        context=context,
+        confirmation_store=real_store,
+    )
+    assert result == "I don't understand your request."
+    assert real_store.get("322@g.us") is not None  # still staged
+
+
+@pytest.mark.asyncio
+async def test_multi_confirmation_free_form_confirm_via_ai_classification(registry, context):
+    """Same fix, for the multi-party (split/payment) confirmation flow —
+    previously a non-exact-match reply always returned the hardcoded English
+    "Please reply 'yes' or 'no'" without ever asking the model."""
+    from app.agent.confirmation import ConfirmationStore
+    from app.agent.multi_confirmation import MultiConfirmationStore
+
+    mcs = MultiConfirmationStore()
+    await mcs.propose(
+        group_jid="325@g.us",
+        awaiting_phones=["972500", "972502"],
+        action="commit_payment",
+        commit_params={},
+        description="Payment of 50 ILS from 972500 to 972501",
+    )
+
+    classify_block = MagicMock()
+    classify_block.type = "text"
+    classify_block.text = "CONFIRM"
+    classify_resp = MagicMock()
+    classify_resp.content = [classify_block]
+
+    client = AsyncMock()
+    client.messages.create = AsyncMock(return_value=classify_resp)
+    runner = AgentRunner(client, registry)
+
+    result = await runner.run(
+        blueprint=BLUEPRINT,
+        group_jid="325@g.us",
+        sender="972500@s.whatsapp.net",
+        is_admin=False,
+        message="לאשר",
+        context=context,
+        confirmation_store=ConfirmationStore(),
+        multi_confirmation_store=mcs,
+        resolved_phone="972500",
+    )
+    assert "Still waiting for: @972502" in result
+
+
+@pytest.mark.asyncio
+async def test_multi_confirmation_unclear_reply_returns_localized_fallback(registry, context):
+    """When the reply is genuinely unrelated, the "you have a pending
+    confirmation" fallback is composed in the language of the user's own
+    message instead of staying hardcoded English."""
+    from app.agent.confirmation import ConfirmationStore
+    from app.agent.multi_confirmation import MultiConfirmationStore
+
+    mcs = MultiConfirmationStore()
+    await mcs.propose(
+        group_jid="326@g.us",
+        awaiting_phones=["972503"],
+        action="commit_payment",
+        commit_params={},
+        description="Payment of 50 ILS",
+    )
+
+    classify_block = MagicMock()
+    classify_block.type = "text"
+    classify_block.text = "UNCLEAR"
+    classify_resp = MagicMock()
+    classify_resp.content = [classify_block]
+
+    localized_text = "יש לך אישור ממתין. השב 'כן' או 'לא':\nתשלום של 50 שקל"
+    compose_block = MagicMock()
+    compose_block.type = "text"
+    compose_block.text = localized_text
+    compose_resp = MagicMock()
+    compose_resp.content = [compose_block]
+
+    client = AsyncMock()
+    client.messages.create = AsyncMock(side_effect=[classify_resp, compose_resp])
+    runner = AgentRunner(client, registry)
+
+    result = await runner.run(
+        blueprint=BLUEPRINT,
+        group_jid="326@g.us",
+        sender="972503@s.whatsapp.net",
+        is_admin=False,
+        message="מה קורה פה",
+        context=context,
+        confirmation_store=ConfirmationStore(),
+        multi_confirmation_store=mcs,
+        resolved_phone="972503",
+    )
+    assert result == localized_text
+
+
+@pytest.mark.asyncio
 async def test_run_executes_multiple_tool_calls_sequentially_not_concurrently(context, confirmation_store):
     """Tool executors write to SQLite, and some (e.g. request_confirmation)
     hold a write transaction open across an awaited network call. Running

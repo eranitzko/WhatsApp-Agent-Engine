@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 import anthropic
 
+from app.agent.intent import classify_confirmation_reply, compose_localized_message
 from app.db.models import Blueprint, RequestLog, SystemConfig
 from app.db.session import SessionLocal
 from app.tool_registry import ToolRegistry
@@ -102,6 +103,20 @@ class AgentRunner:
                     message, group_jid, sender_phone,
                 )
                 if multi_confirmation_store.is_confirm(message):
+                    decision = "confirm"
+                elif multi_confirmation_store.is_cancel(message):
+                    decision = "reject"
+                else:
+                    # Exact match (reply_words.py) failed — e.g. "לאשר", a
+                    # completely natural Hebrew "approve" that isn't in the
+                    # word list. Ask the model already running everything,
+                    # rather than leaving the reply unresolvable.
+                    decision = await classify_confirmation_reply(
+                        self.client, blueprint.model,
+                        pending_description=pending_mc.description, reply_text=message,
+                    )
+
+                if decision == "confirm":
                     status, mc = multi_confirmation_store.confirm(group_jid, sender_phone)
                     if status == "all_confirmed":
                         result = await self._commit_pending(mc)
@@ -118,7 +133,7 @@ class AgentRunner:
                             {"role": "assistant", "content": reply},
                         ], max_pairs=blueprint.context_window)
                         return reply
-                elif multi_confirmation_store.is_cancel(message):
+                elif decision == "reject":
                     mc = multi_confirmation_store.reject(group_jid, sender_phone)
                     reply = f"Transaction cancelled.\n{mc.description if mc else ''}"
                     context.add_turn(group_jid, [
@@ -127,7 +142,11 @@ class AgentRunner:
                     ], max_pairs=blueprint.context_window)
                     return reply
                 else:
-                    reply = f"You have a pending confirmation. Please reply 'yes' or 'no':\n{pending_mc.description}"
+                    reply_en = f"You have a pending confirmation. Please reply 'yes' or 'no':\n{pending_mc.description}"
+                    reply = await compose_localized_message(
+                        self.client, blueprint.model,
+                        english_text=reply_en, language_sample=message,
+                    ) if message.strip() else reply_en
                     context.add_turn(group_jid, [
                         {"role": "user", "content": message},
                         {"role": "assistant", "content": reply},
@@ -192,13 +211,29 @@ class AgentRunner:
         # ── Single-action confirmation intercept ──────────────────────────────
         pending = confirmation_store.get(group_jid)
         if pending and not pending.is_expired():
-            if confirmation_store.is_confirm(message) or confirmation_store.is_cancel(message):
+            if confirmation_store.is_confirm(message):
+                decision = "confirm"
+            elif confirmation_store.is_cancel(message):
+                decision = "reject"
+            else:
+                # Exact match (reply_words.py) failed. The docstring for this
+                # store says "anything else → cancel and process normally",
+                # but historically nothing here actually asked whether a
+                # free-form reply like "לאשר" meant yes — it just fell
+                # through with the action still staged. Ask the model that's
+                # already running everything before giving up on it.
+                decision = await classify_confirmation_reply(
+                    self.client, blueprint.model,
+                    pending_description=pending.description, reply_text=message,
+                )
+
+            if decision in ("confirm", "reject"):
                 logger.info(
                     "message %r claimed by single-action confirmation intercept | group=%s "
                     "pending_action=%s staged_by=%s sender=%s",
                     message, group_jid, pending.action, pending.staged_by, sender_phone,
                 )
-            if confirmation_store.is_confirm(message):
+            if decision == "confirm":
                 # Enforce: only the person who staged the action can confirm it.
                 # If staged_by is empty, any member can confirm (backwards compat).
                 if pending.staged_by and sender_phone != pending.staged_by:
@@ -268,7 +303,7 @@ class AgentRunner:
                     {"role": "assistant", "content": reply},
                 ], max_pairs=blueprint.context_window)
                 return reply
-            elif confirmation_store.is_cancel(message):
+            elif decision == "reject":
                 confirmation_store.clear(group_jid)
                 reply = "Action cancelled."
                 context.add_turn(group_jid, [

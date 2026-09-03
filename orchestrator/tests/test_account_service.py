@@ -205,9 +205,91 @@ async def test_request_confirmation_delivery_failure_keeps_row_and_sibling_work(
     persisted = db.query(CrossGroupConfirmation).filter_by(id=conf.id).first()
     assert persisted is not None
     assert persisted.status == "pending"
-
     # The sibling row staged before the failed call must survive.
     assert db.query(CrossGroupConfirmation).filter_by(id=sibling_id).first() is not None
+
+
+@pytest.mark.asyncio
+async def test_request_confirmation_stores_prompt_text_verbatim_without_client(db):
+    """Regression: describe_pending_confirmation needs to show a later free-form
+    reply what it's actually replying to. Without an AI client configured
+    (the default — matches every existing caller/test in this file), the
+    exact confirmation_message must be stored as-is, no behavior change."""
+    _seed_group(db, "prompt_grp@g.us")
+    _seed_user(db, "972520", "prompt_grp@g.us")
+    svc = AccountService()
+    with patch("app.accounting.account_service.bridge_client") as mock_bc:
+        mock_bc.send_message = AsyncMock()
+        conf, _ = await svc.request_confirmation(
+            db=db,
+            initiator_phone="972500",
+            initiator_group_jid="eden_grp@g.us",
+            target_phone="972520",
+            action_type="record_expense",
+            action_payload={"amount_ils": "100.00"},
+            confirmation_message="Eden says you owe ₪100. Confirm?",
+        )
+    assert conf.prompt_text == "Eden says you owe ₪100. Confirm?"
+
+
+@pytest.mark.asyncio
+async def test_request_confirmation_localizes_message_when_client_configured(db):
+    """The real fix for the English-hardcoded-despite-Hebrew-conversation bug:
+    when an AI client is configured, the outbound confirmation text is
+    rewritten in the language of a sample (here, the payer's own name) before
+    being sent and stored — not left as a hardcoded English template."""
+    _seed_group(db, "loc_grp@g.us")
+    _seed_user(db, "972521", "loc_grp@g.us")
+
+    block = type("B", (), {"type": "text", "text": "עדן אומרת שאתה חייב 100 שקל. לאשר?"})()
+    response = type("R", (), {"content": [block]})()
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=response)
+
+    svc = AccountService(client=mock_client, model="claude-sonnet-4-6")
+    with patch("app.accounting.account_service.bridge_client") as mock_bc:
+        mock_bc.send_message = AsyncMock()
+        conf, _ = await svc.request_confirmation(
+            db=db,
+            initiator_phone="972500",
+            initiator_group_jid="eden_grp@g.us",
+            target_phone="972521",
+            action_type="record_expense",
+            action_payload={"amount_ils": "100.00"},
+            confirmation_message="Eden says you owe ₪100. Confirm?",
+            language_sample="עדן איצקוביץ",
+        )
+    assert conf.prompt_text == "עדן אומרת שאתה חייב 100 שקל. לאשר?"
+    mock_bc.send_message.assert_awaited_once_with(
+        "loc_grp@g.us", "עדן אומרת שאתה חייב 100 שקל. לאשר?"
+    )
+
+
+def test_describe_pending_confirmation_returns_stored_prompt_text(db):
+    _seed_group(db, "desc_grp@g.us")
+    _seed_user(db, "972522", "desc_grp@g.us")
+    conf = CrossGroupConfirmation(
+        initiator_phone="972500",
+        initiator_group_jid="eden_grp@g.us",
+        target_phone="972522",
+        target_group_jid="desc_grp@g.us",
+        action_type="record_payment",
+        action_payload="{}",
+        prompt_text="Eden says they paid you ₪570.00. Confirm?",
+        status="pending",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+    )
+    db.add(conf)
+    db.commit()
+
+    svc = AccountService()
+    desc = svc.describe_pending_confirmation(db, "desc_grp@g.us", "972522")
+    assert desc == "Eden says they paid you ₪570.00. Confirm?"
+
+
+def test_describe_pending_confirmation_returns_none_when_nothing_pending(db):
+    svc = AccountService()
+    assert svc.describe_pending_confirmation(db, "nowhere@g.us", "972599") is None
 
 
 def test_handle_confirmation_reply_yes_flips_status(db):

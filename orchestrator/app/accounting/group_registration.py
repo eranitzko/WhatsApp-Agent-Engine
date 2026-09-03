@@ -131,6 +131,22 @@ class GroupRegistrationHandler:
             return False
         return is_affirmative(text) or is_negative(text)
 
+    def get_pending_description(self, admin_group_jid: str) -> str | None:
+        """Read-only peek at the pending registration request for this admin
+        group, if any — lets a free-form reply (e.g. "לאשר") that doesn't
+        exact-match is_pending_reply's word list still be classified with
+        context, instead of silently falling through with the agent none the
+        wiser that a registration was ever asked about."""
+        target_jid = self._find_pending_for_admin(admin_group_jid)
+        if target_jid is None:
+            return None
+        pending = self._pending[target_jid]
+        phone_list = ", ".join(pending["human_phones"])
+        return (
+            f"Approve registering group {target_jid} ({phone_list}) as a "
+            f"{pending['group_type']} account?"
+        )
+
     def _find_pending_for_admin(self, admin_group_jid: str) -> str | None:
         for target_jid, info in self._pending.items():
             if admin_group_jid in info["sys_admin_jids"]:

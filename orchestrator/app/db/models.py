@@ -293,6 +293,10 @@ class CrossGroupConfirmation(Base):
     # subject to rate limits (max 2 per 24h, at least 2h apart).
     resend_count         = Column(Integer, nullable=False, default=0, server_default="0")
     last_resent_at       = Column(DateTime(timezone=True), nullable=True)
+    # The exact (possibly AI-localized) message sent to the target — stored so
+    # describe_pending_confirmation can surface it verbatim later, instead of
+    # reconstructing wording from action_payload per action_type.
+    prompt_text          = Column(Text, nullable=True)
 
     __table_args__ = (
         Index("ix_cross_group_confirmations_target_phone_status", "target_phone", "status"),
