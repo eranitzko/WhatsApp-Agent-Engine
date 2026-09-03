@@ -13,6 +13,7 @@ import { readdir, rm } from 'fs/promises'
 import { join } from 'path'
 import { isGroupAdmin, invalidateGroup } from './adminCache.js'
 import { forwardToBackend } from './forwarder.js'
+import { extractInbound } from './messageExtract.js'
 
 const AUTH_PATH = process.env.AUTH_PATH || './auth'
 const RECONNECT_DELAY_MS = 3000
@@ -207,10 +208,10 @@ export async function connect() {
     if (type !== 'notify' && type !== 'append') return
 
     for (const msg of messages) {
-      if (!msg.message) continue
-      if (msg.key.fromMe) continue
+      const inbound = extractInbound(msg, type)
+      if (!inbound) continue
 
-      const jid = msg.key.remoteJid
+      const { jid, sender, messageId, text, directImage, quotedImageMessage, quotedText, quotedRef } = inbound
       if (!isJidGroup(jid)) continue
 
       // Whitelist check — skip groups not in ALLOWED_GROUPS (if list is configured).
@@ -218,24 +219,23 @@ export async function connect() {
       // to non-allowed chats.
       if (ALLOWED_GROUPS.length > 0 && !ALLOWED_GROUPS.includes(jid)) continue
 
-      const sender = msg.key.participant || jid
-      const messageId = msg.key.id
-
       try {
         const isAdmin = await isGroupAdmin(sock, jid, sender)
-        const imageMessage = msg.message?.imageMessage
-        const text =
-          msg.message?.conversation ||
-          msg.message?.extendedTextMessage?.text ||
-          ''
 
-        if (imageMessage) {
+        // A reply that quotes an image (e.g. replying "לאשר"/"approve" to a
+        // receipt photo) is handled exactly like sending that image again
+        // with the reply text as its caption — otherwise the quoted photo
+        // is invisible to the agent and "approve" has nothing to attach to.
+        const imageToDownload = directImage || quotedImageMessage
+        const downloadSource = directImage ? msg : quotedRef
+
+        if (imageToDownload && downloadSource) {
           // Fire-and-forget: detach image download + forward so the message
           // loop continues immediately and isn't stalled by a slow download.
           ;(async () => {
             try {
               const rawBuffer = await downloadMediaMessage(
-                msg,
+                downloadSource,
                 'buffer',
                 {},
                 { logger, reuploadRequest: sock.updateMediaMessage }
@@ -257,13 +257,13 @@ export async function connect() {
                 pushName: msg.pushName || '',
                 imageBase64: compressedBuffer.toString('base64'),
                 mimeType: 'image/jpeg',
-                caption: imageMessage.caption || '',
+                caption: directImage ? (imageToDownload.caption || '') : text,
               })
             } catch (err) {
               console.error(`Error processing image ${messageId}:`, err.message)
             }
           })()
-        } else if (text.trim() && type === 'notify') {
+        } else if (text && type === 'notify') {
           // Skip replaying text commands from offline sync
           await forwardToBackend({
             type: 'text',
@@ -272,7 +272,8 @@ export async function connect() {
             messageId,
             isAdmin,
             pushName: msg.pushName || '',
-            text: text.trim(),
+            text,
+            quotedText,
           })
         }
       } catch (err) {

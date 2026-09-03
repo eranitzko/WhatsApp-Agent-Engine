@@ -5,7 +5,8 @@
   "description": "WhatsApp bridge for Invoice Curator using Baileys",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.9",

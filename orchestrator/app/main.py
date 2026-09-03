@@ -165,6 +165,7 @@ class WebhookPayload(BaseModel):
     push_name: str | None = Field(default=None, alias="pushName")
     action: str | None = None
     participants: list[str] | None = None
+    quoted_text: str | None = Field(default=None, alias="quotedText")
 
 
 class QRNotifyPayload(BaseModel):
@@ -439,7 +440,7 @@ async def _process(payload: WebhookPayload) -> None:
         # for messages that won't activate the agent (mention/prefix blueprints)
         participant_block = build_participant_block(db, payload.jid)
 
-        agent_message = text
+        agent_message = _apply_quoted_context(text, payload.quoted_text)
         if payload.type == "image" and entry.blueprint_id == "invoice_curator":
             pipeline_result = await process_image_event({
                 "jid": payload.jid,
@@ -508,6 +509,19 @@ async def _process(payload: WebhookPayload) -> None:
     finally:
         db.close()
         group_lock.release()
+
+
+def _apply_quoted_context(text: str, quoted_text: str | None) -> str:
+    """Fold a WhatsApp reply's quoted message into the text sent to the agent.
+
+    Without this, a reply like "לאשר" (approve) quoting an earlier message
+    reaches the agent as a bare, context-free word — the bridge forwards the
+    reply text but the quoted content was previously discarded entirely, so
+    the agent had nothing to approve and said so.
+    """
+    if not quoted_text:
+        return text
+    return f'[Replying to: "{quoted_text}"] {text}'
 
 
 def _pipeline_result_to_message(result: dict) -> str:

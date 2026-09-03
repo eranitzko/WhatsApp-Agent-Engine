@@ -1,6 +1,6 @@
 """Tests for app/main.py's pipeline-result-to-WhatsApp-message conversion."""
 
-from app.main import _pipeline_result_to_message
+from app.main import _pipeline_result_to_message, _apply_quoted_context
 
 
 def test_new_invoice_message_includes_extracted_fields():
@@ -63,3 +63,19 @@ def test_duplicate_identical_image_message_falls_back_gracefully():
     msg = _pipeline_result_to_message(result)
     assert "Acme" in msg
     assert "50.00 ILS" in msg
+
+
+def test_apply_quoted_context_prepends_quoted_text():
+    """Regression: replying (WhatsApp's quote/reply feature) to an earlier
+    message with a bare word like "לאשר" (approve) reached the agent with
+    zero context — the bridge silently dropped contextInfo.quotedMessage, so
+    the agent had nothing to approve and said so. Once the bridge forwards
+    the quoted text, main.py must fold it into the agent's message."""
+    result = _apply_quoted_context("לאשר", "העברתי 570 לעדן")
+    assert "העברתי 570 לעדן" in result
+    assert "לאשר" in result
+
+
+def test_apply_quoted_context_passes_through_when_no_quote():
+    assert _apply_quoted_context("hello", None) == "hello"
+    assert _apply_quoted_context("hello", "") == "hello"
