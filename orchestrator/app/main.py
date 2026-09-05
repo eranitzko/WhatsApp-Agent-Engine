@@ -499,7 +499,9 @@ async def _process(payload: WebhookPayload) -> None:
                 # never has to wait on a Claude call at all.
                 await _send(payload.jid, _pipeline_result_to_message(pipeline_result))
                 return
-            agent_message = _pipeline_result_to_message(pipeline_result)
+            agent_message = _combine_caption_and_pipeline_message(
+                agent_message, _pipeline_result_to_message(pipeline_result)
+            )
 
         if not agent_message.strip():
             return
@@ -559,6 +561,20 @@ def _apply_quoted_context(text: str, quoted_text: str | None) -> str:
     if not quoted_text:
         return text
     return f'[Replying to: "{quoted_text}"] {text}'
+
+
+def _combine_caption_and_pipeline_message(agent_message: str, pipeline_message: str) -> str:
+    """Fold an invoice photo's caption into the pipeline's save/duplicate summary.
+
+    Without this, a caption typed alongside the photo (e.g. an explicit
+    language request, or any other instruction) was silently discarded —
+    the caller used to overwrite agent_message with the pipeline summary
+    outright, so the agent never saw anything the sender actually wrote on
+    an image turn.
+    """
+    if not agent_message.strip():
+        return pipeline_message
+    return f"{agent_message}\n\n{pipeline_message}"
 
 
 def _pipeline_result_to_message(result: dict) -> str:

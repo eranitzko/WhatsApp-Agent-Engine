@@ -1,6 +1,10 @@
 """Tests for app/main.py's pipeline-result-to-WhatsApp-message conversion."""
 
-from app.main import _pipeline_result_to_message, _apply_quoted_context
+from app.main import (
+    _pipeline_result_to_message,
+    _apply_quoted_context,
+    _combine_caption_and_pipeline_message,
+)
 
 
 def test_new_invoice_message_includes_extracted_fields():
@@ -63,6 +67,26 @@ def test_duplicate_identical_image_message_falls_back_gracefully():
     msg = _pipeline_result_to_message(result)
     assert "Acme" in msg
     assert "50.00 ILS" in msg
+
+
+def test_combine_caption_and_pipeline_message_prepends_caption_when_present():
+    """Regression: a caption typed alongside an invoice photo (e.g. an
+    explicit language request) was discarded entirely — main.py overwrote
+    agent_message with the pipeline summary instead of combining the two,
+    so the agent never saw anything the sender actually wrote on an image
+    turn."""
+    result = _combine_caption_and_pipeline_message(
+        "תענה בעברית בבקשה", "Invoice auto-saved — Vendor: Acme"
+    )
+    assert "תענה בעברית בבקשה" in result
+    assert "Invoice auto-saved — Vendor: Acme" in result
+
+
+def test_combine_caption_and_pipeline_message_uses_pipeline_message_alone_when_no_caption():
+    """The common case: a bare photo with no caption — behavior must be
+    unchanged from before this fix."""
+    result = _combine_caption_and_pipeline_message("", "Invoice auto-saved — Vendor: Acme")
+    assert result == "Invoice auto-saved — Vendor: Acme"
 
 
 def test_apply_quoted_context_prepends_quoted_text():
