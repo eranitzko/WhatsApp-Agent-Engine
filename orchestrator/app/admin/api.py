@@ -931,6 +931,23 @@ def patch_person(phone: str, body: UpdatePersonFullRequest, _=Depends(require_au
             if body.private_group_jid is not None:
                 profile.private_group_jid = body.private_group_jid or None
 
+            # Auto-derive private_group_jid from primary_accounting_group_jid
+            # for personal groups when the caller didn't separately set it —
+            # for a "personal" group they mean the same fact (this is this
+            # person's own 1:1 group). Requiring an admin to remember to set
+            # BOTH fields separately is exactly how this silently went unset
+            # for real users for weeks: resolve_inbound's private_group_jid
+            # strategy never fired, it fell through to the LID-unsafe
+            # fallback, and a debt got recorded against a raw WhatsApp LID
+            # instead of the person's phone (2026-09 production incident).
+            # Never do this for a "shared" group — linking private_group_jid
+            # to a multi-person group misroutes every other member's
+            # messages to whichever phone got linked first.
+            if body.primary_accounting_group_jid and body.private_group_jid is None and profile.private_group_jid is None:
+                reg = db.get(GroupRegistry, body.primary_accounting_group_jid)
+                if reg and reg.group_type == "personal":
+                    profile.private_group_jid = body.primary_accounting_group_jid
+
             # Mirror to HouseholdMember if the person is enrolled
             from app.db.models import HouseholdMember
             member = db.query(HouseholdMember).filter_by(phone=phone).first()
@@ -939,6 +956,8 @@ def patch_person(phone: str, body: UpdatePersonFullRequest, _=Depends(require_au
                     member.primary_accounting_group_jid = body.primary_accounting_group_jid or None
                 if body.private_group_jid is not None:
                     member.private_group_jid = body.private_group_jid or None
+                if member.private_group_jid is None and profile.private_group_jid:
+                    member.private_group_jid = profile.private_group_jid
 
         if body.known_lid is not None:
             if body.known_lid:

@@ -1034,6 +1034,131 @@ def test_patch_person_known_lid_conflict_returns_clean_error(db):
         assert "already" in r2.json()["detail"].lower()
 
 
+# -- private_group_jid auto-derivation ----------------------------------------
+# Regression: a personal group registered before its owner's first message
+# (or via the admin panel rather than the chat bot-join flow) never got
+# private_group_jid set — resolve_inbound's LID-safe strategies 1/2 never
+# fired for that person, silently falling back to treating their raw
+# WhatsApp LID as if it were their phone. This surfaced in production as a
+# real debt recorded against a LID instead of the actual person, and that
+# person never receiving the resulting confirmation (routing by "phone"
+# failed to find their real accounting group). Fixed by auto-deriving
+# private_group_jid from primary_accounting_group_jid whenever the target
+# group is genuinely personal (never for shared — that would misroute every
+# other member's messages to whichever phone got linked first).
+
+def test_patch_person_auto_derives_private_group_jid_from_personal_primary_group(db):
+    _seed(db)  # "111@g.us" is a personal group by seed_group's default
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        resp = client.patch(
+            "/admin/api/people/972500000200",
+            json={"primary_accounting_group_jid": "111@g.us"},
+        )
+        assert resp.status_code == 200
+
+    from app.db.models import UserProfile
+    verify = Session()
+    profile = verify.query(UserProfile).filter_by(phone="972500000200").first()
+    assert profile.primary_accounting_group_jid == "111@g.us"
+    assert profile.private_group_jid == "111@g.us"
+    verify.close()
+
+
+def test_patch_person_does_not_auto_derive_private_group_jid_for_shared_group(db):
+    from tests.conftest import seed_group
+    _seed(db)
+    seed_group(db, "shared1@g.us", blueprint_id="fa", group_type="shared")
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        resp = client.patch(
+            "/admin/api/people/972500000201",
+            json={"primary_accounting_group_jid": "shared1@g.us"},
+        )
+        assert resp.status_code == 200
+
+    from app.db.models import UserProfile
+    verify = Session()
+    profile = verify.query(UserProfile).filter_by(phone="972500000201").first()
+    assert profile.primary_accounting_group_jid == "shared1@g.us"
+    assert profile.private_group_jid is None
+    verify.close()
+
+
+def test_patch_person_explicit_private_group_jid_is_respected_not_overridden(db):
+    from tests.conftest import seed_group
+    _seed(db)
+    seed_group(db, "other_personal@g.us", blueprint_id="fa", group_type="personal")
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        resp = client.patch(
+            "/admin/api/people/972500000202",
+            json={"primary_accounting_group_jid": "111@g.us", "private_group_jid": "other_personal@g.us"},
+        )
+        assert resp.status_code == 200
+
+    from app.db.models import UserProfile
+    verify = Session()
+    profile = verify.query(UserProfile).filter_by(phone="972500000202").first()
+    assert profile.private_group_jid == "other_personal@g.us"  # explicit value wins
+    verify.close()
+
+
+def test_patch_person_auto_derive_does_not_clobber_existing_private_group_jid(db):
+    from tests.conftest import seed_group
+    _seed(db)
+    seed_group(db, "second_personal@g.us", blueprint_id="fa", group_type="personal")
+    Session = _get_session_factory(db)
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        client.patch("/admin/api/people/972500000203", json={"private_group_jid": "111@g.us"})
+        resp = client.patch(
+            "/admin/api/people/972500000203",
+            json={"primary_accounting_group_jid": "second_personal@g.us"},
+        )
+        assert resp.status_code == 200
+
+    from app.db.models import UserProfile
+    verify = Session()
+    profile = verify.query(UserProfile).filter_by(phone="972500000203").first()
+    assert profile.private_group_jid == "111@g.us"  # unchanged, not overwritten
+    verify.close()
+
+
+def test_patch_person_auto_derive_mirrors_to_household_member(db):
+    from app.db.models import HouseholdMember, Household
+    _seed(db)
+    Session = _get_session_factory(db)
+    seed_db = Session()
+    h = Household(name="Test House")
+    seed_db.add(h)
+    seed_db.commit()
+    seed_db.add(HouseholdMember(household_id=h.id, phone="972500000204", private_group_jid=None))
+    seed_db.commit()
+    seed_db.close()
+
+    app = _make_app(db)
+    with patch("app.admin.api.SessionLocal", side_effect=lambda: SessionCM(Session)):
+        client = TestClient(app)
+        resp = client.patch(
+            "/admin/api/people/972500000204",
+            json={"primary_accounting_group_jid": "111@g.us"},
+        )
+        assert resp.status_code == 200
+
+    verify = Session()
+    member = verify.query(HouseholdMember).filter_by(phone="972500000204").first()
+    assert member.private_group_jid == "111@g.us"
+    verify.close()
+
+
 # -- internal helper ---------------------------------------------------------
 
 def _get_session_factory(db):
