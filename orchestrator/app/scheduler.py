@@ -162,13 +162,43 @@ def dismiss_bridge_alert() -> bool:
     """Silence repeat alerts for the current outage until it recovers (a new
     outage after recovery starts a fresh, un-dismissed state). Returns False
     if there was no active alert to dismiss."""
+    from app.db.models import BridgeOutageLog
+
     with SessionLocal() as db:
         state = _load_bridge_alert_state(db)
         if state is None:
             return False
         state["dismissed"] = True
         _save_bridge_alert_state(db, state)
+        if state.get("log_id"):
+            log_row = db.get(BridgeOutageLog, state["log_id"])
+            if log_row is not None:
+                log_row.dismissed_at = datetime.now(timezone.utc)
+                db.commit()
         return True
+
+
+def get_outage_log(limit: int = 50) -> list[dict]:
+    """Persistent outage history for the admin panel's review screen —
+    unlike the current-outage state above, entries here survive recovery."""
+    from app.db.models import BridgeOutageLog
+
+    with SessionLocal() as db:
+        rows = (
+            db.query(BridgeOutageLog)
+            .order_by(BridgeOutageLog.down_since.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "down_since": r.down_since.isoformat(),
+                "recovered_at": r.recovered_at.isoformat() if r.recovered_at else None,
+                "reason": r.reason,
+                "dismissed_at": r.dismissed_at.isoformat() if r.dismissed_at else None,
+            }
+            for r in rows
+        ]
 
 
 async def _send_bridge_alert(down_since_iso: str, reason: str) -> None:
@@ -200,6 +230,8 @@ async def _check_bridge_health() -> None:
     _BRIDGE_ALERT_REPEAT_INTERVAL until it recovers or an operator dismisses
     it via the admin panel. Short blips (a routine redeploy, a brief
     reconnect) never cross the threshold and stay silent."""
+    from app.db.models import BridgeOutageLog
+
     reason = await _bridge_unhealthy_reason()
 
     with SessionLocal() as db:
@@ -208,6 +240,11 @@ async def _check_bridge_health() -> None:
         if reason is None:
             if state is not None:
                 logger.info("Bridge healthy again (was unhealthy since %s)", state["down_since"])
+                if state.get("log_id"):
+                    log_row = db.get(BridgeOutageLog, state["log_id"])
+                    if log_row is not None:
+                        log_row.recovered_at = datetime.now(timezone.utc)
+                        db.commit()
                 _clear_bridge_alert_state(db)
             return
 
@@ -215,8 +252,11 @@ async def _check_bridge_health() -> None:
 
         if state is None:
             logger.warning("Bridge unhealthy: %s", reason)
+            log_row = BridgeOutageLog(down_since=now, reason=reason)
+            db.add(log_row)
+            db.commit()
             _save_bridge_alert_state(
-                db, {"down_since": now.isoformat(), "last_alert_at": None, "dismissed": False}
+                db, {"down_since": now.isoformat(), "last_alert_at": None, "dismissed": False, "log_id": log_row.id}
             )
             return
 

@@ -1433,10 +1433,21 @@ const WHATSAPP_POLL_MS = 5000;
 
 async function renderWhatsApp(app) {
   app.innerHTML = layout('whatsapp', `
-    <h2>WhatsApp Connection</h2>
-    <div id="whatsapp-content"><p style="color:var(--muted)">Loading...</p></div>`);
+    <div class="page-header">
+      <h2>WhatsApp Connection</h2>
+      <button class="btn" style="background:transparent;color:var(--muted);border:1px solid var(--border)"
+              onclick="openOutageLogModal()">📜 View outage log</button>
+    </div>
+    <div id="whatsapp-content"><p style="color:var(--muted)">Loading...</p></div>
+    <div id="modal-container"></div>`);
   await refreshWhatsAppStatus();
   _pageInterval = setInterval(refreshWhatsAppStatus, WHATSAPP_POLL_MS);
+}
+
+function statusPill(connected) {
+  return connected
+    ? '<span class="badge" style="background:#dcfce7;color:#16a34a">🟢 Connected</span>'
+    : '<span class="badge" style="background:#fee2e2;color:#dc2626">🔴 Disconnected</span>';
 }
 
 async function refreshWhatsAppStatus() {
@@ -1449,6 +1460,7 @@ async function refreshWhatsAppStatus() {
 
   if (data.status === 'ok') {
     content.innerHTML = `
+      <div style="margin-bottom:16px">${statusPill(true)}</div>
       <div class="status-card" style="text-align:center;padding:48px 24px">
         <div style="font-size:48px">✅</div>
         <h3 style="margin:12px 0 4px">Connected</h3>
@@ -1465,18 +1477,20 @@ async function refreshWhatsAppStatus() {
                     style="width:280px;height:280px;border:1px solid var(--border);border-radius:8px" />`;
   }
 
+  // Once dismissed, the outage note has nothing new to say — repeating a
+  // now-stale "disconnected since X" is just noise. It reappears only when
+  // a fresh, un-dismissed outage starts.
   const alert = data.alert;
   let alertHtml = '';
-  if (alert) {
+  if (alert && !alert.dismissed) {
     const since = new Date(alert.down_since).toLocaleString();
     alertHtml = `
       <p style="color:var(--muted);font-size:13px;margin-top:16px">Disconnected since ${escHtml(since)}.</p>
-      ${alert.dismissed
-        ? '<p style="color:var(--muted);font-size:13px">Alerts dismissed for this outage — they\'ll resume if a new one starts.</p>'
-        : `<button class="btn btn-primary" onclick="dismissWhatsAppAlert()">Dismiss alerts for this outage</button>`}`;
+      <button class="btn btn-primary" onclick="dismissWhatsAppAlert()">Dismiss alerts for this outage</button>`;
   }
 
   content.innerHTML = `
+    <div style="margin-bottom:16px">${statusPill(false)}</div>
     <div class="status-card" style="text-align:center;padding:32px 24px">
       <div style="font-size:48px">⚠️</div>
       <h3 style="margin:12px 0 4px">${data.status === 'connecting' ? 'Needs QR scan' : 'Bridge unreachable'}</h3>
@@ -1490,6 +1504,49 @@ async function dismissWhatsAppAlert() {
   const res = await apiFetch('/whatsapp/dismiss-alert', { method: 'POST' });
   if (!res) return;
   await refreshWhatsAppStatus();
+}
+
+async function openOutageLogModal() {
+  const res = await apiFetch('/whatsapp/outage-log');
+  if (!res) return;
+  const entries = await res.json();
+
+  const fmt = iso => iso ? new Date(iso).toLocaleString() : '—';
+  const duration = (down, recovered) => {
+    if (!recovered) return 'ongoing';
+    const mins = Math.round((new Date(recovered) - new Date(down)) / 60000);
+    if (mins < 60) return `${mins}m`;
+    return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+  };
+
+  const rows = entries.length
+    ? entries.map(e => `
+        <tr>
+          <td style="font-size:0.85em;white-space:nowrap">${fmt(e.down_since)}</td>
+          <td style="font-size:0.85em;white-space:nowrap">${fmt(e.recovered_at)}</td>
+          <td style="font-size:0.85em">${duration(e.down_since, e.recovered_at)}</td>
+          <td style="font-size:0.8em;color:var(--muted)">${escHtml(e.reason)}</td>
+          <td style="font-size:0.85em">${e.dismissed_at ? '✓' : ''}</td>
+        </tr>`).join('')
+    : '<tr><td colspan="5" class="empty">No outages recorded.</td></tr>';
+
+  document.getElementById('modal-container').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+      <div class="modal" style="max-width:640px">
+        <h3>Outage Log</h3>
+        <div class="table-wrap" style="max-height:400px;overflow-y:auto">
+          <table class="table">
+            <thead><tr>
+              <th>Down since</th><th>Recovered</th><th>Duration</th><th>Reason</th><th>Dismissed</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-primary" onclick="closeModal()">Close</button>
+        </div>
+      </div>
+    </div>`;
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────

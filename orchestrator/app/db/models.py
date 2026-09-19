@@ -85,6 +85,21 @@ class SystemConfig(Base):
     value = Column(Text, nullable=False, default="")
 
 
+class BridgeOutageLog(Base):
+    """One row per WhatsApp-bridge outage (app/scheduler.py's
+    _check_bridge_health), for the admin panel's outage history view —
+    separate from SystemConfig's current-outage state, which is overwritten
+    in place and cleared on recovery, so it can't answer "what happened
+    last week"."""
+    __tablename__ = "bridge_outage_log"
+
+    id           = Column(String(36), primary_key=True, default=_uuid)
+    down_since   = Column(DateTime(timezone=True), nullable=False)
+    recovered_at = Column(DateTime(timezone=True), nullable=True)
+    reason       = Column(Text, nullable=False)
+    dismissed_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class ConversationHistory(Base):
     __tablename__ = "conversation_history"
 

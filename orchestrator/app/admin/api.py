@@ -361,6 +361,12 @@ def whatsapp_dismiss_alert():
     return {"dismissed": dismiss_bridge_alert()}
 
 
+@router.get("/whatsapp/outage-log", dependencies=[Depends(require_auth)])
+def whatsapp_outage_log():
+    from app.scheduler import get_outage_log
+    return get_outage_log()
+
+
 # -- Admins ------------------------------------------------------------------
 
 class AddAdminRequest(BaseModel):

@@ -119,6 +119,26 @@ def test_dismiss_alert_returns_false_when_nothing_pending(db):
     assert resp.json() == {"dismissed": False}
 
 
+def test_outage_log_returns_history(db):
+    from app.db.models import BridgeOutageLog
+    db.add(BridgeOutageLog(
+        down_since=datetime.now(timezone.utc) - timedelta(hours=2),
+        recovered_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        reason="bridge unreachable: refused",
+    ))
+    db.commit()
+
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)):
+        client = TestClient(_make_app())
+        resp = client.get("/admin/api/whatsapp/outage-log")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["reason"] == "bridge unreachable: refused"
+    assert body[0]["recovered_at"] is not None
+
+
 def test_whatsapp_endpoints_require_auth():
     app = FastAPI()
     app.include_router(api_router, prefix="/admin/api")
@@ -127,3 +147,4 @@ def test_whatsapp_endpoints_require_auth():
     assert client.get("/admin/api/whatsapp/status").status_code == 401
     assert client.get("/admin/api/whatsapp/qr").status_code == 401
     assert client.post("/admin/api/whatsapp/dismiss-alert").status_code == 401
+    assert client.get("/admin/api/whatsapp/outage-log").status_code == 401

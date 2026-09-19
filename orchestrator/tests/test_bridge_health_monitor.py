@@ -19,11 +19,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from tests.conftest import SessionCM
+from app.db.models import BridgeOutageLog
 from app.scheduler import (
     _check_bridge_health,
     _save_bridge_alert_state,
     dismiss_bridge_alert,
     get_bridge_alert_state,
+    get_outage_log,
 )
 
 
@@ -195,3 +197,73 @@ def test_dismiss_bridge_alert_marks_existing_state_dismissed(db):
 
 def test_dismiss_bridge_alert_returns_false_when_nothing_pending():
     assert dismiss_bridge_alert() is False
+
+
+# -- Outage log (admin panel history review) -----------------------------------
+
+@pytest.mark.asyncio
+async def test_first_unhealthy_tick_opens_an_outage_log_row(db):
+    with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(raises=ConnectionError("refused"))), \
+         patch("app.mailer.sms.send_sms"):
+        await _check_bridge_health()
+
+    rows = db.query(BridgeOutageLog).all()
+    assert len(rows) == 1
+    assert rows[0].recovered_at is None
+    assert rows[0].dismissed_at is None
+    assert "unreachable" in rows[0].reason
+
+
+@pytest.mark.asyncio
+async def test_recovery_closes_the_open_outage_log_row(db):
+    down_since = datetime.now(timezone.utc) - timedelta(hours=1)
+    log_row = BridgeOutageLog(down_since=down_since, reason="bridge unreachable: refused")
+    db.add(log_row)
+    db.commit()
+    _save_bridge_alert_state(
+        db, {"down_since": down_since.isoformat(), "last_alert_at": None, "dismissed": False, "log_id": log_row.id}
+    )
+
+    with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(status="ok")), \
+         patch("app.mailer.sms.send_sms"):
+        await _check_bridge_health()
+
+    db.refresh(log_row)
+    assert log_row.recovered_at is not None
+
+
+def test_dismiss_bridge_alert_marks_the_open_outage_log_row_dismissed(db):
+    now = datetime.now(timezone.utc)
+    log_row = BridgeOutageLog(down_since=now, reason="bridge unreachable: refused")
+    db.add(log_row)
+    db.commit()
+    _save_bridge_alert_state(
+        db, {"down_since": now.isoformat(), "last_alert_at": None, "dismissed": False, "log_id": log_row.id}
+    )
+
+    assert dismiss_bridge_alert() is True
+
+    db.refresh(log_row)
+    assert log_row.dismissed_at is not None
+
+
+def test_get_outage_log_returns_most_recent_first(db):
+    older = BridgeOutageLog(
+        down_since=datetime.now(timezone.utc) - timedelta(days=2),
+        recovered_at=datetime.now(timezone.utc) - timedelta(days=2) + timedelta(hours=1),
+        reason="bridge unreachable: refused",
+    )
+    newer = BridgeOutageLog(
+        down_since=datetime.now(timezone.utc) - timedelta(hours=1),
+        reason="bridge reachable but not connected to WhatsApp (status='connecting')",
+    )
+    db.add(older)
+    db.add(newer)
+    db.commit()
+
+    log = get_outage_log()
+    assert len(log) == 2
+    assert log[0]["reason"].startswith("bridge reachable")  # newer first
+    assert log[1]["reason"].startswith("bridge unreachable")
+    assert log[0]["recovered_at"] is None
+    assert log[1]["recovered_at"] is not None
