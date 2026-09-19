@@ -169,10 +169,6 @@ class WebhookPayload(BaseModel):
     quoted_text: str | None = Field(default=None, alias="quotedText")
 
 
-class QRNotifyPayload(BaseModel):
-    qr: str
-
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global agent_runner, _http_client
@@ -247,22 +243,6 @@ async def health():
 async def webhook(request: Request, payload: WebhookPayload, background_tasks: BackgroundTasks):
     _verify_webhook_auth(request)
     background_tasks.add_task(_process, payload)
-    return {"status": "ok"}
-
-
-@app.post("/internal/qr-notify")
-async def qr_notify(request: Request, payload: QRNotifyPayload):
-    """The bridge posts here whenever WhatsApp needs a fresh QR scan (session
-    expired/logged out) — the one case where WhatsApp itself can't be used to
-    tell anyone WhatsApp is down. This endpoint existed as a dead 404 for a
-    long time: the bridge always called it, but nothing here ever handled it,
-    so send_qr_email (app/mailer/gmail.py) was fully built but never reachable."""
-    _verify_webhook_auth(request)
-    try:
-        from app.mailer.gmail import send_qr_email
-        send_qr_email(payload.qr)
-    except RuntimeError as exc:
-        logger.error("Failed to send QR notification email: %s", exc)
     return {"status": "ok"}
 
 

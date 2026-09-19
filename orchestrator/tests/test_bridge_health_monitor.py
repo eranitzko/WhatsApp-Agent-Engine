@@ -2,28 +2,38 @@
 
 Covers two distinct failure modes: the bridge being fully unreachable (HTTP
 fails), and the bridge being reachable but its /health body reporting it
-isn't actually connected to WhatsApp (status != 'ok') — the latter is what
-slipped through undetected in production for 9+ days, since the bridge's
-Express server stayed up and kept answering 200 OK the whole time its
-WhatsApp socket was stuck in an endless failed-reconnect loop. Module-level
-state (_bridge_down_since, _bridge_alert_sent) is reset before each test."""
+isn't actually connected to WhatsApp (status != 'ok') — the latter slipped
+through undetected in production for 9+ days, since the bridge's Express
+server stayed up and kept answering 200 OK the whole time its WhatsApp
+socket was stuck in an endless failed-reconnect loop.
+
+State now persists in SystemConfig (not module globals) so it survives an
+orchestrator restart mid-outage, and the alert repeats at most once per 24h
+until recovery or an explicit dismiss — replacing the old once-until-
+recovery email-only behavior, which (even throttled) produced hundreds of
+emails to an inbox nobody monitored over a multi-day outage."""
 
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import app.scheduler as scheduler_module
-from app.scheduler import _check_bridge_health
+from tests.conftest import SessionCM
+from app.scheduler import (
+    _check_bridge_health,
+    _save_bridge_alert_state,
+    dismiss_bridge_alert,
+    get_bridge_alert_state,
+)
 
 
 @pytest.fixture(autouse=True)
-def _reset_bridge_health_state():
-    scheduler_module._bridge_down_since = None
-    scheduler_module._bridge_alert_sent = False
-    yield
-    scheduler_module._bridge_down_since = None
-    scheduler_module._bridge_alert_sent = False
+def _patch_session_local(db):
+    """get_bridge_alert_state/dismiss_bridge_alert open their own SessionLocal()
+    (called from the admin API, outside any request-scoped session) — route
+    that at the test's in-memory db for every test in this file."""
+    with patch("app.scheduler.SessionLocal", return_value=SessionCM(db)):
+        yield
 
 
 def _mock_client(*, raises: Exception | None = None, status: str = "ok"):
@@ -40,115 +50,148 @@ def _mock_client(*, raises: Exception | None = None, status: str = "ok"):
 
 
 @pytest.mark.asyncio
-async def test_reachable_and_connected_sends_no_email_and_clears_state():
+async def test_reachable_and_connected_sends_no_alert_and_clears_state():
     with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(status="ok")), \
-         patch("app.mailer.gmail.send_bridge_down_email") as mock_email:
+         patch("app.mailer.sms.send_sms") as mock_sms:
         await _check_bridge_health()
 
-    mock_email.assert_not_called()
-    assert scheduler_module._bridge_down_since is None
-    assert scheduler_module._bridge_alert_sent is False
+    mock_sms.assert_not_called()
+    assert get_bridge_alert_state() is None
 
 
 @pytest.mark.asyncio
-async def test_http_unreachable_first_failure_tracks_start_time_but_does_not_email_yet():
+async def test_first_unhealthy_tick_records_state_but_does_not_alert_yet():
     with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(raises=ConnectionError("refused"))), \
-         patch("app.mailer.gmail.send_bridge_down_email") as mock_email:
+         patch("app.mailer.sms.send_sms") as mock_sms:
         await _check_bridge_health()
 
-    mock_email.assert_not_called()
-    assert scheduler_module._bridge_down_since is not None
-    assert scheduler_module._bridge_alert_sent is False
+    mock_sms.assert_not_called()
+    state = get_bridge_alert_state()
+    assert state is not None
+    assert state["last_alert_at"] is None
+    assert state["dismissed"] is False
 
 
 @pytest.mark.asyncio
 async def test_reachable_but_not_connected_counts_as_unhealthy():
     """The exact production gap: HTTP succeeds, but the bridge's own socket
-    isn't actually connected to WhatsApp — this must be tracked the same as
-    an outright-unreachable bridge, not silently treated as healthy."""
+    isn't actually connected to WhatsApp — must be tracked the same as an
+    outright-unreachable bridge."""
     with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(status="connecting")), \
-         patch("app.mailer.gmail.send_bridge_down_email") as mock_email:
+         patch("app.mailer.sms.send_sms") as mock_sms:
         await _check_bridge_health()
 
-    mock_email.assert_not_called()  # first check — under threshold
-    assert scheduler_module._bridge_down_since is not None
+    mock_sms.assert_not_called()  # first check — under threshold
+    assert get_bridge_alert_state() is not None
 
 
 @pytest.mark.asyncio
-async def test_alert_fires_once_threshold_crossed_for_unreachable_bridge():
-    scheduler_module._bridge_down_since = datetime.now(timezone.utc) - timedelta(minutes=6)
+async def test_below_grace_period_does_not_alert(db):
+    down_since = datetime.now(timezone.utc) - timedelta(minutes=2)
+    _save_bridge_alert_state(db, {"down_since": down_since.isoformat(), "last_alert_at": None, "dismissed": False})
 
     with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(raises=ConnectionError("refused"))), \
+         patch("app.mailer.sms.send_sms") as mock_sms:
+        await _check_bridge_health()
+
+    mock_sms.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_alert_fires_via_sms_once_threshold_crossed(db):
+    down_since = datetime.now(timezone.utc) - timedelta(minutes=6)
+    _save_bridge_alert_state(db, {"down_since": down_since.isoformat(), "last_alert_at": None, "dismissed": False})
+
+    with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(raises=ConnectionError("refused"))), \
+         patch("app.mailer.sms.send_sms", new_callable=AsyncMock) as mock_sms:
+        await _check_bridge_health()
+
+    mock_sms.assert_awaited_once()
+    args, _ = mock_sms.call_args
+    assert "disconnected" in args[1].lower()
+    state = get_bridge_alert_state()
+    assert state["last_alert_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_alert_falls_back_to_email_when_sms_not_configured(db):
+    down_since = datetime.now(timezone.utc) - timedelta(minutes=6)
+    _save_bridge_alert_state(db, {"down_since": down_since.isoformat(), "last_alert_at": None, "dismissed": False})
+
+    with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(raises=ConnectionError("refused"))), \
+         patch("app.mailer.sms.send_sms", new_callable=AsyncMock, side_effect=RuntimeError("not configured")), \
          patch("app.mailer.gmail.send_bridge_down_email") as mock_email:
         await _check_bridge_health()
 
     mock_email.assert_called_once()
-    assert scheduler_module._bridge_alert_sent is True
 
 
 @pytest.mark.asyncio
-async def test_alert_fires_once_threshold_crossed_for_reachable_but_disconnected_bridge():
-    scheduler_module._bridge_down_since = datetime.now(timezone.utc) - timedelta(minutes=6)
-
-    with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(status="connecting")), \
-         patch("app.mailer.gmail.send_bridge_down_email") as mock_email:
-        await _check_bridge_health()
-
-    mock_email.assert_called_once()
-    args, _ = mock_email.call_args
-    assert "connecting" in args[1] or "not connected" in args[1]
-    assert scheduler_module._bridge_alert_sent is True
-
-
-@pytest.mark.asyncio
-async def test_alert_does_not_resend_while_still_down():
-    scheduler_module._bridge_down_since = datetime.now(timezone.utc) - timedelta(minutes=10)
-    scheduler_module._bridge_alert_sent = True
+async def test_alert_does_not_repeat_within_24h(db):
+    down_since = datetime.now(timezone.utc) - timedelta(hours=2)
+    last_alert = datetime.now(timezone.utc) - timedelta(hours=1)
+    _save_bridge_alert_state(
+        db, {"down_since": down_since.isoformat(), "last_alert_at": last_alert.isoformat(), "dismissed": False}
+    )
 
     with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(raises=ConnectionError("refused"))), \
-         patch("app.mailer.gmail.send_bridge_down_email") as mock_email:
+         patch("app.mailer.sms.send_sms", new_callable=AsyncMock) as mock_sms:
         await _check_bridge_health()
 
-    mock_email.assert_not_called()
+    mock_sms.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_recovery_after_alert_resets_state_for_next_outage():
-    scheduler_module._bridge_down_since = datetime.now(timezone.utc) - timedelta(minutes=10)
-    scheduler_module._bridge_alert_sent = True
-
-    with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(status="ok")), \
-         patch("app.mailer.gmail.send_bridge_down_email") as mock_email:
-        await _check_bridge_health()
-
-    mock_email.assert_not_called()
-    assert scheduler_module._bridge_down_since is None
-    assert scheduler_module._bridge_alert_sent is False
-
-
-@pytest.mark.asyncio
-async def test_recovery_from_connecting_status_resets_state():
-    """A bridge that was stuck reporting 'connecting' must be recognized as
-    healthy again once it reports 'ok', not just once it becomes reachable."""
-    scheduler_module._bridge_down_since = datetime.now(timezone.utc) - timedelta(minutes=10)
-    scheduler_module._bridge_alert_sent = True
-
-    with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(status="ok")), \
-         patch("app.mailer.gmail.send_bridge_down_email") as mock_email:
-        await _check_bridge_health()
-
-    mock_email.assert_not_called()
-    assert scheduler_module._bridge_down_since is None
-    assert scheduler_module._bridge_alert_sent is False
-
-
-@pytest.mark.asyncio
-async def test_below_threshold_failure_does_not_email():
-    scheduler_module._bridge_down_since = datetime.now(timezone.utc) - timedelta(minutes=2)
+async def test_alert_repeats_after_24h_still_down(db):
+    down_since = datetime.now(timezone.utc) - timedelta(hours=30)
+    last_alert = datetime.now(timezone.utc) - timedelta(hours=25)
+    _save_bridge_alert_state(
+        db, {"down_since": down_since.isoformat(), "last_alert_at": last_alert.isoformat(), "dismissed": False}
+    )
 
     with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(raises=ConnectionError("refused"))), \
-         patch("app.mailer.gmail.send_bridge_down_email") as mock_email:
+         patch("app.mailer.sms.send_sms", new_callable=AsyncMock) as mock_sms:
         await _check_bridge_health()
 
-    mock_email.assert_not_called()
-    assert scheduler_module._bridge_alert_sent is False
+    mock_sms.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dismissed_alert_stays_silent_even_past_repeat_interval(db):
+    down_since = datetime.now(timezone.utc) - timedelta(hours=30)
+    _save_bridge_alert_state(
+        db, {"down_since": down_since.isoformat(), "last_alert_at": None, "dismissed": True}
+    )
+
+    with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(raises=ConnectionError("refused"))), \
+         patch("app.mailer.sms.send_sms", new_callable=AsyncMock) as mock_sms:
+        await _check_bridge_health()
+
+    mock_sms.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recovery_clears_state_for_next_outage(db):
+    down_since = datetime.now(timezone.utc) - timedelta(hours=1)
+    _save_bridge_alert_state(
+        db, {"down_since": down_since.isoformat(), "last_alert_at": down_since.isoformat(), "dismissed": False}
+    )
+
+    with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(status="ok")), \
+         patch("app.mailer.sms.send_sms", new_callable=AsyncMock) as mock_sms:
+        await _check_bridge_health()
+
+    mock_sms.assert_not_called()
+    assert get_bridge_alert_state() is None
+
+
+def test_dismiss_bridge_alert_marks_existing_state_dismissed(db):
+    now = datetime.now(timezone.utc)
+    _save_bridge_alert_state(db, {"down_since": now.isoformat(), "last_alert_at": None, "dismissed": False})
+
+    assert dismiss_bridge_alert() is True
+    assert get_bridge_alert_state()["dismissed"] is True
+
+
+def test_dismiss_bridge_alert_returns_false_when_nothing_pending():
+    assert dismiss_bridge_alert() is False

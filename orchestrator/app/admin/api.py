@@ -304,6 +304,63 @@ async def bridge_groups():
     ]
 
 
+# -- WhatsApp connection -------------------------------------------------------
+# Self-service QR reconnect: an operator generating a fresh code here doesn't
+# depend on any notification (email or SMS) arriving in time — Baileys
+# rotates the code every ~20-30s while unscanned, so a passively-delivered
+# one is often already stale.
+
+@router.get("/whatsapp/status", dependencies=[Depends(require_auth)])
+async def whatsapp_status():
+    from app.scheduler import get_bridge_alert_state
+
+    bridge_status = "unreachable"
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{settings.bridge_url}/health")
+        bridge_status = resp.json().get("status", "unreachable")
+    except Exception:
+        logger.warning("Could not reach bridge for /whatsapp/status", exc_info=True)
+
+    alert = get_bridge_alert_state()
+    return {
+        "status": bridge_status,  # "ok" | "connecting" | "unreachable"
+        "alert": alert,  # {down_since, last_alert_at, dismissed} or null
+    }
+
+
+@router.get("/whatsapp/qr", dependencies=[Depends(require_auth)])
+async def whatsapp_qr():
+    """Fetch the bridge's current live QR string and render it as a PNG."""
+    import base64
+    import io
+    import qrcode
+
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{settings.bridge_url}/qr", headers=_bridge_headers())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Bridge unreachable: {exc}")
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="No QR pending — already connected or not yet generated.")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Bridge returned {resp.status_code}")
+
+    qr_string = resp.json().get("qr", "")
+    img = qrcode.make(qr_string)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    png_base64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return {"png_base64": png_base64}
+
+
+@router.post("/whatsapp/dismiss-alert", dependencies=[Depends(require_auth)])
+def whatsapp_dismiss_alert():
+    from app.scheduler import dismiss_bridge_alert
+    return {"dismissed": dismiss_bridge_alert()}
+
+
 # -- Admins ------------------------------------------------------------------
 
 class AddAdminRequest(BaseModel):

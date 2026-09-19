@@ -3,9 +3,10 @@
 //   POST /send       { jid, text }         — requires Bearer BRIDGE_SECRET
 //   POST /send-file  { jid, filename, mimeType, base64 } — requires Bearer BRIDGE_SECRET
 //   GET  /health
+//   GET  /qr         — requires Bearer BRIDGE_SECRET
 
 import express from 'express'
-import { getSocket } from './connection.js'
+import { getSocket, getCurrentQr } from './connection.js'
 
 const PORT = process.env.BRIDGE_PORT || 3000
 const BRIDGE_SECRET = process.env.BRIDGE_SECRET || ''
@@ -38,6 +39,18 @@ if (!BRIDGE_SECRET) {
 app.get('/health', (_req, res) => {
   const connected = getSocket()?.user != null
   res.json({ status: connected ? 'ok' : 'connecting' })
+})
+
+// Lets an operator (the admin panel's WhatsApp screen) fetch the freshest
+// QR pairing string on demand instead of waiting for a notification to
+// arrive — Baileys rotates the code every ~20-30s while unscanned, so
+// anything delivered passively is often already stale by the time someone
+// acts on it. Bearer-protected like /send: whoever holds this string can
+// pair a device as the bot.
+app.get('/qr', requireBridgeAuth, (_req, res) => {
+  const qr = getCurrentQr()
+  if (!qr) return res.status(404).json({ error: 'No QR pending — already connected or not yet generated.' })
+  res.json({ qr })
 })
 
 app.post('/send', requireBridgeAuth, async (req, res) => {

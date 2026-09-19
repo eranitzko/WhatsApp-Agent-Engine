@@ -24,11 +24,14 @@ logger = logging.getLogger(__name__)
 _scheduler = AsyncIOScheduler()
 _BRIDGE_SECRET: str = os.environ.get("BRIDGE_SECRET", "")
 
-# Bridge health monitor state — module-level since _check_bridge_health runs
-# on a recurring timer and needs to remember an in-progress outage across calls.
-_bridge_down_since: datetime | None = None
-_bridge_alert_sent = False
+# Bridge health monitor state persists in SystemConfig (not a module global)
+# so it survives the orchestrator restarting mid-outage — routine redeploys
+# happen far more often than once per _ALERT_REPEAT_INTERVAL, and losing
+# track of "already alerted within the last 24h" on every deploy would just
+# re-spam the same alert each time.
+_BRIDGE_ALERT_STATE_KEY = "whatsapp_bridge_alert_state"
 _BRIDGE_DOWN_ALERT_THRESHOLD = timedelta(minutes=5)
+_BRIDGE_ALERT_REPEAT_INTERVAL = timedelta(hours=24)
 
 # Set at startup by main.py via set_automation_executor()
 _automation_executor: "AutomationExecutor | None" = None
@@ -121,35 +124,119 @@ async def _bridge_unhealthy_reason() -> str | None:
         return f"bridge unreachable: {exc}"
 
 
+def _load_bridge_alert_state(db) -> dict | None:
+    from app.db.models import SystemConfig
+    row = db.get(SystemConfig, _BRIDGE_ALERT_STATE_KEY)
+    if not row or not row.value:
+        return None
+    import json
+    return json.loads(row.value)
+
+
+def _save_bridge_alert_state(db, state: dict) -> None:
+    from app.db.models import SystemConfig
+    import json
+    row = db.get(SystemConfig, _BRIDGE_ALERT_STATE_KEY)
+    if row is None:
+        row = SystemConfig(key=_BRIDGE_ALERT_STATE_KEY, value="")
+        db.add(row)
+    row.value = json.dumps(state)
+    db.commit()
+
+
+def _clear_bridge_alert_state(db) -> None:
+    from app.db.models import SystemConfig
+    row = db.get(SystemConfig, _BRIDGE_ALERT_STATE_KEY)
+    if row is not None:
+        db.delete(row)
+        db.commit()
+
+
+def get_bridge_alert_state() -> dict | None:
+    """Read-only lookup for the admin panel's WhatsApp status screen."""
+    with SessionLocal() as db:
+        return _load_bridge_alert_state(db)
+
+
+def dismiss_bridge_alert() -> bool:
+    """Silence repeat alerts for the current outage until it recovers (a new
+    outage after recovery starts a fresh, un-dismissed state). Returns False
+    if there was no active alert to dismiss."""
+    with SessionLocal() as db:
+        state = _load_bridge_alert_state(db)
+        if state is None:
+            return False
+        state["dismissed"] = True
+        _save_bridge_alert_state(db, state)
+        return True
+
+
+async def _send_bridge_alert(down_since_iso: str, reason: str) -> None:
+    """SMS is the primary channel (repeatable, reaches a phone that's
+    actually monitored) — falls back to the pre-existing one-shot email if
+    Twilio isn't configured, so there's still *some* notification before an
+    operator sets SMS up."""
+    message = (
+        f"WhatsApp bot disconnected since {down_since_iso}: {reason}. "
+        f"Scan a fresh QR in the admin panel to reconnect."
+    )
+    try:
+        from app.mailer.sms import send_sms
+        await send_sms(settings.admin_phone_number, message)
+        return
+    except RuntimeError:
+        logger.info("SMS not configured — falling back to email for bridge-down alert")
+    try:
+        from app.mailer.gmail import send_bridge_down_email
+        send_bridge_down_email(down_since_iso, reason)
+    except RuntimeError:
+        logger.exception("Failed to send bridge-down alert (neither SMS nor email available)")
+
+
 async def _check_bridge_health() -> None:
     """Poll the bridge's /health endpoint (both reachability and its reported
-    WhatsApp connection status). If it stays unhealthy for longer than
-    _BRIDGE_DOWN_ALERT_THRESHOLD, send exactly one email alert (not one per
-    check) until it recovers. Short blips (a routine redeploy, a brief
+    WhatsApp connection status). Once unhealthy for longer than
+    _BRIDGE_DOWN_ALERT_THRESHOLD, alert — then repeat at most once per
+    _BRIDGE_ALERT_REPEAT_INTERVAL until it recovers or an operator dismisses
+    it via the admin panel. Short blips (a routine redeploy, a brief
     reconnect) never cross the threshold and stay silent."""
-    global _bridge_down_since, _bridge_alert_sent
-
     reason = await _bridge_unhealthy_reason()
-    if reason is None:
-        if _bridge_down_since is not None:
-            logger.info("Bridge healthy again (was unhealthy since %s)", _bridge_down_since)
-        _bridge_down_since = None
-        _bridge_alert_sent = False
-        return
 
-    now = datetime.now(timezone.utc)
-    if _bridge_down_since is None:
-        _bridge_down_since = now
-        logger.warning("Bridge unhealthy: %s", reason)
-        return
-    if not _bridge_alert_sent and now - _bridge_down_since >= _BRIDGE_DOWN_ALERT_THRESHOLD:
-        logger.error("Bridge unhealthy since %s — sending email alert", _bridge_down_since)
-        try:
-            from app.mailer.gmail import send_bridge_down_email
-            send_bridge_down_email(_bridge_down_since.isoformat(), reason)
-            _bridge_alert_sent = True
-        except RuntimeError:
-            logger.exception("Failed to send bridge-down alert email")
+    with SessionLocal() as db:
+        state = _load_bridge_alert_state(db)
+
+        if reason is None:
+            if state is not None:
+                logger.info("Bridge healthy again (was unhealthy since %s)", state["down_since"])
+                _clear_bridge_alert_state(db)
+            return
+
+        now = datetime.now(timezone.utc)
+
+        if state is None:
+            logger.warning("Bridge unhealthy: %s", reason)
+            _save_bridge_alert_state(
+                db, {"down_since": now.isoformat(), "last_alert_at": None, "dismissed": False}
+            )
+            return
+
+        down_since = datetime.fromisoformat(state["down_since"])
+        if now - down_since < _BRIDGE_DOWN_ALERT_THRESHOLD:
+            return  # still within the initial grace period
+
+        if state.get("dismissed"):
+            return
+
+        last_alert_at = (
+            datetime.fromisoformat(state["last_alert_at"]) if state.get("last_alert_at") else None
+        )
+        if last_alert_at is not None and now - last_alert_at < _BRIDGE_ALERT_REPEAT_INTERVAL:
+            return  # already alerted recently
+
+        logger.error("Bridge unhealthy since %s — sending alert", state["down_since"])
+        await _send_bridge_alert(state["down_since"], reason)
+        state["last_alert_at"] = now.isoformat()
+        _save_bridge_alert_state(db, state)
 
 
 # ── Automation jobs ───────────────────────────────────────────────────────────

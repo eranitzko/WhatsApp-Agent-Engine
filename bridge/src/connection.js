@@ -5,7 +5,6 @@ import makeWASocket, {
   downloadMediaMessage,
   isJidGroup,
 } from '@whiskeysockets/baileys'
-import axios from 'axios'
 import P from 'pino'
 import qrcode from 'qrcode-terminal'
 import sharp from 'sharp'
@@ -46,14 +45,6 @@ const WATCHDOG_STALE_THRESHOLD_MS = 15 * 60 * 1000
 let lastAliveAt = Date.now()
 let connectionOpen = false
 let watchdogTimer = null
-// Baileys refreshes an unscanned QR every ~20-30s; emailing every refresh
-// burned through Gmail's daily sending limit within minutes during an
-// extended outage, blocking the one channel meant to help. Throttle to at
-// most one email per QR_EMAIL_MIN_INTERVAL_MS instead — frequent enough
-// that a fresh QR is always in the inbox within a reasonable wait, far
-// below the daily quota even if an episode runs for hours.
-let lastQrEmailAt = 0
-const QR_EMAIL_MIN_INTERVAL_MS = 10 * 60 * 1000
 
 // Prevent Baileys internal bad-request / unhandled rejections from crashing the process
 process.on('unhandledRejection', (reason) => {
@@ -70,9 +61,19 @@ const ALLOWED_GROUPS = process.env.ALLOWED_GROUPS
 const logger = P({ level: 'warn' })
 
 let sock = null
+// Raw QR pairing string for the currently-displayed code, if any — set on
+// every 'qr' update, cleared once connected. Lets /qr (server.js) hand back
+// the freshest code on demand instead of only via the throttled email (at
+// most once per QR_EMAIL_MIN_INTERVAL_MS) or having to catch it in the logs
+// before Baileys rotates it (every ~20-30s while unscanned).
+let currentQr = null
 
 export function getSocket() {
   return sock
+}
+
+export function getCurrentQr() {
+  return currentQr
 }
 
 function startWatchdog() {
@@ -122,20 +123,18 @@ export async function connect() {
     const { connection, lastDisconnect, qr } = update
 
     if (qr) {
+      currentQr = qr
       console.log('\n📱 Scan this QR code with WhatsApp:\n')
       qrcode.generate(qr, { small: true })
-      const sinceLastEmail = Date.now() - lastQrEmailAt
-      if (sinceLastEmail >= QR_EMAIL_MIN_INTERVAL_MS) {
-        lastQrEmailAt = Date.now()
-        const qrHeaders = { 'Content-Type': 'application/json' }
-        if (process.env.WEBHOOK_SECRET) {
-          qrHeaders['Authorization'] = `Bearer ${process.env.WEBHOOK_SECRET}`
-        }
-        // Fire-and-forget: notify backend to email QR to admin
-        axios.post(`${process.env.BACKEND_URL}/internal/qr-notify`, { qr }, { headers: qrHeaders }).catch((err) => {
-          console.warn('Could not send QR notification:', err.message)
-        })
-      }
+      // No longer emails a fresh QR on every ~20-30s rotation (was, even
+      // throttled to once per 10 minutes, hundreds of emails over an
+      // extended outage — to an inbox nobody was watching, so it just
+      // burned through send quota for nothing). The orchestrator's
+      // _check_bridge_health job (app/scheduler.py) now owns notification:
+      // one SMS after a grace period, repeating at most once per 24h until
+      // reconnected or dismissed. An operator pulls the live code on demand
+      // via GET /qr (this same currentQr) from the admin panel instead of
+      // waiting for one to arrive passively.
     }
 
     if (connection === 'close') {
@@ -169,6 +168,7 @@ export async function connect() {
       }
     } else if (connection === 'open') {
       console.log('✅ Connected to WhatsApp')
+      currentQr = null
       connectionOpen = true
       lastAliveAt = Date.now()
       startWatchdog()

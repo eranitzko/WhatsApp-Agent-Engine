@@ -20,7 +20,12 @@ async function apiFetch(path, opts = {}) {
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
+// Cleared at the top of every route() so a page's periodic refresh (e.g.
+// the WhatsApp connection screen) never keeps polling after navigating away.
+let _pageInterval = null;
+
 async function route() {
+  if (_pageInterval) { clearInterval(_pageInterval); _pageInterval = null; }
   const app = document.getElementById('app');
   const hash = location.hash.replace('#', '') || 'groups';
   if (!getToken()) { renderLogin(app); return; }
@@ -29,6 +34,7 @@ async function route() {
   else if (hash === 'households') await renderHouseholds(app);
   else if (hash === 'blueprints') await renderBlueprints(app);
   else if (hash === 'tools') await renderTools(app);
+  else if (hash === 'whatsapp') await renderWhatsApp(app);
   else if (hash === 'settings') await renderSettings(app);
   else if (hash === 'logs') await renderLogs(app);
   else await renderGroups(app);
@@ -46,6 +52,7 @@ function layout(page, content) {
     { hash: 'households', icon: '🏡', label: 'Households' },
     { hash: 'blueprints', icon: '📋', label: 'Blueprints' },
     { hash: 'tools',      icon: '🔧', label: 'Tools' },
+    { hash: 'whatsapp',   icon: '📶', label: 'WhatsApp' },
     { hash: 'settings',   icon: '⚙️', label: 'Settings' },
     { hash: 'logs',       icon: '📋', label: 'Logs' },
   ];
@@ -1415,6 +1422,74 @@ async function renderLogs(app) {
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`);
+}
+
+// ── WhatsApp connection ──────────────────────────────────────────────────────
+// Self-service reconnect: the QR here is fetched fresh on every poll, so it
+// never depends on a notification (SMS/email) arriving before a code
+// rotates (Baileys rotates an unscanned code every ~20-30s).
+
+const WHATSAPP_POLL_MS = 5000;
+
+async function renderWhatsApp(app) {
+  app.innerHTML = layout('whatsapp', `
+    <h2>WhatsApp Connection</h2>
+    <div id="whatsapp-content"><p style="color:var(--muted)">Loading...</p></div>`);
+  await refreshWhatsAppStatus();
+  _pageInterval = setInterval(refreshWhatsAppStatus, WHATSAPP_POLL_MS);
+}
+
+async function refreshWhatsAppStatus() {
+  const content = document.getElementById('whatsapp-content');
+  if (!content) return; // navigated away between poll tick and render
+
+  const res = await apiFetch('/whatsapp/status');
+  if (!res) return;
+  const data = await res.json();
+
+  if (data.status === 'ok') {
+    content.innerHTML = `
+      <div class="status-card" style="text-align:center;padding:48px 24px">
+        <div style="font-size:48px">✅</div>
+        <h3 style="margin:12px 0 4px">Connected</h3>
+        <p style="color:var(--muted)">The WhatsApp bridge is connected and running normally.</p>
+      </div>`;
+    return;
+  }
+
+  let qrHtml = '<p class="empty">Waiting for a QR code to be generated…</p>';
+  const qrRes = await apiFetch('/whatsapp/qr');
+  if (qrRes && qrRes.ok) {
+    const { png_base64 } = await qrRes.json();
+    qrHtml = `<img src="data:image/png;base64,${png_base64}" alt="WhatsApp QR code"
+                    style="width:280px;height:280px;border:1px solid var(--border);border-radius:8px" />`;
+  }
+
+  const alert = data.alert;
+  let alertHtml = '';
+  if (alert) {
+    const since = new Date(alert.down_since).toLocaleString();
+    alertHtml = `
+      <p style="color:var(--muted);font-size:13px;margin-top:16px">Disconnected since ${escHtml(since)}.</p>
+      ${alert.dismissed
+        ? '<p style="color:var(--muted);font-size:13px">Alerts dismissed for this outage — they\'ll resume if a new one starts.</p>'
+        : `<button class="btn btn-primary" onclick="dismissWhatsAppAlert()">Dismiss alerts for this outage</button>`}`;
+  }
+
+  content.innerHTML = `
+    <div class="status-card" style="text-align:center;padding:32px 24px">
+      <div style="font-size:48px">⚠️</div>
+      <h3 style="margin:12px 0 4px">${data.status === 'connecting' ? 'Needs QR scan' : 'Bridge unreachable'}</h3>
+      <p style="color:var(--muted)">Scan this code with WhatsApp on the bot's phone to reconnect. It refreshes automatically — no need to reload.</p>
+      <div style="margin:16px auto;display:flex;justify-content:center">${qrHtml}</div>
+      ${alertHtml}
+    </div>`;
+}
+
+async function dismissWhatsAppAlert() {
+  const res = await apiFetch('/whatsapp/dismiss-alert', { method: 'POST' });
+  if (!res) return;
+  await refreshWhatsAppStatus();
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────

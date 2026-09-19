@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     gmail_user: str = ""
     gmail_app_password: str = ""
 
+    # Twilio SMS (WhatsApp-bridge reconnect alerts — see app/mailer/sms.py)
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_from_number: str = ""
+
     # Comma-separated list of email addresses that the bot is allowed to send
     # reports to. If empty, falls back to GMAIL_USER (send only to self).
     # Example: "boss@company.com,accountant@company.com"

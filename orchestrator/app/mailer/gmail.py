@@ -6,12 +6,10 @@ Attachments are sent as binary MIME parts.
 
 from __future__ import annotations
 
-import io
 import logging
 import smtplib
 from email import encoders
 from email.mime.base import MIMEBase
-from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -118,50 +116,3 @@ def send_bridge_down_email(down_since: str, detail: str) -> None:
         raise RuntimeError(f"Failed to send bridge-down email: {exc}") from exc
 
 
-def send_qr_email(qr_string: str) -> None:
-    """Send the WhatsApp re-auth QR code as an inline image to GMAIL_USER.
-
-    Args:
-        qr_string: Raw QR string provided by Baileys.
-
-    Raises:
-        RuntimeError: If sending fails.
-    """
-    import qrcode  # local import — only needed for this function
-
-    if not settings.gmail_user or not settings.gmail_app_password:
-        raise RuntimeError("Gmail credentials not configured.")
-
-    img = qrcode.make(qr_string)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    png_bytes = buf.getvalue()
-
-    msg = MIMEMultipart("related")
-    msg["From"]    = settings.gmail_user
-    msg["To"]      = settings.gmail_user
-    msg["Subject"] = "⚠️ Invoice Curator — WhatsApp QR scan needed"
-
-    html = (
-        "<p>The WhatsApp session expired. Scan the QR code below to reconnect:</p>"
-        '<img src="cid:qrcode" style="width:300px;height:300px;" />'
-        "<p>Or tail logs: <code>fly logs --app invoice-curator</code></p>"
-    )
-    msg.attach(MIMEText(html, "html", "utf-8"))
-
-    img_part = MIMEImage(png_bytes, "png")
-    img_part.add_header("Content-ID", "<qrcode>")
-    img_part.add_header("Content-Disposition", "inline", filename="qr.png")
-    msg.attach(img_part)
-
-    try:
-        with smtplib.SMTP(_SMTP_HOST, _SMTP_PORT, timeout=30) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(settings.gmail_user, settings.gmail_app_password)
-            server.sendmail(settings.gmail_user, settings.gmail_user, msg.as_bytes())
-        logger.info("QR notification email sent to %s", settings.gmail_user)
-    except smtplib.SMTPException as exc:
-        logger.error("Gmail SMTP error sending QR notification: %s", exc)
-        raise RuntimeError(f"Failed to send QR email: {exc}") from exc
