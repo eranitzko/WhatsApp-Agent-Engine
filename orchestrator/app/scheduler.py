@@ -204,7 +204,7 @@ def get_outage_log(limit: int = 50) -> list[dict]:
 async def _send_bridge_alert(down_since_iso: str, reason: str) -> None:
     """SMS is the primary channel (repeatable, reaches a phone that's
     actually monitored) — falls back to the pre-existing one-shot email if
-    Twilio isn't configured, so there's still *some* notification before an
+    Vibrate isn't configured, so there's still *some* notification before an
     operator sets SMS up."""
     message = (
         f"WhatsApp bot disconnected since {down_since_iso}: {reason}. "

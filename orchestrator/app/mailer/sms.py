@@ -1,7 +1,18 @@
-"""Twilio SMS delivery for WhatsApp-bridge reconnect alerts.
+"""Vibrate (vibrate.co.il) SMS delivery for WhatsApp-bridge reconnect alerts.
 
-Raw REST calls (Basic Auth over httpx), matching this codebase's existing
-mailer style (smtplib, not a heavier vendor SDK) — no new dependency needed.
+Israeli SMS gateway: one-time prepaid credit packages (no monthly fee,
+messages never expire) instead of a per-number monthly rental — a better
+fit than Twilio for a low-volume alert (at most one SMS per day, to one
+number). REST API documented at
+https://www.vibrate.co.il/vibrate-api-skill.md — raw calls via httpx,
+matching this codebase's existing mailer style (no vendor SDK dependency).
+
+Setup (done once in the Vibrate web app, not via this code):
+  1. Create an account and buy a credit package.
+  2. Approve a Sender ID (Settings) — an alphanumeric name or phone number;
+     every send must reference one exactly, or the API rejects it.
+  3. Create an access token (Settings -> Access Keys) and set
+     VIBRATE_ACCESS_TOKEN / VIBRATE_SENDER in .env.
 """
 
 from __future__ import annotations
@@ -14,33 +25,37 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_TWILIO_API_BASE = "https://api.twilio.com/2010-04-01"
+_VIBRATE_API_BASE = "https://api.vibrate.co.il"
 
 
 async def send_sms(to: str, body: str) -> None:
-    """Send a single SMS via Twilio.
+    """Send a single SMS via Vibrate.
 
     Args:
-        to: Destination phone number (E.164, e.g. "+972501234567").
+        to: Destination phone number. Vibrate normalises Israeli numbers
+            server-side (accepts "0501234567", "972501234567", etc.).
         body: Message text.
 
     Raises:
-        RuntimeError: If Twilio isn't configured, or the send fails.
+        RuntimeError: If Vibrate isn't configured, or the send fails.
     """
-    if not (settings.twilio_account_sid and settings.twilio_auth_token and settings.twilio_from_number):
+    if not (settings.vibrate_access_token and settings.vibrate_sender):
         raise RuntimeError(
-            "Twilio credentials not configured. Set TWILIO_ACCOUNT_SID, "
-            "TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER."
+            "Vibrate credentials not configured. Set VIBRATE_ACCESS_TOKEN and VIBRATE_SENDER."
         )
 
-    url = f"{_TWILIO_API_BASE}/Accounts/{settings.twilio_account_sid}/Messages.json"
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
-            url,
-            data={"To": to, "From": settings.twilio_from_number, "Body": body},
-            auth=(settings.twilio_account_sid, settings.twilio_auth_token),
+            f"{_VIBRATE_API_BASE}/v1/sms/send",
+            headers={
+                "Authorization": settings.vibrate_access_token,
+                "Content-Type": "application/json",
+            },
+            json={"recipients": [to], "message": body, "sender": settings.vibrate_sender},
         )
 
-    if resp.status_code >= 300:
-        raise RuntimeError(f"Twilio SMS send failed ({resp.status_code}): {resp.text}")
+    # Every Vibrate send endpoint returns exactly 202 (queued) on success —
+    # never 200 — so anything else, including another 2xx, is a real failure.
+    if resp.status_code != 202:
+        raise RuntimeError(f"Vibrate SMS send failed ({resp.status_code}): {resp.text}")
     logger.info("SMS alert sent to %s", to)
