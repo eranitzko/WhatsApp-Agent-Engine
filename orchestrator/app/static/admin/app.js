@@ -29,6 +29,7 @@ async function route() {
   const app = document.getElementById('app');
   const hash = location.hash.replace('#', '') || 'groups';
   if (!getToken()) { renderLogin(app); return; }
+  startConnectionLedPolling(); // runs once; safe to call on every route()
   if (hash === 'groups') await renderGroups(app);
   else if (hash === 'people') await renderPeople(app);
   else if (hash === 'households') await renderHouseholds(app);
@@ -43,6 +44,40 @@ async function route() {
 window.addEventListener('hashchange', route);
 window.addEventListener('DOMContentLoaded', route);
 
+// ── Connection LED (visible in the nav from every tab, not just Mobile) ───────
+// Independent of _pageInterval — it must keep polling regardless of which
+// page is showing, so the LED reflects live status even while looking at
+// Groups or People, not just while the Mobile tab itself is open.
+
+const CONNECTION_LED_POLL_MS = 15000;
+let _bridgeConnected = null; // null = not checked yet
+let _ledPollTimer = null;
+
+function ledDotHtml() {
+  const color = _bridgeConnected === null ? 'var(--muted)' : (_bridgeConnected ? '#16a34a' : '#dc2626');
+  return `<span class="led-dot" style="background:${color}"></span>`;
+}
+
+function applyLedColor() {
+  const color = _bridgeConnected === null ? 'var(--muted)' : (_bridgeConnected ? '#16a34a' : '#dc2626');
+  document.querySelectorAll('.led-dot').forEach(el => { el.style.background = color; });
+}
+
+async function pollConnectionLed() {
+  if (!getToken()) return;
+  const res = await apiFetch('/whatsapp/status');
+  if (!res || !res.ok) return;
+  const data = await res.json();
+  _bridgeConnected = data.status === 'ok';
+  applyLedColor();
+}
+
+function startConnectionLedPolling() {
+  if (_ledPollTimer) return;
+  pollConnectionLed();
+  _ledPollTimer = setInterval(pollConnectionLed, CONNECTION_LED_POLL_MS);
+}
+
 // ── Layout shell ──────────────────────────────────────────────────────────────
 
 function layout(page, content) {
@@ -52,7 +87,7 @@ function layout(page, content) {
     { hash: 'households', icon: '🏡', label: 'Households' },
     { hash: 'blueprints', icon: '📋', label: 'Blueprints' },
     { hash: 'tools',      icon: '🔧', label: 'Tools' },
-    { hash: 'mobile',     icon: '📱', label: 'Mobile' },
+    { hash: 'mobile',     icon: '📱', label: 'Mobile', led: true },
     { hash: 'settings',   icon: '⚙️', label: 'Settings' },
     { hash: 'logs',       icon: '📋', label: 'Logs' },
   ];
@@ -62,7 +97,7 @@ function layout(page, content) {
         <div class="sidebar-title">Admin Panel</div>
         ${nav.map(n => `
           <div class="nav-item ${page === n.hash ? 'active' : ''}" onclick="location.hash='${n.hash}'">
-            ${n.icon} ${n.label}
+            ${n.icon} ${n.label}${n.led ? ledDotHtml() : ''}
           </div>`).join('')}
         <div style="flex:1"></div>
         <div class="nav-item" onclick="clearToken();route()">🚪 Sign out</div>
@@ -72,7 +107,7 @@ function layout(page, content) {
     <nav class="bottom-nav">
       ${nav.map(n => `
         <div class="bottom-nav-item ${page === n.hash ? 'active' : ''}" onclick="location.hash='${n.hash}'">
-          <div class="bnav-icon">${n.icon}</div>
+          <div class="bnav-icon" style="position:relative">${n.icon}${n.led ? ledDotHtml() : ''}</div>
           <div class="bnav-label">${n.label}</div>
         </div>`).join('')}
       <div class="bottom-nav-item" onclick="clearToken();route()">
@@ -1462,16 +1497,22 @@ function statusPill(connected) {
     : statusPillHtml('🔴', 'Disconnected', 'bad');
 }
 
-function smsCreditsHtml(credits) {
+// Same big-icon-card layout as the connection status card above (48px icon,
+// h3 headline, muted description) — a small pill read as a different,
+// lesser piece of UI; this reads as an equally important sibling status.
+function smsCreditsCardHtml(credits) {
   if (credits === null || credits === undefined) return '';
   const low = credits < SMS_LOW_BALANCE_THRESHOLD;
-  const pill = low
-    ? statusPillHtml('⚠️', `${credits} SMS credits left`, 'bad')
-    : statusPillHtml('💬', `${credits} SMS credits`, 'good');
-  const note = low
-    ? `<p style="color:#dc2626;font-size:13px;margin-top:8px">Running low — top up at <a href="https://www.vibrate.co.il/sms/tokens" target="_blank" rel="noopener">vibrate.co.il</a> so reconnect alerts keep going out.</p>`
+  const topUpNote = low
+    ? `<p style="color:#dc2626;font-size:13px;margin-top:8px">Top up at <a href="https://www.vibrate.co.il/sms/tokens" target="_blank" rel="noopener">vibrate.co.il</a> so reconnect alerts keep going out.</p>`
     : '';
-  return `<div style="margin-top:12px">${pill}${note}</div>`;
+  return `
+    <div class="status-card" style="text-align:center;padding:48px 24px;margin-top:16px">
+      <div style="font-size:48px">${low ? '⚠️' : '✅'}</div>
+      <h3 style="margin:12px 0 4px">${credits} SMS credits</h3>
+      <p style="color:var(--muted)">Used to text you if the WhatsApp bridge disconnects.</p>
+      ${topUpNote}
+    </div>`;
 }
 
 async function refreshMobileStatus() {
@@ -1481,7 +1522,7 @@ async function refreshMobileStatus() {
   const res = await apiFetch('/whatsapp/status');
   if (!res) return;
   const data = await res.json();
-  const creditsHtml = smsCreditsHtml(data.sms_credits);
+  const creditsCard = smsCreditsCardHtml(data.sms_credits);
 
   if (data.status === 'ok') {
     content.innerHTML = `
@@ -1490,8 +1531,8 @@ async function refreshMobileStatus() {
         <div style="font-size:48px">✅</div>
         <h3 style="margin:12px 0 4px">Connected</h3>
         <p style="color:var(--muted)">The WhatsApp bridge is connected and running normally.</p>
-        ${creditsHtml}
-      </div>`;
+      </div>
+      ${creditsCard}`;
     return;
   }
 
@@ -1523,8 +1564,8 @@ async function refreshMobileStatus() {
       <p style="color:var(--muted)">Scan this code with WhatsApp on the bot's phone to reconnect. It refreshes automatically — no need to reload.</p>
       <div style="margin:16px auto;display:flex;justify-content:center">${qrHtml}</div>
       ${alertHtml}
-      ${creditsHtml}
-    </div>`;
+    </div>
+    ${creditsCard}`;
 }
 
 async function dismissMobileAlert() {

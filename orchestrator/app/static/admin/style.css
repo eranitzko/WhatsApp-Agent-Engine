@@ -46,6 +46,12 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple
    than the generic .badge above so the two share equal visual weight. */
 .status-pill { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 999px; font-size: 16px; font-weight: 600; }
 
+/* Nav LED — live WhatsApp connection status visible from every tab, not
+   just Mobile. Inline dot next to the sidebar label; a small badge pinned
+   to the corner of the bottom-nav icon. */
+.led-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 6px; vertical-align: middle; transition: background 0.3s; }
+.bnav-icon .led-dot { position: absolute; top: -2px; right: -6px; margin-left: 0; border: 1.5px solid var(--surface); }
+
 /* Buttons */
 .btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.15s; }
 .btn-primary { background: var(--accent); color: #fff; }
