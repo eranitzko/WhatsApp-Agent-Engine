@@ -97,7 +97,7 @@ function layout(page, content) {
         <div class="sidebar-title">Admin Panel</div>
         ${nav.map(n => `
           <div class="nav-item ${page === n.hash ? 'active' : ''}" onclick="location.hash='${n.hash}'">
-            ${n.icon} ${n.label}${n.led ? ledDotHtml() : ''}
+            <span class="nav-icon-wrap">${n.icon}${n.led ? ledDotHtml() : ''}</span> ${n.label}
           </div>`).join('')}
         <div style="flex:1"></div>
         <div class="nav-item" onclick="clearToken();route()">🚪 Sign out</div>
@@ -107,7 +107,7 @@ function layout(page, content) {
     <nav class="bottom-nav">
       ${nav.map(n => `
         <div class="bottom-nav-item ${page === n.hash ? 'active' : ''}" onclick="location.hash='${n.hash}'">
-          <div class="bnav-icon" style="position:relative">${n.icon}${n.led ? ledDotHtml() : ''}</div>
+          <div class="bnav-icon"><span class="nav-icon-wrap">${n.icon}${n.led ? ledDotHtml() : ''}</span></div>
           <div class="bnav-label">${n.label}</div>
         </div>`).join('')}
       <div class="bottom-nav-item" onclick="clearToken();route()">
