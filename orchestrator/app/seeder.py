@@ -15,7 +15,7 @@ AUTOMATION_TOOLS = [
 INVOICE_CURATOR_TOOLS = [
     "get_status", "list_invoices", "get_invoice_summary",
     "flag_invoice", "unflag_invoice", "set_invoice_date", "set_invoice_amount",
-    "add_date_format", "update_config", "stage_action",
+    "add_date_format", "update_config", "stage_action", "send_sms",
     *AUTOMATION_TOOLS,
 ]
 
@@ -29,7 +29,7 @@ FAMILY_ACCOUNTING_TOOLS = [
     "set_report_email", "rename_participant", "list_participants",
     "correct_transaction", "commit_correction",
     "create_report_format", "list_report_formats", "delete_report_format",
-    "resend_confirmation", "record_split",
+    "resend_confirmation", "record_split", "send_sms",
     *AUTOMATION_TOOLS,
 ]
 

@@ -35,6 +35,7 @@ from app.utils.phone import resolve_sender_phone
 from app.agent.reply_words import is_affirmative, is_negative
 from app.agent.intent import classify_confirmation_reply
 from app.tools.send_email_tool import get_send_email_tools
+from app.tools.send_sms_tool import get_send_sms_tools
 from app.automation.executor import AutomationExecutor
 from app.scheduler import start_scheduler, stop_scheduler, set_automation_executor
 from app.pipeline.pipeline import process_image_event
@@ -202,6 +203,7 @@ async def lifespan(_app: FastAPI):
     tool_registry.register(get_automation_tools())
     tool_registry.register(get_export_tools())
     tool_registry.register(get_send_email_tools())
+    tool_registry.register(get_send_sms_tools())
 
     from app import registry_ref
     registry_ref.set_registry(tool_registry)

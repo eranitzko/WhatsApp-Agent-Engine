@@ -1445,18 +1445,29 @@ async function renderMobile(app) {
   _pageInterval = setInterval(refreshMobileStatus, MOBILE_POLL_MS);
 }
 
+// Shared pill for both the connection indicator and the SMS credit counter,
+// so the two read as one consistent status language rather than two
+// differently-styled badges.
+function statusPillHtml(icon, text, variant) {
+  const colors = {
+    good: 'background:#dcfce7;color:#16a34a',
+    bad:  'background:#fee2e2;color:#dc2626',
+  };
+  return `<span class="status-pill" style="${colors[variant]}">${icon} ${text}</span>`;
+}
+
 function statusPill(connected) {
   return connected
-    ? '<span class="badge" style="background:#dcfce7;color:#16a34a">🟢 Connected</span>'
-    : '<span class="badge" style="background:#fee2e2;color:#dc2626">🔴 Disconnected</span>';
+    ? statusPillHtml('🟢', 'Connected', 'good')
+    : statusPillHtml('🔴', 'Disconnected', 'bad');
 }
 
 function smsCreditsHtml(credits) {
   if (credits === null || credits === undefined) return '';
   const low = credits < SMS_LOW_BALANCE_THRESHOLD;
   const pill = low
-    ? `<span class="badge" style="background:#fee2e2;color:#dc2626">⚠️ ${credits} SMS credits left</span>`
-    : `<span class="badge" style="background:var(--surface);color:var(--muted);border:1px solid var(--border)">💬 ${credits} SMS credits</span>`;
+    ? statusPillHtml('⚠️', `${credits} SMS credits left`, 'bad')
+    : statusPillHtml('💬', `${credits} SMS credits`, 'good');
   const note = low
     ? `<p style="color:#dc2626;font-size:13px;margin-top:8px">Running low — top up at <a href="https://www.vibrate.co.il/sms/tokens" target="_blank" rel="noopener">vibrate.co.il</a> so reconnect alerts keep going out.</p>`
     : '';

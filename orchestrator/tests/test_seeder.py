@@ -4,6 +4,7 @@ from app.tools.accounting_tools import get_accounting_tools
 from app.tools.split_tools import get_split_tools
 from app.tools.automation_tools import get_automation_tools
 from app.export.tool import get_export_tools
+from app.tools.send_sms_tool import get_send_sms_tools
 
 
 def test_family_accounting_tools_includes_record_split():
@@ -25,6 +26,7 @@ def test_family_accounting_tools_names_only_registered_tools():
         | set(get_split_tools().keys())
         | set(get_automation_tools().keys())
         | set(get_export_tools().keys())
+        | set(get_send_sms_tools().keys())
     )
     unregistered = set(FAMILY_ACCOUNTING_TOOLS) - registered
     assert not unregistered, (

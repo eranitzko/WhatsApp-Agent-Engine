@@ -42,6 +42,10 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple
 .table tr:last-child td { border-bottom: none; }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; background: var(--surface2); color: var(--muted); }
 
+/* Mobile tab status pills (connection + SMS credits) — larger and bolder
+   than the generic .badge above so the two share equal visual weight. */
+.status-pill { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 999px; font-size: 16px; font-weight: 600; }
+
 /* Buttons */
 .btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.15s; }
 .btn-primary { background: var(--accent); color: #fff; }
