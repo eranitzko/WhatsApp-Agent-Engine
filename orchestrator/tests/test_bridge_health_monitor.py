@@ -13,6 +13,7 @@ until recovery or an explicit dismiss — replacing the old once-until-
 recovery email-only behavior, which (even throttled) produced hundreds of
 emails to an inbox nobody monitored over a multi-day outage."""
 
+import asyncio
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,6 +23,7 @@ from tests.conftest import SessionCM
 from app.db.models import BridgeOutageLog
 from app.scheduler import (
     _check_bridge_health,
+    _confirm_sms_delivery,
     _save_bridge_alert_state,
     dismiss_bridge_alert,
     get_bridge_alert_state,
@@ -105,7 +107,8 @@ async def test_alert_fires_via_sms_once_threshold_crossed(db):
     _save_bridge_alert_state(db, {"down_since": down_since.isoformat(), "last_alert_at": None, "dismissed": False})
 
     with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(raises=ConnectionError("refused"))), \
-         patch("app.mailer.sms.send_sms", new_callable=AsyncMock) as mock_sms:
+         patch("app.mailer.sms.send_sms", new_callable=AsyncMock) as mock_sms, \
+         patch("app.scheduler._confirm_sms_delivery", new_callable=AsyncMock):
         await _check_bridge_health()
 
     mock_sms.assert_awaited_once()
@@ -152,7 +155,8 @@ async def test_alert_repeats_after_24h_still_down(db):
     )
 
     with patch("app.scheduler.httpx.AsyncClient", return_value=_mock_client(raises=ConnectionError("refused"))), \
-         patch("app.mailer.sms.send_sms", new_callable=AsyncMock) as mock_sms:
+         patch("app.mailer.sms.send_sms", new_callable=AsyncMock) as mock_sms, \
+         patch("app.scheduler._confirm_sms_delivery", new_callable=AsyncMock):
         await _check_bridge_health()
 
     mock_sms.assert_awaited_once()
@@ -267,3 +271,63 @@ def test_get_outage_log_returns_most_recent_first(db):
     assert log[1]["reason"].startswith("bridge unreachable")
     assert log[0]["recovered_at"] is None
     assert log[1]["recovered_at"] is not None
+
+
+# -- SMS delivery confirmation --------------------------------------------------
+# A 202 from Vibrate only means "queued and billed", not delivered — for an
+# alert whose whole point is "does this actually reach a monitored phone",
+# that gap matters. _confirm_sms_delivery polls once the transient send/
+# receive delay has plausibly passed, retrying with backoff while still
+# pending, and gives up (loudly, via a log) rather than hanging forever.
+
+@pytest.mark.asyncio
+async def test_confirm_sms_delivery_logs_success_on_first_check():
+    status = {"allDelivered": True, "summary": {"total": 1, "delivered": 1, "pending": 0}}
+    with patch("app.scheduler.asyncio.sleep", new_callable=AsyncMock), \
+         patch("app.mailer.sms.get_delivery_status", new_callable=AsyncMock, return_value=status) as mock_status:
+        await _confirm_sms_delivery("run-1")
+
+    mock_status.assert_awaited_once_with("run-1")
+
+
+@pytest.mark.asyncio
+async def test_confirm_sms_delivery_stops_once_nothing_is_pending_but_not_delivered():
+    """Some messages failed permanently (pending=0, allDelivered=False) —
+    no point retrying, the outcome is already final."""
+    status = {"allDelivered": False, "summary": {"total": 1, "delivered": 0, "pending": 0}}
+    with patch("app.scheduler.asyncio.sleep", new_callable=AsyncMock), \
+         patch("app.mailer.sms.get_delivery_status", new_callable=AsyncMock, return_value=status) as mock_status:
+        await _confirm_sms_delivery("run-2")
+
+    mock_status.assert_awaited_once_with("run-2")
+
+
+@pytest.mark.asyncio
+async def test_confirm_sms_delivery_retries_while_pending_then_gives_up():
+    status = {"allDelivered": False, "summary": {"total": 1, "delivered": 0, "pending": 1}}
+    with patch("app.scheduler.asyncio.sleep", new_callable=AsyncMock), \
+         patch("app.mailer.sms.get_delivery_status", new_callable=AsyncMock, return_value=status) as mock_status:
+        await _confirm_sms_delivery("run-3")
+
+    from app.scheduler import _SMS_DELIVERY_CHECK_DELAYS
+    assert mock_status.await_count == len(_SMS_DELIVERY_CHECK_DELAYS)
+
+
+@pytest.mark.asyncio
+async def test_confirm_sms_delivery_handles_lookup_failure_without_raising():
+    with patch("app.scheduler.asyncio.sleep", new_callable=AsyncMock), \
+         patch("app.mailer.sms.get_delivery_status", new_callable=AsyncMock, side_effect=RuntimeError("boom")):
+        await _confirm_sms_delivery("run-4")  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_send_bridge_alert_schedules_delivery_confirmation():
+    down_since = datetime.now(timezone.utc) - timedelta(minutes=6)
+    _confirm_mock = AsyncMock()
+    with patch("app.mailer.sms.send_sms", new_callable=AsyncMock, return_value="run-live-1"), \
+         patch("app.scheduler._confirm_sms_delivery", _confirm_mock):
+        from app.scheduler import _send_bridge_alert
+        await _send_bridge_alert(down_since.isoformat(), "bridge unreachable: refused")
+        await asyncio.sleep(0)  # let the scheduled task actually start
+
+    _confirm_mock.assert_called_once_with("run-live-1")

@@ -34,7 +34,7 @@ async function route() {
   else if (hash === 'households') await renderHouseholds(app);
   else if (hash === 'blueprints') await renderBlueprints(app);
   else if (hash === 'tools') await renderTools(app);
-  else if (hash === 'whatsapp') await renderWhatsApp(app);
+  else if (hash === 'mobile') await renderMobile(app);
   else if (hash === 'settings') await renderSettings(app);
   else if (hash === 'logs') await renderLogs(app);
   else await renderGroups(app);
@@ -52,7 +52,7 @@ function layout(page, content) {
     { hash: 'households', icon: '🏡', label: 'Households' },
     { hash: 'blueprints', icon: '📋', label: 'Blueprints' },
     { hash: 'tools',      icon: '🔧', label: 'Tools' },
-    { hash: 'whatsapp',   icon: '📶', label: 'WhatsApp' },
+    { hash: 'mobile',     icon: '📱', label: 'Mobile' },
     { hash: 'settings',   icon: '⚙️', label: 'Settings' },
     { hash: 'logs',       icon: '📋', label: 'Logs' },
   ];
@@ -1424,24 +1424,25 @@ async function renderLogs(app) {
     </table></div>`);
 }
 
-// ── WhatsApp connection ──────────────────────────────────────────────────────
+// ── Mobile (WhatsApp connection + SMS credits) ────────────────────────────────
 // Self-service reconnect: the QR here is fetched fresh on every poll, so it
 // never depends on a notification (SMS/email) arriving before a code
 // rotates (Baileys rotates an unscanned code every ~20-30s).
 
-const WHATSAPP_POLL_MS = 5000;
+const MOBILE_POLL_MS = 5000;
+const SMS_LOW_BALANCE_THRESHOLD = 50;
 
-async function renderWhatsApp(app) {
-  app.innerHTML = layout('whatsapp', `
+async function renderMobile(app) {
+  app.innerHTML = layout('mobile', `
     <div class="page-header">
-      <h2>WhatsApp Connection</h2>
+      <h2>Mobile</h2>
       <button class="btn" style="background:transparent;color:var(--muted);border:1px solid var(--border)"
               onclick="openOutageLogModal()">📜 View outage log</button>
     </div>
-    <div id="whatsapp-content"><p style="color:var(--muted)">Loading...</p></div>
+    <div id="mobile-content"><p style="color:var(--muted)">Loading...</p></div>
     <div id="modal-container"></div>`);
-  await refreshWhatsAppStatus();
-  _pageInterval = setInterval(refreshWhatsAppStatus, WHATSAPP_POLL_MS);
+  await refreshMobileStatus();
+  _pageInterval = setInterval(refreshMobileStatus, MOBILE_POLL_MS);
 }
 
 function statusPill(connected) {
@@ -1450,13 +1451,26 @@ function statusPill(connected) {
     : '<span class="badge" style="background:#fee2e2;color:#dc2626">🔴 Disconnected</span>';
 }
 
-async function refreshWhatsAppStatus() {
-  const content = document.getElementById('whatsapp-content');
+function smsCreditsHtml(credits) {
+  if (credits === null || credits === undefined) return '';
+  const low = credits < SMS_LOW_BALANCE_THRESHOLD;
+  const pill = low
+    ? `<span class="badge" style="background:#fee2e2;color:#dc2626">⚠️ ${credits} SMS credits left</span>`
+    : `<span class="badge" style="background:var(--surface);color:var(--muted);border:1px solid var(--border)">💬 ${credits} SMS credits</span>`;
+  const note = low
+    ? `<p style="color:#dc2626;font-size:13px;margin-top:8px">Running low — top up at <a href="https://www.vibrate.co.il/sms/tokens" target="_blank" rel="noopener">vibrate.co.il</a> so reconnect alerts keep going out.</p>`
+    : '';
+  return `<div style="margin-top:12px">${pill}${note}</div>`;
+}
+
+async function refreshMobileStatus() {
+  const content = document.getElementById('mobile-content');
   if (!content) return; // navigated away between poll tick and render
 
   const res = await apiFetch('/whatsapp/status');
   if (!res) return;
   const data = await res.json();
+  const creditsHtml = smsCreditsHtml(data.sms_credits);
 
   if (data.status === 'ok') {
     content.innerHTML = `
@@ -1465,6 +1479,7 @@ async function refreshWhatsAppStatus() {
         <div style="font-size:48px">✅</div>
         <h3 style="margin:12px 0 4px">Connected</h3>
         <p style="color:var(--muted)">The WhatsApp bridge is connected and running normally.</p>
+        ${creditsHtml}
       </div>`;
     return;
   }
@@ -1486,7 +1501,7 @@ async function refreshWhatsAppStatus() {
     const since = new Date(alert.down_since).toLocaleString();
     alertHtml = `
       <p style="color:var(--muted);font-size:13px;margin-top:16px">Disconnected since ${escHtml(since)}.</p>
-      <button class="btn btn-primary" onclick="dismissWhatsAppAlert()">Dismiss alerts for this outage</button>`;
+      <button class="btn btn-primary" onclick="dismissMobileAlert()">Dismiss alerts for this outage</button>`;
   }
 
   content.innerHTML = `
@@ -1497,13 +1512,14 @@ async function refreshWhatsAppStatus() {
       <p style="color:var(--muted)">Scan this code with WhatsApp on the bot's phone to reconnect. It refreshes automatically — no need to reload.</p>
       <div style="margin:16px auto;display:flex;justify-content:center">${qrHtml}</div>
       ${alertHtml}
+      ${creditsHtml}
     </div>`;
 }
 
-async function dismissWhatsAppAlert() {
+async function dismissMobileAlert() {
   const res = await apiFetch('/whatsapp/dismiss-alert', { method: 'POST' });
   if (!res) return;
-  await refreshWhatsAppStatus();
+  await refreshMobileStatus();
 }
 
 async function openOutageLogModal() {

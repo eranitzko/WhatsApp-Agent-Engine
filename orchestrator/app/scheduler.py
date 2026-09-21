@@ -3,6 +3,7 @@ and expires stale multi-confirmations."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone, timedelta
@@ -201,6 +202,38 @@ def get_outage_log(limit: int = 50) -> list[dict]:
         ]
 
 
+_SMS_DELIVERY_CHECK_DELAYS = (10, 30, 60)  # seconds; Vibrate docs: receipts
+# typically arrive within seconds to a few minutes
+
+
+async def _confirm_sms_delivery(run_id: str) -> None:
+    """Best-effort delivery confirmation for a just-sent alert SMS.
+
+    A 202 from send_sms only means "queued and billed", not delivered.
+    Polls GET /v1/sms/run/{runId}/delivery-status with backoff, stopping
+    early once the outcome is final (delivered, or nothing left pending),
+    and gives up loudly (a log line) rather than hanging forever. Run as a
+    detached background task so it never holds up the 60s health-check tick
+    that triggered the send.
+    """
+    from app.mailer.sms import get_delivery_status
+
+    for delay in _SMS_DELIVERY_CHECK_DELAYS:
+        await asyncio.sleep(delay)
+        try:
+            status = await get_delivery_status(run_id)
+        except RuntimeError:
+            logger.exception("Could not confirm SMS delivery for run %s", run_id)
+            return
+        if status.get("allDelivered"):
+            logger.info("SMS alert delivery confirmed (run %s)", run_id)
+            return
+        if status.get("summary", {}).get("pending", 0) == 0:
+            logger.warning("SMS alert not fully delivered (run %s): %s", run_id, status.get("summary"))
+            return
+    logger.warning("SMS alert delivery still unconfirmed after retries (run %s)", run_id)
+
+
 async def _send_bridge_alert(down_since_iso: str, reason: str) -> None:
     """SMS is the primary channel (repeatable, reaches a phone that's
     actually monitored) — falls back to the pre-existing one-shot email if
@@ -212,7 +245,8 @@ async def _send_bridge_alert(down_since_iso: str, reason: str) -> None:
     )
     try:
         from app.mailer.sms import send_sms
-        await send_sms(settings.admin_phone_number, message)
+        run_id = await send_sms(settings.admin_phone_number, message)
+        asyncio.create_task(_confirm_sms_delivery(run_id))
         return
     except RuntimeError:
         logger.info("SMS not configured — falling back to email for bridge-down alert")

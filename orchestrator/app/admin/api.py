@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -304,11 +305,37 @@ async def bridge_groups():
     ]
 
 
-# -- WhatsApp connection -------------------------------------------------------
+# -- WhatsApp / Mobile connection ----------------------------------------------
 # Self-service QR reconnect: an operator generating a fresh code here doesn't
 # depend on any notification (email or SMS) arriving in time — Baileys
 # rotates the code every ~20-30s while unscanned, so a passively-delivered
 # one is often already stale.
+
+_sms_credit_cache: dict = {"value": None, "checked_at": None}
+_SMS_CREDIT_CACHE_TTL = timedelta(minutes=5)
+
+
+async def _get_cached_sms_credits() -> int | None:
+    """Cached Vibrate SMS credit balance, refreshed at most once per
+    _SMS_CREDIT_CACHE_TTL. The admin panel polls /whatsapp/status every 5s —
+    far more often than the balance could plausibly change, since it only
+    moves when an alert SMS actually sends (at most once/day). Returns None
+    if Vibrate isn't configured (or the lookup fails and nothing was ever
+    cached yet)."""
+    from app.mailer.sms import get_credit_balance
+
+    now = datetime.now(timezone.utc)
+    checked_at = _sms_credit_cache["checked_at"]
+    if checked_at is not None and now - checked_at < _SMS_CREDIT_CACHE_TTL:
+        return _sms_credit_cache["value"]
+    try:
+        balance = await get_credit_balance()
+        _sms_credit_cache["value"] = balance
+        _sms_credit_cache["checked_at"] = now
+        return balance
+    except RuntimeError:
+        return _sms_credit_cache["value"]
+
 
 @router.get("/whatsapp/status", dependencies=[Depends(require_auth)])
 async def whatsapp_status():
@@ -323,9 +350,11 @@ async def whatsapp_status():
         logger.warning("Could not reach bridge for /whatsapp/status", exc_info=True)
 
     alert = get_bridge_alert_state()
+    sms_credits = await _get_cached_sms_credits()
     return {
         "status": bridge_status,  # "ok" | "connecting" | "unreachable"
         "alert": alert,  # {down_since, last_alert_at, dismissed} or null
+        "sms_credits": sms_credits,  # int, or null if Vibrate isn't configured
     }
 
 

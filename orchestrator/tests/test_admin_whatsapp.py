@@ -37,9 +37,20 @@ def _mock_bridge_client(*, raises: Exception | None = None, status_code: int = 2
     return mock_client
 
 
+@pytest.fixture(autouse=True)
+def _reset_sms_credit_cache():
+    from app.admin import api as admin_api
+    admin_api._sms_credit_cache["value"] = None
+    admin_api._sms_credit_cache["checked_at"] = None
+    yield
+    admin_api._sms_credit_cache["value"] = None
+    admin_api._sms_credit_cache["checked_at"] = None
+
+
 def test_status_reports_ok_with_no_alert():
     with patch("app.admin.api.httpx.AsyncClient", return_value=_mock_bridge_client(json_body={"status": "ok"})), \
-         patch("app.scheduler.get_bridge_alert_state", return_value=None):
+         patch("app.scheduler.get_bridge_alert_state", return_value=None), \
+         patch("app.mailer.sms.get_credit_balance", new_callable=AsyncMock, side_effect=RuntimeError("not configured")):
         client = TestClient(_make_app())
         resp = client.get("/admin/api/whatsapp/status")
 
@@ -52,7 +63,8 @@ def test_status_reports_ok_with_no_alert():
 def test_status_reports_connecting_with_active_alert():
     alert = {"down_since": "2026-09-19T12:00:00+00:00", "last_alert_at": None, "dismissed": False}
     with patch("app.admin.api.httpx.AsyncClient", return_value=_mock_bridge_client(json_body={"status": "connecting"})), \
-         patch("app.scheduler.get_bridge_alert_state", return_value=alert):
+         patch("app.scheduler.get_bridge_alert_state", return_value=alert), \
+         patch("app.mailer.sms.get_credit_balance", new_callable=AsyncMock, side_effect=RuntimeError("not configured")):
         client = TestClient(_make_app())
         resp = client.get("/admin/api/whatsapp/status")
 
@@ -64,12 +76,49 @@ def test_status_reports_connecting_with_active_alert():
 
 def test_status_reports_unreachable_when_bridge_unreachable():
     with patch("app.admin.api.httpx.AsyncClient", return_value=_mock_bridge_client(raises=ConnectionError("refused"))), \
-         patch("app.scheduler.get_bridge_alert_state", return_value=None):
+         patch("app.scheduler.get_bridge_alert_state", return_value=None), \
+         patch("app.mailer.sms.get_credit_balance", new_callable=AsyncMock, side_effect=RuntimeError("not configured")):
         client = TestClient(_make_app())
         resp = client.get("/admin/api/whatsapp/status")
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "unreachable"
+
+
+# -- SMS credit balance (cached — the panel polls /whatsapp/status every 5s,
+#    far more often than the balance could plausibly change) -----------------
+
+def test_status_includes_sms_credit_balance_when_configured():
+    with patch("app.admin.api.httpx.AsyncClient", return_value=_mock_bridge_client(json_body={"status": "ok"})), \
+         patch("app.scheduler.get_bridge_alert_state", return_value=None), \
+         patch("app.mailer.sms.get_credit_balance", new_callable=AsyncMock, return_value=850):
+        client = TestClient(_make_app())
+        resp = client.get("/admin/api/whatsapp/status")
+
+    assert resp.json()["sms_credits"] == 850
+
+
+def test_status_sms_credits_is_none_when_vibrate_not_configured():
+    with patch("app.admin.api.httpx.AsyncClient", return_value=_mock_bridge_client(json_body={"status": "ok"})), \
+         patch("app.scheduler.get_bridge_alert_state", return_value=None), \
+         patch("app.mailer.sms.get_credit_balance", new_callable=AsyncMock, side_effect=RuntimeError("not configured")):
+        client = TestClient(_make_app())
+        resp = client.get("/admin/api/whatsapp/status")
+
+    assert resp.json()["sms_credits"] is None
+
+
+def test_status_sms_credits_reuses_cache_within_ttl():
+    with patch("app.admin.api.httpx.AsyncClient", return_value=_mock_bridge_client(json_body={"status": "ok"})), \
+         patch("app.scheduler.get_bridge_alert_state", return_value=None), \
+         patch("app.mailer.sms.get_credit_balance", new_callable=AsyncMock, return_value=850) as mock_balance:
+        client = TestClient(_make_app())
+        r1 = client.get("/admin/api/whatsapp/status")
+        r2 = client.get("/admin/api/whatsapp/status")
+
+    assert r1.json()["sms_credits"] == 850
+    assert r2.json()["sms_credits"] == 850
+    mock_balance.assert_awaited_once()  # second call served from cache
 
 
 def test_qr_returns_png_base64_when_bridge_has_a_pending_code():

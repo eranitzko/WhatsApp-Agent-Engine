@@ -28,13 +28,22 @@ logger = logging.getLogger(__name__)
 _VIBRATE_API_BASE = "https://api.vibrate.co.il"
 
 
-async def send_sms(to: str, body: str) -> None:
+def _auth_header() -> dict:
+    return {"Authorization": settings.vibrate_access_token}
+
+
+async def send_sms(to: str, body: str) -> str:
     """Send a single SMS via Vibrate.
 
     Args:
         to: Destination phone number. Vibrate normalises Israeli numbers
             server-side (accepts "0501234567", "972501234567", etc.).
         body: Message text.
+
+    Returns:
+        The Vibrate runId — pass to get_delivery_status() to confirm the
+        message actually reached the recipient (a 202 here only means
+        "queued and billed", not delivered).
 
     Raises:
         RuntimeError: If Vibrate isn't configured, or the send fails.
@@ -47,10 +56,7 @@ async def send_sms(to: str, body: str) -> None:
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             f"{_VIBRATE_API_BASE}/v1/sms/send",
-            headers={
-                "Authorization": settings.vibrate_access_token,
-                "Content-Type": "application/json",
-            },
+            headers={**_auth_header(), "Content-Type": "application/json"},
             json={"recipients": [to], "message": body, "sender": settings.vibrate_sender},
         )
 
@@ -59,3 +65,44 @@ async def send_sms(to: str, body: str) -> None:
     if resp.status_code != 202:
         raise RuntimeError(f"Vibrate SMS send failed ({resp.status_code}): {resp.text}")
     logger.info("SMS alert sent to %s", to)
+    return resp.json()["data"]["runId"]
+
+
+async def get_delivery_status(run_id: str) -> dict:
+    """Delivery summary for a previous send_sms() call.
+
+    Returns the `data` object documented for
+    GET /v1/sms/run/{runId}/delivery-status, e.g.
+    {"runId", "allDelivered", "summary": {"total", "delivered", "pending"}, ...}.
+
+    Raises:
+        RuntimeError: If Vibrate isn't configured, or the lookup fails
+        (e.g. 404 if the run has no messages on this account).
+    """
+    if not settings.vibrate_access_token:
+        raise RuntimeError("Vibrate credentials not configured. Set VIBRATE_ACCESS_TOKEN.")
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            f"{_VIBRATE_API_BASE}/v1/sms/run/{run_id}/delivery-status",
+            headers=_auth_header(),
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(f"Vibrate delivery-status lookup failed ({resp.status_code}): {resp.text}")
+    return resp.json()["data"]
+
+
+async def get_credit_balance() -> int:
+    """Current SMS credit balance on the Vibrate account (GET /v1/user/info).
+
+    Raises:
+        RuntimeError: If Vibrate isn't configured, or the lookup fails.
+    """
+    if not settings.vibrate_access_token:
+        raise RuntimeError("Vibrate credentials not configured. Set VIBRATE_ACCESS_TOKEN.")
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(f"{_VIBRATE_API_BASE}/v1/user/info", headers=_auth_header())
+    if resp.status_code != 200:
+        raise RuntimeError(f"Vibrate account lookup failed ({resp.status_code}): {resp.text}")
+    return resp.json()["data"]["smsAmount"]
